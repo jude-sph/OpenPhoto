@@ -11,6 +11,7 @@ public enum Scanner {
     public struct Result: Sendable {
         public let total: Int      // media files seen
         public let hashed: Int     // files that needed hashing (new/changed)
+        public let skipped: Int    // files skipped due to read errors
     }
 
     public static func scan(vault: Vault, catalog: Catalog,
@@ -19,36 +20,61 @@ public enum Scanner {
 
         // 1. Walk — skip .openphoto dirs, hidden files, non-media.
         progress(Progress(stage: .walking, done: 0, total: 0))
-        var found: [(rel: String, url: URL, size: Int64, mtime: Date, kind: MediaKind)] = []
+        // size is optional: URLResourceKey.fileSizeKey may be nil on some filesystems (Fix 1).
+        var found: [(rel: String, url: URL, size: Int64?, mtime: Date, kind: MediaKind)] = []
+        var skipped = 0
         let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
         let enumerator = fm.enumerator(at: vault.rootURL, includingPropertiesForKeys: keys,
                                        options: [.skipsHiddenFiles])!
         for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: Set(keys))
-            if values.isDirectory == true {
-                if url.lastPathComponent == Vault.stateDirName { enumerator.skipDescendants() }
+            do {
+                let values = try url.resourceValues(forKeys: Set(keys))
+                if values.isDirectory == true {
+                    if url.lastPathComponent == Vault.stateDirName { enumerator.skipDescendants() }
+                    continue
+                }
+                guard let kind = MediaKind.of(filename: url.lastPathComponent) else { continue }
+                // Capture size as optional — nil forces rehash later (Fix 1).
+                let size: Int64? = values.fileSize.map { Int64($0) }
+                found.append((vault.relativePath(of: url), url,
+                              size,
+                              values.contentModificationDate ?? Date(), kind))
+            } catch {
+                // Unreadable attributes — skip this file, don't abort the scan (Fix 2).
+                skipped += 1
                 continue
             }
-            guard let kind = MediaKind.of(filename: url.lastPathComponent) else { continue }
-            found.append((vault.relativePath(of: url), url,
-                          Int64(values.fileSize ?? 0),
-                          values.contentModificationDate ?? Date(), kind))
         }
 
         // 2. Fast-path against the manifest: reuse hash when size+mtime match (format §4).
+        //    nil size always forces rehash (Fix 1).
+        //    An unreadable file is skipped and not added to entries (Fix 2).
+        //    We collect (ManifestEntry, found-tuple) as aligned pairs to avoid index drift.
         let oldByPath = Dictionary(uniqueKeysWithValues:
             try Manifest.read(from: vault.manifestURL).map { ($0.path, $0) })
-        var entries: [ManifestEntry] = []
+        var aligned: [(entry: ManifestEntry, f: (rel: String, url: URL, size: Int64?, mtime: Date, kind: MediaKind))] = []
         var hashedCount = 0
         for (i, f) in found.enumerated() {
             let mtimeStr = ISO8601Millis.string(from: f.mtime)
-            if let old = oldByPath[f.rel], old.size == f.size, old.mtime == mtimeStr {
-                entries.append(old)
+            // Fast-path only when we have a real size AND it matches the manifest (Fix 1).
+            if let s = f.size, let old = oldByPath[f.rel], old.size == s, old.mtime == mtimeStr {
+                aligned.append((old, f))
             } else {
                 progress(Progress(stage: .hashing, done: i, total: found.count))
-                entries.append(ManifestEntry(hash: try ContentHash.ofFile(at: f.url),
-                                             path: f.rel, size: f.size, mtime: mtimeStr))
-                hashedCount += 1
+                do {
+                    let hash = try ContentHash.ofFile(at: f.url)
+                    // Resolve a real size: prefer the walk value, then stat, then 0.
+                    let realSize: Int64 = f.size
+                        ?? ((try? fm.attributesOfItem(atPath: f.url.path)[.size] as? Int64) ?? nil)
+                        ?? 0
+                    aligned.append((ManifestEntry(hash: hash, path: f.rel,
+                                                  size: realSize, mtime: mtimeStr), f))
+                    hashedCount += 1
+                } catch {
+                    // Unreadable file body — skip, don't append to entries (Fix 2).
+                    skipped += 1
+                    continue
+                }
             }
         }
 
@@ -56,11 +82,11 @@ public enum Scanner {
         let known = try catalog.knownHashes()
         var newAssets: [AssetRecord] = []
         var pairCandidates: [LivePhotoPairer.Candidate] = []
-        for (i, (entry, f)) in zip(entries, found).enumerated() {
+        for (idx, (entry, f)) in aligned.enumerated() {
             let isNew = !known.contains(entry.hash.stringValue)
             var meta: MediaMetadata?
             if isNew {
-                progress(Progress(stage: .extracting, done: i, total: found.count))
+                progress(Progress(stage: .extracting, done: idx, total: aligned.count))
                 let m = await MetadataExtractor.extract(from: f.url, kind: f.kind)
                 meta = m
                 newAssets.append(AssetRecord(
@@ -73,24 +99,23 @@ public enum Scanner {
                     livePairHash: nil, isLivePairedVideo: false,
                     favorite: false, rating: 0, caption: nil, tagsJSON: "[]"))
             }
-            // Every file participates in pairing (CID only known for new files).
+            // Every file participates in pairing (contentIdentifier only known for new files).
             pairCandidates.append(.init(
                 hash: entry.hash, relPath: entry.path, kind: f.kind,
                 takenAt: meta?.takenAt ?? f.mtime, contentIdentifier: meta?.contentIdentifier))
         }
 
-        // 4. Pair Live Photos among this vault's files (pairing is established the
-        //    first time both halves are seen; existing pairs persist in the catalog).
-        var assetsByHash = Dictionary(uniqueKeysWithValues: newAssets.map { ($0.hash, $0) })
+        // 4. Pair Live Photos and persist: upsert plain assets first, then setLivePair for
+        //    ALL pairs so healing works even when both halves were already cataloged (Fix 3).
+        //    setLivePair is idempotent — calling it for already-paired assets is a cheap no-op.
+        try catalog.upsert(assets: newAssets)
         for pair in LivePhotoPairer.pair(candidates: pairCandidates) {
-            assetsByHash[pair.photoHash.stringValue]?.livePairHash = pair.videoHash.stringValue
-            assetsByHash[pair.videoHash.stringValue]?.isLivePairedVideo = true
+            try catalog.setLivePair(photoHash: pair.photoHash.stringValue,
+                                    videoHash: pair.videoHash.stringValue)
         }
 
-        // 5. Persist: assets, instances (wholesale replace), manifest (atomic).
-        progress(Progress(stage: .finishing, done: found.count, total: found.count))
-        try catalog.upsert(assets: Array(assetsByHash.values))
-        let instances = zip(entries, found).map { entry, f in
+        // 5. Persist: instances (wholesale replace), manifest (atomic).
+        let instances = aligned.map { entry, f in
             InstanceRecord(hash: entry.hash.stringValue, vaultID: vault.descriptor.vaultID,
                            relPath: entry.path,
                            dirPath: (entry.path as NSString).deletingLastPathComponent,
@@ -99,8 +124,9 @@ public enum Scanner {
                                .timeIntervalSince1970 * 1000))
         }
         try catalog.replaceInstances(inVault: vault.descriptor.vaultID, with: instances)
-        try Manifest.write(entries, to: vault.manifestURL)
+        try Manifest.write(aligned.map(\.entry), to: vault.manifestURL)
+        // Single .finishing emission after manifest is written (Fix 4 — removed the earlier one).
         progress(Progress(stage: .finishing, done: found.count, total: found.count))
-        return Result(total: found.count, hashed: hashedCount)
+        return Result(total: found.count, hashed: hashedCount, skipped: skipped)
     }
 }

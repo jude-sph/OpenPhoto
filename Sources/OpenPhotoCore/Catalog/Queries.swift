@@ -63,6 +63,16 @@ extension Catalog {
         }
     }
 
+    /// Record a Live Photo pairing on already-cataloged assets (scanner healing).
+    public func setLivePair(photoHash: String, videoHash: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE assets SET livePairHash = ? WHERE hash = ?",
+                           arguments: [videoHash, photoHash])
+            try db.execute(sql: "UPDATE assets SET isLivePairedVideo = 1 WHERE hash = ?",
+                           arguments: [videoHash])
+        }
+    }
+
     /// Mirror a sidecar edit into the catalog (sidecar written separately).
     public func updateHumanMetadata(hash: String, favorite: Bool, rating: Int,
                                     caption: String?, tagsJSON: String) throws {
