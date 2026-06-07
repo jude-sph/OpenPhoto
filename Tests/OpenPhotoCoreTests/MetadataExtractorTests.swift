@@ -59,11 +59,11 @@ func makeMOV(at url: URL) async throws {
     #expect(writer.status == .completed)
 }
 
-@Test func extractsImageMetadata() throws {
+@Test func extractsImageMetadata() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let url = t.root.appendingPathComponent("test.jpg")
     try makeJPEG(at: url, dateTimeOriginal: "2022:10:07 14:23:01", lat: 41.90, lon: 12.50)
-    let m = MetadataExtractor.extract(from: url, kind: .photo)
+    let m = await MetadataExtractor.extract(from: url, kind: .photo)
     #expect(m.pixelWidth == 4 && m.pixelHeight == 4)
     #expect(m.cameraModel == "TestCam X1")
     #expect(m.latitude != nil && abs(m.latitude! - 41.90) < 0.01)
@@ -73,11 +73,11 @@ func makeMOV(at url: URL) async throws {
     #expect(comps.year == 2022 && comps.month == 10 && comps.day == 7)
 }
 
-@Test func fallsBackToFileMtimeWhenNoExif() throws {
+@Test func fallsBackToFileMtimeWhenNoExif() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let url = t.root.appendingPathComponent("noexif.jpg")
     try makeJPEG(at: url, dateTimeOriginal: nil, lat: nil, lon: nil)
-    let m = MetadataExtractor.extract(from: url, kind: .photo)
+    let m = await MetadataExtractor.extract(from: url, kind: .photo)
     let mtime = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as! Date
     #expect(abs(m.takenAt.timeIntervalSince(mtime)) < 2)
     #expect(m.latitude == nil)
@@ -87,7 +87,7 @@ func makeMOV(at url: URL) async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let url = t.root.appendingPathComponent("clip.mov")
     try await makeMOV(at: url)
-    let m = MetadataExtractor.extract(from: url, kind: .video)
+    let m = await MetadataExtractor.extract(from: url, kind: .video)
     #expect(m.pixelWidth == 64 && m.pixelHeight == 64)
     #expect(m.durationSeconds != nil && m.durationSeconds! > 0)
 }
