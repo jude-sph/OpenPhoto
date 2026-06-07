@@ -39,7 +39,8 @@ public enum Manifest {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         var out = Data()
-        for e in entries {
+        // Sorted by path for stable diffs.
+        for e in entries.sorted(by: { $0.path < $1.path }) {
             out.append(try encoder.encode(e))
             out.append(0x0A)
         }

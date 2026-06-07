@@ -15,7 +15,8 @@ import Foundation
     ]
     try Manifest.write(entries, to: url)
     let read = try Manifest.read(from: url)
-    #expect(read == entries)
+    #expect(read == entries.sorted(by: { $0.path < $1.path }))
+    #expect(read.first?.path == "canada23/IMG_2.mov")   // sorted, not insertion, order
 }
 
 @Test func emptyOrMissingManifestReadsAsEmpty() throws {
