@@ -14,8 +14,9 @@
 
 ## Conventions for every task
 
+- **HARD RULE — no real user data, ever.** Tests and manual verification NEVER read or write any folder outside (a) the repo working directory and (b) `FileManager.default.temporaryDirectory`. Never access `~/Pictures`, `~/Movies`, `~/Desktop`, or any other user folder. All fixture media is generated in code (`makeJPEG`/`makeMOV`, Task 7) or by `scripts/gen-fixtures.swift` (Task 25). Pointing the app at real photo folders is exclusively a manual action by Jude.
 - Run tests: `swift test` (all) or `swift test --filter <TestName>` (one suite). Build app: `swift build`. Run app: `swift run OpenPhotoApp`.
-- Tests use Swift Testing: `import Testing`, `@Test func …`, `#expect(…)`. Each Core test creates throwaway dirs via `TestDirs` helper (Task 3) — never touch the real `~/Pictures`.
+- Tests use Swift Testing: `import Testing`, `@Test func …`, `#expect(…)`. Each Core test creates throwaway dirs via `TestDirs` helper (Task 3).
 - Commit after every task (message given per task). Never commit with failing tests.
 - **Format-doc discipline:** Tasks 2 and 13 change/pin on-disk format details; they edit `docs/format/vault-format-v1.md` in the same commit. Any deviation you make during execution that touches the format must do the same.
 
@@ -3930,30 +3931,91 @@ git add Package.swift Sources/ICCSpike docs/spikes/2026-06-07-icc-deletion.md
 git commit -m "spike: ImageCaptureCore enumeration + deletion test with findings"
 ```
 
-### Task 25: Real-library validation + README
+### Task 25: Synthetic-library validation + README
 
 **Files:**
+- Create: `scripts/gen-fixtures.swift`
 - Create: `README.md`
 
-- [ ] **Step 1: Validate against a COPY of the real library** (never point Phase-1 code at the originals first — even though all writes are additive, the format doc's invariants deserve paranoia):
+**No real folders are touched** (see Conventions). Validation runs against a generated library inside the repo; Jude points the app at his real `~/Pictures` himself, after this task, if he chooses.
+
+- [ ] **Step 1: Write `scripts/gen-fixtures.swift`** — generates a synthetic library at `./fixtures-library/` (add to `.gitignore`):
+
+```swift
+#!/usr/bin/swift
+// Usage: swift scripts/gen-fixtures.swift [count]
+// Generates a nested mock library of small JPEGs with varied EXIF dates/GPS,
+// plus a Live-Photo-style basename pair. Repo-local only.
+import Foundation
+import ImageIO
+import CoreGraphics
+import AVFoundation
+import UniformTypeIdentifiers
+
+let count = CommandLine.arguments.count > 1 ? Int(CommandLine.arguments[1]) ?? 300 : 300
+let root = URL(fileURLWithPath: "fixtures-library")
+let folders = ["rome2022", "canada23", "mac-screenshots/2024", "2025/lisbon25", "_inbox"]
+let fm = FileManager.default
+
+func writeJPEG(to url: URL, date: String, lat: Double?, lon: Double?, hue: Double) {
+    try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let ctx = CGContext(data: nil, width: 320, height: 240, bitsPerComponent: 8,
+                        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(red: hue, green: 1 - hue, blue: 0.5, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: 320, height: 240))
+    ctx.setFillColor(CGColor(red: 1 - hue, green: hue, blue: 0.2, alpha: 1))
+    ctx.fillEllipse(in: CGRect(x: 80 + hue * 100, y: 60, width: 120, height: 120))
+    var props: [CFString: Any] = [
+        kCGImagePropertyExifDictionary: [kCGImagePropertyExifDateTimeOriginal: date],
+        kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFModel: "FixtureCam"],
+    ]
+    if let lat, let lon {
+        props[kCGImagePropertyGPSDictionary] = [
+            kCGImagePropertyGPSLatitude: abs(lat), kCGImagePropertyGPSLatitudeRef: lat >= 0 ? "N" : "S",
+            kCGImagePropertyGPSLongitude: abs(lon), kCGImagePropertyGPSLongitudeRef: lon >= 0 ? "E" : "W",
+        ]
+    }
+    let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)!
+    CGImageDestinationAddImage(dest, ctx.makeImage()!, props as CFDictionary)
+    CGImageDestinationFinalize(dest)
+}
+
+let places: [(Double, Double)?] = [(41.9, 12.5), (51.18, -115.57), nil, (38.71, -9.14), nil]
+for i in 0..<count {
+    let f = i % folders.count
+    let day = 1 + (i % 27), month = 1 + (i % 12), year = 2021 + (i % 5)
+    let date = String(format: "%04d:%02d:%02d %02d:00:00", year, month, day, i % 24)
+    writeJPEG(to: root.appendingPathComponent("\(folders[f])/IMG_\(1000 + i).jpg"),
+              date: date, lat: places[f]?.0, lon: places[f]?.1,
+              hue: Double(i % 100) / 100)
+}
+print("Generated \(count) JPEGs in \(root.path)")
+print("NOTE: add a couple of .mov files by running the MOV generator in the test")
+print("suite if video cells need visual checking — or skip; unit tests cover video.")
+```
+
+Run: `swift scripts/gen-fixtures.swift 300` — Expected: `fixtures-library/` with ~300 images across nested folders. Add `fixtures-library/` to `.gitignore`.
+
+- [ ] **Step 2: Validate** —
 
 ```bash
-mkdir -p ~/openphoto-test && cp -R ~/Pictures/<one-real-folder> ~/openphoto-test/
-swift run OpenPhotoApp   # Welcome → choose ~/openphoto-test
+swift run OpenPhotoApp   # Welcome → choose <repo>/fixtures-library
 ```
 
 Checklist — record actual numbers in the commit message:
 - [ ] Initial scan completes; note items/sec for hashing
-- [ ] Timeline groups correctly; HEIC + video thumbnails render
-- [ ] Live Photos appear as one item with the LIVE badge; Live playback works
-- [ ] Rename a file in Finder mid-session → watcher rescan keeps identity (check Inspector path updates, edits survive)
-- [ ] Edit rating/tags → `.xmp` appears in folder-level `.openphoto/`; delete `catalog.sqlite`, relaunch, confirm edits return from sidecars
+- [ ] Timeline groups by day correctly across years; thumbnails render; GPS folders show coordinates in the Inspector with the mini-map
+- [ ] Rename a file in Finder (inside `fixtures-library/` only) mid-session → watcher rescan keeps identity (Inspector path updates, edits survive)
+- [ ] Edit rating/tags → `.xmp` appears in folder-level `.openphoto/`; delete `catalog.sqlite` from app support, relaunch, confirm edits return from sidecars
 - [ ] Delete → Bin → Restore → Empty Bin → file is in macOS Trash
 - [ ] Second launch is fast-path (no rehash — watch the activity indicator)
 
-- [ ] **Step 2: Write `README.md`** (succinct: what OpenPhoto is, the sovereignty promise, Phase 1 status, how to build — `swift test`, `swift run OpenPhotoApp`, `scripts/make-app.sh` — and pointers to `docs/` for the spec/format/plan).
+(HEIC + Live Photo behavior is covered by unit tests; visual confirmation with real media happens when Jude points the app at his own folders — not an agent action.)
 
-- [ ] **Step 3: Full suite + commit**
+- [ ] **Step 3: Write `README.md`** (succinct: what OpenPhoto is, the sovereignty promise, Phase 1 status, how to build — `swift test`, `swift run OpenPhotoApp`, `scripts/make-app.sh` — and pointers to `docs/` for the spec/format/plan).
+
+- [ ] **Step 4: Full suite + commit**
 
 ```bash
 swift test

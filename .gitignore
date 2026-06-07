@@ -9,3 +9,6 @@
 DerivedData/
 *.xcuserstate
 xcuserdata/
+
+# Synthetic validation library (generated, never real photos)
+fixtures-library/
