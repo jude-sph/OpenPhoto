@@ -35,3 +35,13 @@ import Foundation
     #expect(vault.binDirURL.path == root.appendingPathComponent(".openphoto/bin").path)
     #expect(vault.relativePath(of: media) == "rome2022/IMG_1.heic")
 }
+
+@Test func relativePathResolvesSymlinkedRoot() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let real = try t.sub("RealPictures")
+    let link = t.root.appendingPathComponent("LinkedPictures")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+    let vault = try Vault.openOrCreate(at: link, role: .local)
+    let media = real.appendingPathComponent("a/b.jpg")   // path via the REAL root
+    #expect(vault.relativePath(of: media) == "a/b.jpg")
+}

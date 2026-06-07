@@ -21,9 +21,11 @@ public struct Vault: Sendable {
     }
 
     /// Vault-root-relative path with "/" separators, NFC-normalized (format §4).
+    /// URLs outside the vault root return their absolute path — callers only
+    /// pass URLs discovered under the root.
     public func relativePath(of url: URL) -> String {
-        let rootPath = rootURL.standardizedFileURL.path
-        let p = url.standardizedFileURL.path
+        let rootPath = rootURL.resolvingSymlinksInPath().path
+        let p = url.resolvingSymlinksInPath().path
         let rel = p.hasPrefix(rootPath + "/") ? String(p.dropFirst(rootPath.count + 1)) : p
         return rel.precomposedStringWithCanonicalMapping
     }
