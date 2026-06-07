@@ -37,10 +37,10 @@ Rules:
 
 ## 2. Asset identity
 
-The identity of an asset is the **BLAKE3-256 hash of its file bytes**, serialized as `b3:` + 64 lowercase hex chars:
+The identity of an asset is the **SHA-256 hash of its file bytes**, serialized as `sha256:` + 64 lowercase hex chars. The algorithm prefix is mandatory; readers MUST treat unknown prefixes as unknown-but-distinct identities, allowing future algorithm migration. (v1 ships SHA-256 — hardware-accelerated on Apple Silicon and dependency-free; BLAKE3 remains a possible future prefix.)
 
 ```
-b3:9f42ab…c81d
+sha256:9f42ab…c81d
 ```
 
 Consequences any implementation can rely on:
@@ -71,7 +71,7 @@ Consequences any implementation can rely on:
 The authoritative inventory: **one JSON object per line, one line per media file currently in the vault** (bin contents are not listed; see §8). Encoding UTF-8, LF line endings.
 
 ```json
-{"hash":"b3:9f42…","path":"rome2022/IMG_4123.heic","size":4123456,"mtime":"2022-10-07T14:23:01.512Z"}
+{"hash":"sha256:9f42…","path":"rome2022/IMG_4123.heic","size":4123456,"mtime":"2022-10-07T14:23:01.512Z"}
 ```
 
 - `path` — vault-root-relative, `/` separators, NFC-normalized Unicode.
@@ -123,7 +123,7 @@ Third parties: **treat it as a disposable accelerator.** The authoritative data 
 Conforming software never hard-deletes. Deletion = move the file (and its sidecar) into `<vault-root>/.openphoto/bin/<original relative path>`, remove its manifest line, and append a record to `bin.jsonl`:
 
 ```json
-{"hash":"b3:9f42…","path":"rome2022/IMG_4123.heic","deleted_at":"2026-06-07T20:01:00.000Z","origin":"propagated"}
+{"hash":"sha256:9f42…","path":"rome2022/IMG_4123.heic","deleted_at":"2026-06-07T20:01:00.000Z","origin":"propagated"}
 ```
 
 `origin` is `"user"` (deleted directly in this vault's UI) or `"propagated"` (a reviewed deletion synced from the user's catalog). Restore = the reverse move + manifest line re-added.
