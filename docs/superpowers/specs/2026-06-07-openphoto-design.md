@@ -126,6 +126,12 @@ Backfill estimate for current library on M4 Pro: hashing minutes; thumbnails ~1�
 
 **UI surfaces** (structure; visual design comes from a separate Claude Design pass): sidebar (Timeline · Folders tree · People · Map · Bin · Devices-when-connected · pipeline status) · virtualized timeline grouped day/month/year with video/Live/offline badges · folder tree mirroring disk exactly · inspector (EXIF read-only; tags/rating/caption/people editable; presence per drive) · import grid · sync plan review · dedup review (identical-hash groups) · viewer (zoom, Live Photo playback, video).
 
+**UI reference:** the authoritative visual design is the Claude Design handoff in `UI-Design/design_handoff_openphoto/` (interactive prototype: `OpenPhoto.html`; tokens/screens documented in its `README.md`). Recreate natively in SwiftUI — never embed the HTML. Deltas where this spec overrides the mockup: (a) bin holds items indefinitely until manually emptied — the mockup's "30 days" copy is wrong (auto-empty may become an opt-in setting later); (b) the "Albums" sidebar section is out of scope — folders, People, and Map are the organizational surfaces; (c) the sync screen's "Schedule for later" button is dropped.
+
+## Changelog
+
+- **2026-06-07** — Initial approved design. Added UI reference section after Claude Design handoff landed in `UI-Design/`, with three mockup-vs-spec deltas resolved in the spec's favor.
+
 ## 8. Error-handling doctrine
 
 1. Originals never written; every mutation is a new file in a `.openphoto/` dir
