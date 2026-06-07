@@ -48,7 +48,14 @@ public enum Manifest {
     }
 
     public static func read(from url: URL) throws -> [ManifestEntry] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain
+                && error.code == NSFileReadNoSuchFileError {
+            return []   // no manifest yet — empty vault
+        }
         let decoder = JSONDecoder()
         return try data.split(separator: 0x0A)
             .filter { !$0.isEmpty }
