@@ -1,0 +1,82 @@
+import Foundation
+import GRDB
+
+public final class Catalog: Sendable {
+    public let dbQueue: DatabaseQueue
+
+    public init(at url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        dbQueue = try DatabaseQueue(path: url.path)
+        var migrator = DatabaseMigrator()
+        migrator.registerMigration("v1") { db in
+            try db.create(table: "vaults") { t in
+                t.primaryKey("id", .text)
+                t.column("role", .text).notNull()
+                t.column("rootPath", .text).notNull()
+                t.column("lastSeenMs", .integer).notNull()
+            }
+            try db.create(table: "assets") { t in
+                t.primaryKey("hash", .text)
+                t.column("kind", .text).notNull()
+                t.column("takenAtMs", .integer).notNull().indexed()
+                t.column("pixelWidth", .integer)
+                t.column("pixelHeight", .integer)
+                t.column("latitude", .double)
+                t.column("longitude", .double)
+                t.column("cameraModel", .text)
+                t.column("lensModel", .text)
+                t.column("durationSeconds", .double)
+                t.column("livePairHash", .text)
+                t.column("isLivePairedVideo", .boolean).notNull().defaults(to: false)
+                t.column("favorite", .boolean).notNull().defaults(to: false)
+                t.column("rating", .integer).notNull().defaults(to: 0)
+                t.column("caption", .text)
+                t.column("tagsJSON", .text).notNull().defaults(to: "[]")
+            }
+            try db.create(table: "instances") { t in
+                t.column("hash", .text).notNull().indexed()
+                t.column("vaultID", .text).notNull()
+                t.column("relPath", .text).notNull()
+                t.column("dirPath", .text).notNull().indexed()
+                t.column("size", .integer).notNull()
+                t.column("mtimeMs", .integer).notNull()
+                t.primaryKey(["vaultID", "relPath"])
+            }
+        }
+        try migrator.migrate(dbQueue)
+    }
+
+    public func registerVault(id: String, role: String, rootPath: String) throws {
+        try dbQueue.write { db in
+            try VaultRecord(id: id, role: role, rootPath: rootPath,
+                            lastSeenMs: Int64(Date().timeIntervalSince1970 * 1000)).save(db)
+        }
+    }
+
+    public func upsert(assets: [AssetRecord]) throws {
+        try dbQueue.write { db in for a in assets { try a.save(db) } }
+    }
+
+    public func upsert(instances: [InstanceRecord]) throws {
+        try dbQueue.write { db in for i in instances { try i.save(db) } }
+    }
+
+    /// Wholesale replacement of a vault's instances (scan reconcile).
+    public func replaceInstances(inVault vaultID: String, with instances: [InstanceRecord]) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM instances WHERE vaultID = ?", arguments: [vaultID])
+            for i in instances { try i.save(db) }
+        }
+    }
+
+    public func assetCount() throws -> Int {
+        try dbQueue.read { db in try AssetRecord.fetchCount(db) }
+    }
+
+    public func knownHashes() throws -> Set<String> {
+        try dbQueue.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT hash FROM assets"))
+        }
+    }
+}
