@@ -78,3 +78,38 @@ private func makeAsset(_ n: Int, taken: String, kind: MediaKind = .photo) -> Ass
     #expect(items.count == 1)
     #expect(items[0].livePairHash == video.hash)
 }
+
+@Test func updateHumanMetadataRoundTripsAndIgnoresUnknownHash() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.registerVault(id: "v-1", role: "local", rootPath: "/p")
+    let a = makeAsset(8, taken: "2024-03-01T00:00:00.000Z")
+    try cat.upsert(assets: [a])
+    try cat.upsert(instances: [InstanceRecord(hash: a.hash, vaultID: "v-1",
+        relPath: "y/IMG.heic", dirPath: "y", size: 1, mtimeMs: 0)])
+    try cat.updateHumanMetadata(hash: a.hash, favorite: true, rating: 4,
+                                caption: "hi", tagsJSON: "[\"x\"]")
+    let item = try cat.item(hash: a.hash)
+    #expect(item?.favorite == true && item?.rating == 4 && item?.caption == "hi")
+    // Unknown hash: silent no-op, no throw.
+    try cat.updateHumanMetadata(hash: "sha256:none", favorite: false, rating: 0,
+                                caption: nil, tagsJSON: "[]")
+}
+
+@Test func folderQueriesScopeByVault() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.registerVault(id: "v-pics", role: "local", rootPath: "/pics")
+    try cat.registerVault(id: "v-movs", role: "local", rootPath: "/movs")
+    let a = makeAsset(9, taken: "2024-01-01T00:00:00.000Z")
+    let b = makeAsset(10, taken: "2024-01-02T00:00:00.000Z")
+    try cat.upsert(assets: [a, b])
+    try cat.upsert(instances: [
+        InstanceRecord(hash: a.hash, vaultID: "v-pics", relPath: "2024/a.jpg", dirPath: "2024", size: 1, mtimeMs: 0),
+        InstanceRecord(hash: b.hash, vaultID: "v-movs", relPath: "2024/b.mov", dirPath: "2024", size: 1, mtimeMs: 0),
+    ])
+    #expect(try cat.items(inDir: "2024").count == 2)                       // union
+    #expect(try cat.items(inDir: "2024", vaultID: "v-pics").count == 1)    // scoped
+    #expect(try cat.folderCounts()["2024"] == 2)
+    #expect(try cat.folderCounts(vaultID: "v-movs")["2024"] == 1)
+}

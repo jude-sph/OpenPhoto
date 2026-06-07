@@ -6,7 +6,8 @@ public final class Catalog: Sendable {
 
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
         dbQueue = try DatabaseQueue(path: url.path)
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1") { db in
@@ -34,6 +35,8 @@ public final class Catalog: Sendable {
                 t.column("caption", .text)
                 t.column("tagsJSON", .text).notNull().defaults(to: "[]")
             }
+            // No FK instances.hash → assets.hash: scan reconciliation may write instances first;
+            // the catalog is rebuildable from vault files, so orphans are repaired by rescan.
             try db.create(table: "instances") { t in
                 t.column("hash", .text).notNull().indexed()
                 t.column("vaultID", .text).notNull()
@@ -55,18 +58,18 @@ public final class Catalog: Sendable {
     }
 
     public func upsert(assets: [AssetRecord]) throws {
-        try dbQueue.write { db in for a in assets { try a.save(db) } }
+        try dbQueue.write { db in for a in assets { try a.upsert(db) } }
     }
 
     public func upsert(instances: [InstanceRecord]) throws {
-        try dbQueue.write { db in for i in instances { try i.save(db) } }
+        try dbQueue.write { db in for i in instances { try i.upsert(db) } }
     }
 
     /// Wholesale replacement of a vault's instances (scan reconcile).
     public func replaceInstances(inVault vaultID: String, with instances: [InstanceRecord]) throws {
         try dbQueue.write { db in
             try db.execute(sql: "DELETE FROM instances WHERE vaultID = ?", arguments: [vaultID])
-            for i in instances { try i.save(db) }
+            for i in instances { try i.upsert(db) }
         }
     }
 
