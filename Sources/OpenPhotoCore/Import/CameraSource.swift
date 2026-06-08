@@ -92,12 +92,16 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     public func enumerateItems() async throws -> [ImportItem] {
         let files = (camera.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
         itemsByID.removeAll()
-        var items: [ImportItem] = files.map { f in
-            let id = String(f.ptpObjectHandle)
+        // ptpObjectHandle is unreliable on iPhones (often 0 for every file), which
+        // collapses the SwiftUI grid to a single cell. Use the enumeration index
+        // for a guaranteed-unique, session-stable id (registry dedup keys on
+        // name+size+takenAt, not this id, so a per-session id is fine).
+        var items: [ImportItem] = files.enumerated().map { index, f in
+            let id = "icc-\(index)"
             itemsByID[id] = f
             return ImportItem(
                 id: id,
-                name: f.name ?? "item-\(id)",
+                name: f.name ?? "item-\(index)",
                 byteSize: Int64(f.fileSize),
                 takenAt: f.creationDate,
                 kind: MediaKind.of(filename: f.name ?? "") ?? .photo,
