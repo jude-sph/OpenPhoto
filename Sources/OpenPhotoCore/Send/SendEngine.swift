@@ -37,6 +37,9 @@ public final class SendEngine: Sendable {
             }
         }
 
+        // Timestamp the send start (distinct from confirmation — matters for AirDrop).
+        let startedAt = ISO8601Millis.string(from: Date())
+
         // 3. Send the remainder.
         let outcomes: [SendOutcome]
         if toSend.isEmpty {
@@ -54,7 +57,7 @@ public final class SendEngine: Sendable {
                 try? sends.append(.init(
                     hash: o.item.hash, destinationKey: destination.destinationKey,
                     deviceName: destination.displayName, deviceKind: destination.deviceKind.rawValue,
-                    sentAt: now, confirmedAt: now,
+                    sentAt: startedAt, confirmedAt: now,
                     fpSize: o.item.fingerprint.size, fpCaptureDateMs: o.item.fingerprint.captureDateMs))
                 result.confirmed.append(o)
             case .unconfirmed: result.unconfirmed.append(o)

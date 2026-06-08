@@ -57,3 +57,15 @@ private func item(_ name: String, hash: String, size: Int64 = 100,
     #expect(result.alreadyPresent.count == 1)   // matched by size+date despite no hash
     #expect(dest.sentItems.isEmpty)
 }
+
+@Test func sendEngineDoesNotRecordFailedSend() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, vault) = try libAndVault(t)
+    let sends = SendRegistry(vault: vault)
+    let dest = FakeSendDestination(key: "vol-A", outcomeFor: { _ in .failed })
+    let engine = SendEngine(library: lib, sends: sends, devices: DeviceRegistry(vault: vault))
+    let h = "sha256:" + String(repeating: "9", count: 64)
+    let result = await engine.run(destination: dest, items: [item("x.jpg", hash: h)], vault: vault)
+    #expect(result.failed.count == 1)
+    #expect(!sends.contains(destinationKey: "vol-A", hash: h))   // failed sends are never recorded
+}

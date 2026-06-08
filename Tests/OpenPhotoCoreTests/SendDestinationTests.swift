@@ -11,3 +11,11 @@ import Foundation
     #expect(!a.looselyMatches(c))    // different second
     #expect(!a.looselyMatches(d))    // different size
 }
+
+@Test func fingerprintWithUnknownDateNeverMatches() {
+    let known = PresenceFingerprint(size: 100, captureDateMs: 1_700_000_000_000, hash: nil)
+    let unknownA = PresenceFingerprint(size: 100, captureDateMs: 0, hash: nil)
+    let unknownB = PresenceFingerprint(size: 100, captureDateMs: 0, hash: nil)
+    #expect(!unknownA.looselyMatches(known))     // unknown date never matches a known one
+    #expect(!unknownA.looselyMatches(unknownB))  // two unknown dates of same size don't match
+}

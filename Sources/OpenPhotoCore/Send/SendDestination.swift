@@ -16,6 +16,7 @@ public struct PresenceFingerprint: Sendable, Equatable {
     /// Same byte size and same capture second (EXIF dates are second-precision, so
     /// compare at second granularity to avoid sub-second drift).
     public func looselyMatches(_ other: PresenceFingerprint) -> Bool {
+        captureDateMs != 0 && other.captureDateMs != 0 &&
         size == other.size && captureDateMs / 1000 == other.captureDateMs / 1000
     }
 }

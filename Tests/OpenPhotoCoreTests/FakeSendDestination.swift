@@ -9,6 +9,8 @@ final class FakeSendDestination: SendDestination, @unchecked Sendable {
     let deviceKind: DeviceKind
     var present: [PresenceFingerprint]
     var outcomeFor: (SendItem) -> SendOutcome.Status
+    // Test-only double; used sequentially (configure → await run → read). Not safe
+    // for concurrent mutation despite @unchecked Sendable.
     private(set) var sentItems: [SendItem] = []
 
     init(key: String = "vol-FAKE", name: String = "Fake", kind: DeviceKind = .volume,
