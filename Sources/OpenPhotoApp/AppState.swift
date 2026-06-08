@@ -181,17 +181,21 @@ final class AppState {
         }
     }
 
-    /// The connected device we can currently send to, if any. Stage B1: volumes only
-    /// (the iPhone/AirDrop destination arrives in Stage B2).
+    /// The connected device we can currently send to, if any. Cameras (AirDrop)
+    /// are listed first by DeviceWatcher, so a connected iPhone is preferred.
     func connectedSendTarget() -> ConnectedDevice? {
-        deviceWatcher.devices.first { if case .volume = $0 { true } else { false } }
+        deviceWatcher.devices.first { sendDestination(for: $0) != nil }
     }
 
-    /// Build a SendDestination for a connected device. Stage B1: volumes only.
+    /// Build a SendDestination for a connected device: AirDrop for an iPhone,
+    /// direct copy for a volume.
     func sendDestination(for device: ConnectedDevice) -> (any SendDestination)? {
         switch device {
-        case .volume(_, let name, let url): return VolumeCopyDestination(volumeRoot: url, displayName: name)
-        case .camera: return nil   // Stage B2: AirDropDestination
+        case .volume(_, let name, let url):
+            return VolumeCopyDestination(volumeRoot: url, displayName: name)
+        case .camera:
+            guard let cam = deviceWatcher.source(for: device) as? CameraSource else { return nil }
+            return AirDropDestination(camera: cam)
         }
     }
 
