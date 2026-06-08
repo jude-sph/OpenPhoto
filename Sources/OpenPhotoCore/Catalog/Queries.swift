@@ -63,6 +63,15 @@ extension Catalog {
         }
     }
 
+    /// Lightweight instance lookup (Live Photo pair resolution, viewer).
+    public func instanceItem(hash: String, vaultID: String) throws -> InstanceRecord? {
+        try dbQueue.read { db in
+            try InstanceRecord.fetchOne(db, sql:
+                "SELECT * FROM instances WHERE hash = ? AND vaultID = ? LIMIT 1",
+                arguments: [hash, vaultID])
+        }
+    }
+
     /// Record a Live Photo pairing on already-cataloged assets (scanner healing).
     public func setLivePair(photoHash: String, videoHash: String) throws {
         try dbQueue.write { db in
