@@ -3,5 +3,13 @@ import OpenPhotoCore
 
 struct FoldersView: View {
     @Bindable var state: AppState
-    var body: some View { Text("Folders — replaced in Task 19").frame(maxWidth: .infinity, maxHeight: .infinity) }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            FolderTreeView(state: state)
+                .frame(width: Theme.folderTreeWidth)
+            Divider().overlay(Theme.hairline)
+            FolderGridView(state: state)
+        }
+    }
 }
