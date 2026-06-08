@@ -95,10 +95,9 @@ struct ViewerView: View {
                     VideoPlayer(player: player)
                 }
             } else if let fullImage {
-                // Self-contained zoom/pan state so pinching only re-renders the
-                // image — not the filmstrip/inspector/toolbar. Keyed per photo so
-                // state resets on navigation.
-                ZoomableImage(image: fullImage)
+                // GPU-composited zoom/pan via a CALayer — no SwiftUI re-render during
+                // gestures, so it stays smooth on full-res photos. Keyed per photo.
+                ZoomableImageView(image: fullImage)
                     .id(state.openedItem?.hash)
             } else {
                 ProgressView().controlSize(.large)
@@ -200,70 +199,74 @@ struct ViewerView: View {
     }
 }
 
-/// Zoomable/pannable still image with its own isolated state — only this view
-/// re-renders while zooming, keeping the rest of the viewer responsive. Two-finger
-/// trackpad scroll pans (when zoomed), pinch zooms, double-click toggles zoom.
-private struct ZoomableImage: View {
+/// GPU-composited zoomable/pannable image. The CGImage is uploaded once as a
+/// CALayer's contents; pinch/scroll/double-click only adjust the layer's frame
+/// (a GPU transform), so there is no per-frame rasterization or SwiftUI re-render.
+private struct ZoomableImageView: NSViewRepresentable {
     let image: NSImage
-    @State private var zoom: CGFloat = 1
-    @State private var pan: CGSize = .zero
-
-    var body: some View {
-        ZStack {
-            Image(nsImage: image)
-                .resizable()
-                .interpolation(.medium)
-                .aspectRatio(contentMode: .fit)
-                .scaleEffect(zoom)
-                .offset(pan)
-                .padding(20)
-            TrackpadZoomPan(
-                onScroll: { d in
-                    guard zoom > 1 else { return }
-                    pan.width += d.width
-                    pan.height += d.height
-                },
-                onMagnify: { m in
-                    zoom = min(max(1, zoom * (1 + m)), 8)
-                    if zoom <= 1 { pan = .zero }
-                },
-                onDoubleClick: {
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        if zoom > 1 { zoom = 1; pan = .zero } else { zoom = 2.5 }
-                    }
-                })
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// Transparent AppKit layer that reports trackpad scroll, pinch, and double-click.
-/// Using NSView (rather than SwiftUI gestures) gives smooth, precise trackpad
-/// deltas and avoids per-frame whole-view gesture re-evaluation.
-private struct TrackpadZoomPan: NSViewRepresentable {
-    let onScroll: (CGSize) -> Void
-    let onMagnify: (CGFloat) -> Void
-    let onDoubleClick: () -> Void
-
-    func makeNSView(context: Context) -> CatcherView {
-        let v = CatcherView()
-        v.onScroll = onScroll; v.onMagnify = onMagnify; v.onDoubleClick = onDoubleClick
+    func makeNSView(context: Context) -> ZoomPanLayerView {
+        let v = ZoomPanLayerView()
+        v.setImage(image)
         return v
     }
-    func updateNSView(_ v: CatcherView, context: Context) {
-        v.onScroll = onScroll; v.onMagnify = onMagnify; v.onDoubleClick = onDoubleClick
+    func updateNSView(_ v: ZoomPanLayerView, context: Context) { v.setImage(image) }
+}
+
+final class ZoomPanLayerView: NSView {
+    private let imageLayer = CALayer()
+    private var zoom: CGFloat = 1
+    private var pan = CGPoint.zero
+    private var imageSize: CGSize = .zero
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        imageLayer.contentsGravity = .resizeAspect
+        imageLayer.masksToBounds = true
+        layer?.addSublayer(imageLayer)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }   // top-left origin → CGImage renders upright
+
+    func setImage(_ image: NSImage) {
+        var rect = CGRect(origin: .zero, size: image.size)
+        imageLayer.contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        imageSize = image.size
+        zoom = 1; pan = .zero
+        relayout()
     }
 
-    final class CatcherView: NSView {
-        var onScroll: ((CGSize) -> Void)?
-        var onMagnify: ((CGFloat) -> Void)?
-        var onDoubleClick: (() -> Void)?
-        override func scrollWheel(with e: NSEvent) {
-            onScroll?(CGSize(width: e.scrollingDeltaX, height: e.scrollingDeltaY))
-        }
-        override func magnify(with e: NSEvent) { onMagnify?(e.magnification) }
-        override func mouseDown(with e: NSEvent) {
-            if e.clickCount == 2 { onDoubleClick?() }
-        }
+    override func layout() { super.layout(); relayout() }
+
+    private func relayout() {
+        guard imageSize.width > 0, bounds.width > 0 else { return }
+        let inset: CGFloat = 20
+        let avail = bounds.insetBy(dx: inset, dy: inset)
+        let fit = min(avail.width / imageSize.width, avail.height / imageSize.height)
+        let w = imageSize.width * fit * zoom
+        let h = imageSize.height * fit * zoom
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        imageLayer.frame = CGRect(x: (bounds.width - w) / 2 + pan.x,
+                                  y: (bounds.height - h) / 2 + pan.y, width: w, height: h)
+        CATransaction.commit()
+    }
+
+    override func scrollWheel(with e: NSEvent) {
+        guard zoom > 1 else { return }
+        pan.x += e.scrollingDeltaX
+        pan.y += e.scrollingDeltaY
+        relayout()
+    }
+    override func magnify(with e: NSEvent) {
+        zoom = min(max(1, zoom * (1 + e.magnification)), 8)
+        if zoom <= 1 { pan = .zero }
+        relayout()
+    }
+    override func mouseDown(with e: NSEvent) {
+        guard e.clickCount == 2 else { return }
+        zoom = zoom > 1 ? 1 : 2.5
+        pan = .zero
+        relayout()
     }
 }

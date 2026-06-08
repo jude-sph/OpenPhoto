@@ -27,6 +27,7 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     private var isGone = false
     private var isReady = false   // session open + catalog ready; lets open() short-circuit on reuse
     private var isOpening = false  // an open is in flight — don't issue requestOpenSession twice
+    private var recoveredBusy = false  // tried close+reopen after a -21347 once
     private var readyContinuations: [CheckedContinuation<Void, Error>] = []
     private var downloadContinuation: CheckedContinuation<Void, Error>?
     private var deleteContinuation: CheckedContinuation<Void, Error>?
@@ -249,20 +250,34 @@ extension CameraSource: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
                 return
             }
             if ns.code == -21347 {
-                // "A session is already open" — a usable session exists (e.g. left by
-                // a prior run, or a redundant open). Treat as ready and proceed.
-                resolveReady()
+                // "A session is already open" — typically a stale session left by a
+                // previous run. Close it and reopen once to get a working session
+                // for THIS process (just marking ready would enumerate 0 items).
+                let recover = lock.withLock {
+                    if recoveredBusy { return false }
+                    recoveredBusy = true
+                    return true
+                }
+                if recover {
+                    camera.requestCloseSession()   // device(_:didCloseSessionWithError:) reopens
+                } else {
+                    failOpen(error)
+                }
                 return
             }
-            let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
-                isOpening = false
-                let p = readyContinuations
-                readyContinuations.removeAll()
-                return p
-            }
-            pending.forEach { $0.resume(throwing: error) }
+            failOpen(error)
         }
         // Success with no error: wait for deviceDidBecomeReady to resolve.
+    }
+
+    private func failOpen(_ error: any Error) {
+        let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
+            isOpening = false
+            let p = readyContinuations
+            readyContinuations.removeAll()
+            return p
+        }
+        pending.forEach { $0.resume(throwing: error) }
     }
 
     /// Content catalog fully loaded — open() resolves here.
@@ -321,7 +336,11 @@ extension CameraSource: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
     }
 
     // Required stubs (macOS 15 SDK non-optional methods — signatures per spike):
-    public func device(_ device: ICDevice, didCloseSessionWithError error: (any Error)?) {}
+    public func device(_ device: ICDevice, didCloseSessionWithError error: (any Error)?) {
+        // If we closed to recover from a stale -21347 session, reopen now.
+        let shouldReopen = lock.withLock { recoveredBusy && !isGone && !isReady }
+        if shouldReopen { camera.requestOpenSession() }
+    }
     public func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {}
     public func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
     public func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
