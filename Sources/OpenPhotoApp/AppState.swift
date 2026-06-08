@@ -1,0 +1,87 @@
+import SwiftUI
+import OpenPhotoCore
+
+typealias Scanner = OpenPhotoCore.Scanner   // Foundation.Scanner collision
+
+enum SidebarItem: String, Hashable, CaseIterable {
+    case timeline, folders, bin
+    var label: String {
+        switch self {
+        case .timeline: "Timeline"
+        case .folders: "Folders"
+        case .bin: "Bin"
+        }
+    }
+    var symbol: String {
+        switch self {   // SF Symbol map from the UI-Design README
+        case .timeline: "photo.on.rectangle.angled"
+        case .folders: "folder"
+        case .bin: "trash"
+        }
+    }
+}
+
+@Observable @MainActor
+final class AppState {
+    static let rootsDefaultsKey = "libraryRootPaths"
+
+    var library: LibraryService?
+    var selection: SidebarItem = .timeline
+    var selectedFolder: String?              // dirPath in Folders view
+    var openedItem: TimelineItem?            // non-nil → Viewer is presented
+    var inspectorShown = true
+    var gridMinSize: CGFloat = 132           // grid-size slider, 92…220
+    var sections: [TimelineSection] = []
+    var folderTree: [FolderNode] = []
+    var binEntries: [LibraryService.BinEntry] = []
+    var scanProgress: Scanner.Progress?
+    var scanning = false
+    private var watcher: FolderWatcher?
+
+    var configuredRoots: [URL] {
+        (UserDefaults.standard.stringArray(forKey: Self.rootsDefaultsKey) ?? [])
+            .map { URL(fileURLWithPath: $0) }
+    }
+
+    func openLibrary(roots: [URL]) {
+        UserDefaults.standard.set(roots.map(\.path), forKey: Self.rootsDefaultsKey)
+        do {
+            let appSupport = FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("OpenPhoto")
+            library = try LibraryService(vaultRoots: roots, appSupportDir: appSupport)
+            startWatcher(roots: roots)
+            Task { await rescan() }
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    func rescan() async {
+        guard let library, !scanning else { return }
+        scanning = true
+        defer { scanning = false; scanProgress = nil }
+        do {
+            try await library.scanAll { [weak self] p in
+                Task { @MainActor in self?.scanProgress = p }
+            }
+            try refreshQueries()
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    func refreshQueries() throws {
+        guard let library else { return }
+        sections = try library.timelineSections()
+        folderTree = try library.folderTree()
+        binEntries = try library.binItems()
+    }
+
+    private func startWatcher(roots: [URL]) {
+        watcher = FolderWatcher(paths: roots.map(\.path)) { [weak self] in
+            Task { @MainActor in await self?.rescan() }
+        }
+        watcher?.start()
+    }
+}
