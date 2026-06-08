@@ -16,6 +16,8 @@ struct ImportView: View {
     @State private var sessionImportedIDs = Set<String>()
     @State private var lastResult: ImportEngine.BatchResult?
     @State private var showFreeUp = false
+    @State private var stateStreamTask: Task<Void, Never>?
+    @State private var importedIDCache = Set<String>()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,6 +28,7 @@ struct ImportView: View {
             footer
         }
         .task(id: device.id) { await connect() }
+        .onDisappear { stateStreamTask?.cancel() }
         .sheet(isPresented: $showFreeUp) {
             if let source, let registry = state.importRegistry,
                let lib = state.library, let vault = lib.vaults.first {
@@ -115,13 +118,13 @@ struct ImportView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(r.failed.isEmpty ? Theme.green : Theme.amber)
                 }
-                Text("\(selection.count) selected")
+                Text("\(selectedDisplayCount) selected")
                     .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)
                 Spacer()
                 destinationPicker
-                Button("Import \(selection.count) items") { Task { await runBatch() } }
+                Button("Import \(selectedDisplayCount) items") { Task { await runBatch() } }
                     .buttonStyle(.borderedProminent)
-                    .disabled(selection.isEmpty || destination.isEmpty)
+                    .disabled(selectedDisplayCount == 0 || destination.isEmpty)
                 if !sessionImported.isEmpty || hasPreviouslyImportedOnDevice {
                     Button("Free up space on \(device.name)…") { showFreeUp = true }
                         .controlSize(.small)
@@ -164,6 +167,12 @@ struct ImportView: View {
         // Hide the video halves of Live pairs — the photo tile represents both.
         items.filter { !($0.kind == .video && $0.livePartnerID != nil) }
     }
+    /// Count of selected items that are visible in the grid (excludes hidden Live-pair video halves).
+    /// Use this for UI labels; `selection` itself (which may contain hidden partner IDs) is still
+    /// passed to the engine so it can handle both halves correctly.
+    private var selectedDisplayCount: Int {
+        displayItems.filter { selection.contains($0.id) }.count
+    }
     private var allFolders: [String] {
         var paths: [String] = []
         func walk(_ nodes: [FolderNode]) { for n in nodes { paths.append(n.path); walk(n.children) } }
@@ -175,11 +184,7 @@ struct ImportView: View {
         items.contains { isImported($0) && !sessionImportedIDs.contains($0.id) }
     }
     private func isImported(_ item: ImportItem) -> Bool {
-        guard let reg = state.importRegistry, let source else { return false }
-        let taken = item.takenAt.map(ISO8601Millis.string(from:)) ?? ""
-        return sessionImportedIDs.contains(item.id) ||
-               reg.contains(sourceKey: source.sourceKey, name: item.name,
-                            size: item.byteSize, takenAt: taken)
+        sessionImportedIDs.contains(item.id) || importedIDCache.contains(item.id)
     }
     private func toggle(_ item: ImportItem) {
         if selection.contains(item.id) { selection.remove(item.id) }
@@ -192,17 +197,19 @@ struct ImportView: View {
     }
 
     private func connect() async {
+        stateStreamTask?.cancel()
+        stateStreamTask = nil
         phase = .connecting
         guard let src = state.deviceWatcher.source(for: device) else {
             phase = .failedToConnect("Source unavailable"); return
         }
         source = src
         if let cam = src as? CameraSource {
-            Task {   // observe lock-state transitions for the UI
+            stateStreamTask = Task { [weak cam] in
+                guard let cam else { return }
                 for await s in cam.stateStream {
-                    await MainActor.run {
-                        if s == .waitingForUnlock { phase = .waitingForUnlock }
-                    }
+                    if Task.isCancelled { break }
+                    await MainActor.run { if s == .waitingForUnlock { phase = .waitingForUnlock } }
                 }
             }
             do { try await cam.open() }
@@ -215,10 +222,25 @@ struct ImportView: View {
     private func reloadItems() async {
         guard let source else { return }
         items = (try? await source.enumerateItems()) ?? []
+        // Rebuild the imported-ID cache to avoid per-render NSLock calls in isImported(_:).
+        var cache = Set<String>()
+        if let reg = state.importRegistry {
+            for item in items {
+                let taken = item.takenAt.map(ISO8601Millis.string(from:)) ?? ""
+                if reg.contains(sourceKey: source.sourceKey, name: item.name,
+                                size: item.byteSize, takenAt: taken) {
+                    cache.insert(item.id)
+                }
+            }
+        }
+        cache.formUnion(sessionImportedIDs)
+        importedIDCache = cache
     }
 
     private func runBatch() async {
         guard let source, let lib = state.library, let registry = state.importRegistry,
+              // LIMITATION (v1): destination always targets the primary vault (vaults.first);
+              // multi-vault routing deferred — the app is single-vault in the current shipping configuration.
               let vault = lib.vaults.first else { return }
         let batchItems = items.filter { selection.contains($0.id) }
         phase = .importing(done: 0, total: batchItems.count)
@@ -230,6 +252,8 @@ struct ImportView: View {
         lastResult = result
         sessionImported.append(contentsOf: result.imported)
         sessionImportedIDs.formUnion(result.imported.map(\.item.id))
+        // Refresh the imported-ID cache so isImported(_:) stays accurate without per-render locks.
+        importedIDCache.formUnion(sessionImportedIDs)
         selection.removeAll()
         try? state.refreshQueries()
         phase = .ready
