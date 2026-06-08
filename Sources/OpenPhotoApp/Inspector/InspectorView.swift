@@ -74,7 +74,7 @@ struct InspectorView: View {
 
                 Divider().overlay(Theme.hairline)
 
-                section(item.cameraModel ?? "Camera") {
+                section(item.cameraModel ?? "Details") {
                     exifGrid
                 }
 

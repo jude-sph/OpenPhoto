@@ -32,10 +32,13 @@ final class AppState {
     var inspectorShown = true
     var gridMinSize: CGFloat = 132           // grid-size slider, 92…220
     var sections: [TimelineSection] = []
+    var flatItems: [TimelineItem] = []
     var folderTree: [FolderNode] = []
+    var expandedFolders: Set<String> = []
     var binEntries: [LibraryService.BinEntry] = []
     var scanProgress: Scanner.Progress?
     var scanning = false
+    var refreshToken = 0
     private var watcher: FolderWatcher?
 
     var configuredRoots: [URL] {
@@ -74,8 +77,18 @@ final class AppState {
     func refreshQueries() throws {
         guard let library else { return }
         sections = try library.timelineSections()
+        flatItems = sections.flatMap(\.items)
         folderTree = try library.folderTree()
+        if expandedFolders.isEmpty && !folderTree.isEmpty {
+            var paths: Set<String> = []
+            func collect(_ nodes: [FolderNode]) {
+                for n in nodes { paths.insert(n.path); collect(n.children) }
+            }
+            collect(folderTree)
+            expandedFolders = paths
+        }
         binEntries = try library.binItems()
+        refreshToken += 1
     }
 
     private func startWatcher(roots: [URL]) {

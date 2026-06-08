@@ -59,7 +59,7 @@ struct TimelineView: View {
     }
 
     private var stats: String {
-        let all = state.sections.flatMap(\.items)
+        let all = state.flatItems
         let v = all.filter { $0.kind == MediaKind.video.rawValue }.count
         return "\(all.count - v) photos · \(v) videos"
     }

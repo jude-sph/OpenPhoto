@@ -21,7 +21,8 @@ private struct FolderRow: View {
     let node: FolderNode
     @Bindable var state: AppState
     let depth: Int
-    @State private var expanded = true
+
+    private var expanded: Bool { state.expandedFolders.contains(node.path) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -29,7 +30,9 @@ private struct FolderRow: View {
                 if node.children.isEmpty {
                     Spacer().frame(width: 14)
                 } else {
-                    Button { expanded.toggle() } label: {
+                    Button {
+                        state.expandedFolders.formSymmetricDifference([node.path])
+                    } label: {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(Theme.textFaint)

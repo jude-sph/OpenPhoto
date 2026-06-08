@@ -57,13 +57,15 @@ struct BinView: View {
         alert.addButton(withTitle: "Move to Trash")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        // Recycle each vault's whole bin/ dir (files + their sidecars) to macOS
-        // Trash — never unlink — then reset the bin log.
         for vault in state.library?.vaults ?? [] {
-            if FileManager.default.fileExists(atPath: vault.binDirURL.path) {
-                NSWorkspace.shared.recycle([vault.binDirURL])
+            do {
+                if FileManager.default.fileExists(atPath: vault.binDirURL.path) {
+                    try FileManager.default.trashItem(at: vault.binDirURL, resultingItemURL: nil)
+                }
+                try AtomicFile.write(Data(), to: vault.binLogURL)   // only after successful trash
+            } catch {
+                NSAlert(error: error).runModal()
             }
-            try? AtomicFile.write(Data(), to: vault.binLogURL)
         }
         try? state.refreshQueries()
     }

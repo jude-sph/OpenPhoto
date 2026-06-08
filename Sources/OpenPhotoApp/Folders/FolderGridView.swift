@@ -34,7 +34,7 @@ struct FolderGridView: View {
             }
         }
         .task(id: state.selectedFolder) { reload() }
-        .task(id: state.sections.count) { reload() }   // refresh after rescans
+        .task(id: state.refreshToken) { reload() }      // refresh after rescans
     }
 
     private func reload() {

@@ -6,8 +6,9 @@ struct ViewerView: View {
     @Bindable var state: AppState
     @State private var fullImage: NSImage?
     @State private var playingLive = false
+    @State private var player: AVPlayer?
 
-    private var flatItems: [TimelineItem] { state.sections.flatMap(\.items) }
+    private var flatItems: [TimelineItem] { state.flatItems }
     private var index: Int? { flatItems.firstIndex { $0.hash == state.openedItem?.hash } }
 
     var body: some View {
@@ -27,6 +28,17 @@ struct ViewerView: View {
         .onKeyPress(.deleteForward) { deleteCurrent(); return .handled }
         .onKeyPress(.delete) { deleteCurrent(); return .handled }
         .task(id: state.openedItem?.hash) { await loadFull() }
+        .onChange(of: playingLive) { _, live in
+            if live, let item = state.openedItem,
+               let pair = item.livePairHash,
+               let pairURL = livePairURL(photo: item, pairHash: pair) {
+                let p = AVPlayer(url: pairURL)
+                p.play()
+                player = p
+            } else if !live {
+                player = nil
+            }
+        }
     }
 
     private var stage: some View {
@@ -62,14 +74,13 @@ struct ViewerView: View {
     @ViewBuilder private var content: some View {
         if let item = state.openedItem {
             if item.kind == MediaKind.video.rawValue {
-                if let url = state.library?.absoluteURL(for: item) {
-                    VideoPlayer(player: AVPlayer(url: url))
+                if let player {
+                    VideoPlayer(player: player)
                 }
-            } else if playingLive, let pair = item.livePairHash,
-                      let pairURL = livePairURL(photo: item, pairHash: pair) {
-                VideoPlayer(player: {
-                    let p = AVPlayer(url: pairURL); p.play(); return p
-                }())
+            } else if playingLive {
+                if let player {
+                    VideoPlayer(player: player)
+                }
             } else if let fullImage {
                 Image(nsImage: fullImage)
                     .resizable().aspectRatio(contentMode: .fit)
@@ -126,8 +137,14 @@ struct ViewerView: View {
 
     private func loadFull() async {
         fullImage = nil
-        guard let item = state.openedItem, item.kind == MediaKind.photo.rawValue,
+        player = nil
+        playingLive = false
+        guard let item = state.openedItem,
               let url = state.library?.absoluteURL(for: item) else { return }
+        if item.kind == MediaKind.video.rawValue {
+            player = AVPlayer(url: url)
+            return
+        }
         // NSImage is not Sendable; load raw Data in the detached task, construct on main actor.
         let data = await Task.detached(priority: .userInitiated) {
             try? Data(contentsOf: url)
