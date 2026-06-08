@@ -80,8 +80,8 @@ struct ImportView: View {
             } description: { Text(why) }.frame(maxHeight: .infinity)
         case .ready, .importing:
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 178), spacing: 10)],
-                          spacing: 10) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: Theme.gridGap)],
+                          spacing: Theme.gridGap) {
                     ForEach(displayItems) { item in
                         Color.clear.aspectRatio(1, contentMode: .fit)
                             .overlay {
@@ -92,10 +92,10 @@ struct ImportView: View {
                                     selected: selection.contains(item.id),
                                     onToggle: { toggle(item) })
                             }
-                            .clipped()   // rectangular clip → tight rows (matches timeline); corner checkbox stays inside
+                            .clipped()
                     }
                 }
-                .padding(12)
+                .padding(.horizontal, 12).padding(.vertical, 12)
             }
         }
     }
