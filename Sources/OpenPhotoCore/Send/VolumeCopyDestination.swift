@@ -44,6 +44,13 @@ public final class VolumeCopyDestination: SendDestination, @unchecked Sendable {
             let target = collisionFreeURL(for: item.displayName, in: folderURL)
             do {
                 try fm.copyItem(at: item.originalURL, to: target)
+                // Flush to the physical device before verifying: copyItem writes through
+                // the page cache, so on removable media an unmount between copy and hash
+                // could otherwise verify against unflushed data (invariant #4).
+                if let fh = try? FileHandle(forUpdating: target) {
+                    try? fh.synchronize()
+                    try? fh.close()
+                }
                 let writtenHash = try ContentHash.ofFile(at: target).stringValue
                 if writtenHash == item.hash {
                     outcomes.append(SendOutcome(item: item, status: .confirmed))
@@ -52,6 +59,7 @@ public final class VolumeCopyDestination: SendDestination, @unchecked Sendable {
                     outcomes.append(SendOutcome(item: item, status: .failed, error: "verify mismatch"))
                 }
             } catch {
+                try? fm.removeItem(at: target)   // clean up any partial copy on copy/hash failure
                 outcomes.append(SendOutcome(item: item, status: .failed, error: String(describing: error)))
             }
         }
