@@ -1,37 +1,59 @@
 import SwiftUI
 import OpenPhotoCore
 
-struct ImportItemCell: View {
+/// A selectable square import tile. The squaring + media clip happen on the
+/// inner cell; the selection ring and checkbox are drawn on the OUTER
+/// squared-and-clipped frame (after `.clipped()`), so they are pinned to the
+/// visible cell corner and can never be clipped, regardless of how the inner
+/// media sizes itself. Shared by the import grid and the free-up grid.
+struct ImportTile: View {
     let item: ImportItem
     let source: any ImportSource
     let alreadyImported: Bool
     let importedThisSession: Bool
     let selected: Bool
     let onToggle: () -> Void
-    @State private var thumb: CGImage?
 
-    // Mirrors the timeline's PhotoCellView: media is clipped to the rounded
-    // cell shape, then every decorative overlay (selection ring, checkbox,
-    // badges) is layered ON TOP of the clip so it can never be cut off — the
-    // grid's outer rectangular .clipped() only ever trims the media edges.
     var body: some View {
-        media
-            .clipShape(RoundedRectangle(cornerRadius: Theme.cellRadius))
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                ImportItemCell(item: item, source: source,
+                               alreadyImported: alreadyImported,
+                               importedThisSession: importedThisSession,
+                               selected: selected)
+            }
+            .clipped()
             .overlay {
                 if selected {
                     RoundedRectangle(cornerRadius: Theme.cellRadius)
                         .strokeBorder(Theme.accent, lineWidth: 3)
                 }
             }
-            .overlay(alignment: .topLeading) { checkbox.padding(6) }
-            .overlay(alignment: .topTrailing) { kindBadge }
-            .overlay(alignment: .bottom) { statusBadge }
+            .overlay(alignment: .topLeading) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20, weight: .bold))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, selected ? Theme.accent : .black.opacity(0.45))
+                    .shadow(radius: 2)
+                    .padding(7)
+            }
             .contentShape(Rectangle())
             .onTapGesture { onToggle() }
-            .task(id: item.id) { thumb = await source.thumbnail(item, maxPixel: 360) }
     }
+}
 
-    private var media: some View {
+/// Presentational cell: photo (+ selection tint) clipped to the cell shape, plus
+/// the live/video and status badges. No selection chrome — `ImportTile` adds that.
+struct ImportItemCell: View {
+    let item: ImportItem
+    let source: any ImportSource
+    let alreadyImported: Bool
+    let importedThisSession: Bool
+    let selected: Bool
+    @State private var thumb: CGImage?
+
+    var body: some View {
         ZStack {
             Theme.tile
             if let thumb {
@@ -41,16 +63,11 @@ struct ImportItemCell: View {
             if selected { Theme.accent.opacity(0.18) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()   // pin size to the square (like ThumbView) so the .fill image
-                     // can't push the cell taller and shove the checkbox off-screen
-    }
-
-    private var checkbox: some View {
-        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-            .font(.system(size: 20, weight: .bold))
-            .symbolRenderingMode(.palette)
-            .foregroundStyle(Color.white, selected ? Theme.accent : Color.black.opacity(0.45))
-            .shadow(radius: 2)
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cellRadius))
+        .overlay(alignment: .topTrailing) { kindBadge }
+        .overlay(alignment: .bottom) { statusBadge }
+        .task(id: item.id) { thumb = await source.thumbnail(item, maxPixel: 360) }
     }
 
     @ViewBuilder private var kindBadge: some View {

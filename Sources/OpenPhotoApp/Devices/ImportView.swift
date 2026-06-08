@@ -56,9 +56,6 @@ struct ImportView: View {
                 selection = Set(items.filter { !isImported($0) }.map(\.id))
             }.controlSize(.small)
             Button("Deselect") { selection.removeAll() }.controlSize(.small)
-            Button { state.openedDevice = nil } label: {
-                Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.textFaint)
-            }.buttonStyle(.plain)
         }
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
     }
@@ -83,16 +80,12 @@ struct ImportView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: Theme.gridGap)],
                           spacing: Theme.gridGap) {
                     ForEach(displayItems) { item in
-                        Color.clear.aspectRatio(1, contentMode: .fit)
-                            .overlay {
-                                ImportItemCell(
-                                    item: item, source: source!,
-                                    alreadyImported: isImported(item),
-                                    importedThisSession: sessionImportedIDs.contains(item.id),
-                                    selected: selection.contains(item.id),
-                                    onToggle: { toggle(item) })
-                            }
-                            .clipped()
+                        ImportTile(
+                            item: item, source: source!,
+                            alreadyImported: isImported(item),
+                            importedThisSession: sessionImportedIDs.contains(item.id),
+                            selected: selection.contains(item.id),
+                            onToggle: { toggle(item) })
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 12)
