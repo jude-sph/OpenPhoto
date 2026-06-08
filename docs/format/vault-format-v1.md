@@ -96,6 +96,7 @@ Standard namespaces, chosen for maximal third-party intelligibility:
 | Data | XMP property |
 |---|---|
 | Rating (0–5) | `xmp:Rating` |
+| Favorite | `xmp:Label` with value `"Favorite"` |
 | Tags (flat) | `dc:subject` |
 | Tags (hierarchical, optional) | `lr:hierarchicalSubject` |
 | Caption | `dc:description` |
