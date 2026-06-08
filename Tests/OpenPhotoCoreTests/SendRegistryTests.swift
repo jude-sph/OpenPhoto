@@ -23,3 +23,19 @@ private func sendEntry(hash: String, dest: String) -> SendRegistry.Entry {
     #expect(reg2.entries(forDestinationKey: "vol-ABC").count == 1)
     #expect(reg2.contains(destinationKey: "vol-ABC", hash: h))
 }
+
+@Test func wasSentToDeviceMatchesByFingerprint() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vault = try Vault.openOrCreate(at: try t.sub("Pictures"), role: .local)
+    let reg = SendRegistry(vault: vault)
+    let h = "sha256:" + String(repeating: "a", count: 64)
+    try reg.append(SendRegistry.Entry(hash: h, destinationKey: "cam-IPHONE",
+        deviceName: "iPhone", deviceKind: "phone",
+        sentAt: "2026-06-08T13:30:00.000Z", confirmedAt: "2026-06-08T13:31:00.000Z",
+        fpSize: 31853, fpCaptureDateMs: 1_434_378_600_000))
+    // Same device + size + capture second → match (sub-second drift ignored).
+    #expect(reg.wasSentToDevice(destinationKey: "cam-IPHONE", size: 31853, captureDateMs: 1_434_378_600_400))
+    #expect(!reg.wasSentToDevice(destinationKey: "cam-OTHER", size: 31853, captureDateMs: 1_434_378_600_000)) // other device
+    #expect(!reg.wasSentToDevice(destinationKey: "cam-IPHONE", size: 99, captureDateMs: 1_434_378_600_000))   // other size
+    #expect(!reg.wasSentToDevice(destinationKey: "cam-IPHONE", size: 31853, captureDateMs: 0))                // unknown date never matches
+}

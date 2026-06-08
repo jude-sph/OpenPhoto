@@ -59,6 +59,18 @@ public final class SendRegistry: @unchecked Sendable {
         return byKey.values.filter { $0.destinationKey == key }
     }
 
+    /// Has anything with this fingerprint been confirmed-sent to this device?
+    /// Matches size + capture second (filenames aren't recorded — Photos rewrites
+    /// them). An unknown (0) capture date never matches.
+    public func wasSentToDevice(destinationKey: String, size: Int64, captureDateMs: Int64) -> Bool {
+        guard captureDateMs != 0 else { return false }
+        lock.lock(); defer { lock.unlock() }
+        return byKey.values.contains { e in
+            e.destinationKey == destinationKey && e.fpSize == size &&
+            e.fpCaptureDateMs / 1000 == captureDateMs / 1000
+        }
+    }
+
     /// Append (idempotent by destination+hash) and rewrite atomically.
     public func append(_ entry: Entry) throws {
         lock.lock(); defer { lock.unlock() }
