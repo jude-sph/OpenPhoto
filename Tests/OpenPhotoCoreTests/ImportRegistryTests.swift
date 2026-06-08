@@ -37,3 +37,24 @@ private func entry(_ name: String, taken: String) -> ImportRegistry.Entry {
     let reg2 = ImportRegistry(vault: vault); try reg2.load()
     #expect(reg2.entries(forSourceKey: "iphone-1").count == 1)
 }
+
+private func entryHashed(_ name: String, sourceKey: String, hash: String) -> ImportRegistry.Entry {
+    ImportRegistry.Entry(sourceKey: sourceKey, name: name, size: 123,
+                         takenAt: "2026-06-01T10:00:00.000Z", hash: hash,
+                         importedAt: "2026-06-08T02:00:00.000Z",
+                         importedTo: "rome2026/\(name)")
+}
+
+@Test func deviceKeysForHashAggregatesAcrossSourcesAndPersists() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vault = try Vault.openOrCreate(at: try t.sub("Pictures"), role: .local)
+    let reg = ImportRegistry(vault: vault)
+    let h = "sha256:" + String(repeating: "c", count: 64)
+    try reg.append(entryHashed("IMG_1.HEIC", sourceKey: "iphone-A", hash: h))
+    try reg.append(entryHashed("IMG_1.HEIC", sourceKey: "sdcard-B", hash: h))   // same bytes, 2 devices
+    #expect(reg.deviceKeys(forHash: h) == ["iphone-A", "sdcard-B"])
+    #expect(reg.deviceKeys(forHash: "sha256:" + String(repeating: "d", count: 64)).isEmpty)
+    // Rebuilt on reload from disk.
+    let reg2 = ImportRegistry(vault: vault); try reg2.load()
+    #expect(reg2.deviceKeys(forHash: h) == ["iphone-A", "sdcard-B"])
+}

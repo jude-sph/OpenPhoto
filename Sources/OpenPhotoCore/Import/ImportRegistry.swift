@@ -27,6 +27,7 @@ public final class ImportRegistry: @unchecked Sendable {
 
     private let url: URL
     private var byKey: [String: Entry] = [:]
+    private var byHash: [String: Set<String>] = [:]   // hash → source_keys that recorded it
     private let lock = NSLock()
 
     public init(vault: Vault) {
@@ -38,6 +39,7 @@ public final class ImportRegistry: @unchecked Sendable {
     public func load() throws {
         lock.lock(); defer { lock.unlock() }
         byKey.removeAll()
+        byHash.removeAll()
         let data: Data
         do { data = try Data(contentsOf: url) }
         catch let e as NSError where e.domain == NSCocoaErrorDomain
@@ -46,6 +48,7 @@ public final class ImportRegistry: @unchecked Sendable {
         for line in data.split(separator: 0x0A) where !line.isEmpty {
             let e = try dec.decode(Entry.self, from: line)
             byKey[e.key] = e
+            byHash[e.hash, default: []].insert(e.sourceKey)
         }
     }
 
@@ -59,11 +62,18 @@ public final class ImportRegistry: @unchecked Sendable {
         return byKey.values.filter { $0.sourceKey == key }
     }
 
+    /// Device source-keys that have imported these exact bytes (any folder).
+    public func deviceKeys(forHash hash: String) -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        return byHash[hash] ?? []
+    }
+
     /// Append (idempotent by key) and rewrite atomically.
     public func append(_ entry: Entry) throws {
         lock.lock(); defer { lock.unlock() }
         guard byKey[entry.key] == nil else { return }
         byKey[entry.key] = entry
+        byHash[entry.hash, default: []].insert(entry.sourceKey)
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         var out = Data()
