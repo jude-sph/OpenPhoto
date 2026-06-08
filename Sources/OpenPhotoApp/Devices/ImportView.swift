@@ -92,6 +92,7 @@ struct ImportView: View {
                                     selected: selection.contains(item.id),
                                     onToggle: { toggle(item) })
                             }
+                            .clipped()   // rectangular clip → tight rows (matches timeline); corner checkbox stays inside
                     }
                 }
                 .padding(12)

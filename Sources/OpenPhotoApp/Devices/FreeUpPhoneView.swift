@@ -153,6 +153,7 @@ struct FreeUpPhoneView: View {
                                                else { selection.insert(item.id) }
                                            })
                         }
+                        .clipped()
                 }
             }
             .padding(.horizontal, 16)
