@@ -162,12 +162,23 @@ final class AppState {
         refreshToken += 1
     }
 
-    /// How many of `items` appear to exist only on this Mac (no known backup).
-    /// No registry yet → we can't prove a backup, so treat all as only-copies.
+    /// PresenceService over the current registries, if a library is open.
+    private func presenceService() -> PresenceService? {
+        guard let library, let imports = importRegistry,
+              let sends = sendRegistry, let devices = deviceRegistry else { return nil }
+        return PresenceService(catalog: library.catalog, imports: imports, sends: sends, devices: devices)
+    }
+
+    /// Known locations of a photo (This Mac / phones / SD cards) for the inspector.
+    func locations(for item: TimelineItem) -> [Location] {
+        presenceService()?.locations(forHash: item.hash) ?? []
+    }
+
+    /// How many of `items` appear to exist only on this Mac (no confirmed/believed
+    /// copy elsewhere). No presence info yet → treat all as only-copies.
     func onlyCopyCount(_ items: [TimelineItem]) -> Int {
-        let hashes = Set(items.map(\.hash))
-        guard let reg = importRegistry else { return hashes.count }
-        return BackupProbe(registry: reg).onlyOnThisMac(hashes: Array(hashes)).count
+        guard let presence = presenceService() else { return Set(items.map(\.hash)).count }
+        return presence.onlyOnThisMac(hashes: items.map(\.hash)).count
     }
 
     /// Evict a selection to the bin, then refresh all queries.
