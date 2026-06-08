@@ -20,7 +20,7 @@
 2. **The import UI must handle the locked state as a first-class flow**: session open fails with `-9943` while locked; wait for `cameraDeviceDidRemoveAccessRestriction` and retry rather than erroring out. (Pattern implemented and proven in the spike.)
 3. **Order is not chronological** — the import grid must sort by `creationDate`, not enumeration order.
 4. **The download→verify→delete ritual works exactly as the design specs it** and should be lifted into the Phase 2 importer: `requestDownloadFile` → hash/size verify on disk → only then `requestDeleteFiles`.
-5. Open question for Phase 2 (user to verify casually): how deletion interacts with iCloud sync — whether the photo enters "Recently Deleted" on-device and whether the deletion propagates to other devices. Does not block the import design (the Mac copy is verified before deletion either way).
+5. **Verified by Jude on-device:** USB deletion **bypasses "Recently Deleted" entirely** — the photo is gone immediately and permanently from the phone. ImageCaptureCore/PTP deletes at the media-store level, not through the Photos app's soft-delete flow. Consequence for Phase 2: the verified Mac copy is the ONLY copy after deletion, so the import flow's checksum-verify-before-delete step is not optional politeness — it is the sole safety net, and the UI must say plainly that deletion from the phone is immediate and permanent (no on-device undo).
 
 ## Raw output (deletion run)
 
