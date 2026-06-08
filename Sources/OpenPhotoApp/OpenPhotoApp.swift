@@ -17,6 +17,14 @@ struct OpenPhotoApp: App {
                 }
         }
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Sidebar") {
+                    MainActor.assumeIsolated { state.sidebarShown.toggle() }
+                }
+                .keyboardShortcut("\\", modifiers: .command)
+            }
+        }
     }
 }
 
@@ -29,10 +37,28 @@ struct RootView: View {
         } else {
             ZStack {
                 HStack(spacing: 0) {
-                    SidebarView(state: state)
+                    if state.sidebarShown {
+                        SidebarView(state: state)
+                    } else {
+                        VStack(spacing: 0) {
+                            Button {
+                                state.sidebarShown = true
+                            } label: {
+                                Image(systemName: "sidebar.left")
+                                    .foregroundStyle(Theme.textDim)
+                            }
+                            .buttonStyle(.plain)
+                            .frame(width: 28, height: 24)
+                            .padding(.top, 8)
+                            Spacer()
+                        }
+                        .frame(width: 38)
+                        .background(.ultraThinMaterial)
+                    }
                     Divider().overlay(Theme.hairline)
                     detail
                 }
+                .animation(.easeOut(duration: 0.18), value: state.sidebarShown)
                 if state.openedItem != nil {
                     ViewerView(state: state)   // full-window overlay
                 }

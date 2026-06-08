@@ -47,6 +47,13 @@ final class AppState {
             UserDefaults.standard.set(grouping.rawValue, forKey: "timelineGrouping")
         }
     }
+    var sidebarShown: Bool = UserDefaults.standard.object(forKey: "sidebarShown") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "sidebarShown") {
+        didSet {
+            UserDefaults.standard.set(sidebarShown, forKey: "sidebarShown")
+        }
+    }
     private var watcher: FolderWatcher?
 
     var configuredRoots: [URL] {

@@ -6,6 +6,19 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Spacer()
+                Button {
+                    state.sidebarShown = false
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .foregroundStyle(Theme.textDim)
+                }
+                .buttonStyle(.plain)
+                .frame(width: 28, height: 24)
+                .padding(.trailing, 8)
+            }
+            .padding(.top, 8)
             Text("LIBRARY")
                 .font(.system(size: 11, weight: .semibold))
                 .kerning(0.44)
