@@ -23,7 +23,9 @@ struct ImportTile: View {
                                importedThisSession: importedThisSession,
                                selected: selected)
             }
-            .clipped()
+            // Round the whole visible tile to the SAME radius as the ring, so the
+            // image corners sit exactly under the rounded ring (no square poke-out).
+            .clipShape(RoundedRectangle(cornerRadius: Theme.cellRadius))
             .overlay {
                 if selected {
                     RoundedRectangle(cornerRadius: Theme.cellRadius)
@@ -63,8 +65,7 @@ struct ImportItemCell: View {
             if selected { Theme.accent.opacity(0.18) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: Theme.cellRadius))
+        .clipped()   // ImportTile rounds the final tile; here we just pin/clip the fill
         .overlay(alignment: .topTrailing) { kindBadge }
         .overlay(alignment: .bottom) { statusBadge }
         .task(id: item.id) { thumb = await source.thumbnail(item, maxPixel: 360) }
