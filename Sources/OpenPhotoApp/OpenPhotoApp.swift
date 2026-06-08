@@ -26,17 +26,7 @@ struct OpenPhotoApp: App {
             }
             CommandGroup(after: .newItem) {
                 Button("Open Folder as Import Source…") {
-                    MainActor.assumeIsolated {
-                        let panel = NSOpenPanel()
-                        panel.canChooseDirectories = true
-                        panel.canChooseFiles = false
-                        panel.allowsMultipleSelection = false
-                        panel.prompt = "Use as Source"
-                        panel.message = "Choose a folder to import photos from."
-                        if panel.runModal() == .OK, let url = panel.url {
-                            state.deviceWatcher.addManualVolume(url: url)
-                        }
-                    }
+                    MainActor.assumeIsolated { state.addImportSourceViaPanel() }
                 }
             }
         }

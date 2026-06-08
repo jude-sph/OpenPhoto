@@ -50,29 +50,45 @@ struct SidebarView: View {
                 .buttonStyle(.plain)
                 .padding(.horizontal, 8)
             }
-            if !state.deviceWatcher.devices.isEmpty {
-                Text("DEVICES")
-                    .font(.system(size: 11, weight: .semibold)).kerning(0.44)
-                    .foregroundStyle(Theme.textFaint)
-                    .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
-                ForEach(state.deviceWatcher.devices) { device in
-                    let active = state.openedDevice?.id == device.id
-                    Button { state.openedDevice = device } label: {
-                        HStack(spacing: 9) {
-                            Image(systemName: device.symbol).frame(width: 18)
-                            Text(device.name).font(.system(size: 13.5, weight: .medium))
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                        .background(active ? Theme.accentDim : .clear,
-                                    in: RoundedRectangle(cornerRadius: 7))
-                        .foregroundStyle(active ? Theme.accent : Theme.text)
+            Text("IMPORT")
+                .font(.system(size: 11, weight: .semibold)).kerning(0.44)
+                .foregroundStyle(Theme.textFaint)
+                .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
+            ForEach(state.deviceWatcher.devices) { device in
+                let active = state.openedDevice?.id == device.id
+                Button { state.openedDevice = device } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: device.symbol).frame(width: 18)
+                        Text(device.name).font(.system(size: 13.5, weight: .medium))
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .background(active ? Theme.accentDim : .clear,
+                                in: RoundedRectangle(cornerRadius: 7))
+                    .foregroundStyle(active ? Theme.accent : Theme.text)
                 }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 8)
+            }
+            Button { state.addImportSourceViaPanel() } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "plus.circle").frame(width: 18)
+                    Text("Add import source…").font(.system(size: 13.5, weight: .medium))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .foregroundStyle(Theme.textDim)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+            if state.deviceWatcher.devices.isEmpty {
+                Text("Plug in a phone or SD card, or add a folder.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textFaint)
+                    .padding(.horizontal, 18).padding(.top, 2)
             }
             Spacer()
             if let p = state.scanProgress {

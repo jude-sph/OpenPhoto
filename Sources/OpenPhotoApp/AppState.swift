@@ -65,6 +65,22 @@ final class AppState {
     }
     private var watcher: FolderWatcher?
 
+    /// Prompt for a folder and add it as an import source, then open it.
+    /// Shared by the sidebar IMPORT button and the File-menu command.
+    func addImportSourceViaPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use as Source"
+        panel.message = "Choose a folder to import photos from."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        deviceWatcher.addManualVolume(url: url)
+        if let dev = deviceWatcher.devices.first(where: { $0.id == "manual-" + url.path }) {
+            openedDevice = dev
+        }
+    }
+
     var configuredRoots: [URL] {
         (UserDefaults.standard.stringArray(forKey: Self.rootsDefaultsKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
