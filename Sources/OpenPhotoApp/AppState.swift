@@ -70,6 +70,20 @@ final class AppState {
         }
         return _importRegistry
     }
+    private var _sendRegistry: SendRegistry?
+    var sendRegistry: SendRegistry? {
+        if _sendRegistry == nil, let primary = library?.vaults.first {
+            _sendRegistry = SendRegistry(vault: primary)
+        }
+        return _sendRegistry
+    }
+    private var _deviceRegistry: DeviceRegistry?
+    var deviceRegistry: DeviceRegistry? {
+        if _deviceRegistry == nil, let primary = library?.vaults.first {
+            _deviceRegistry = DeviceRegistry(vault: primary)
+        }
+        return _deviceRegistry
+    }
     private var watcher: FolderWatcher?
 
     /// Open the viewer on `item`, navigating within `items` (timeline set or one folder).
@@ -165,6 +179,42 @@ final class AppState {
         } catch {
             NSAlert(error: error).runModal()
         }
+    }
+
+    /// The connected device we can currently send to, if any. Stage B1: volumes only
+    /// (the iPhone/AirDrop destination arrives in Stage B2).
+    func connectedSendTarget() -> ConnectedDevice? {
+        deviceWatcher.devices.first { if case .volume = $0 { true } else { false } }
+    }
+
+    /// Build a SendDestination for a connected device. Stage B1: volumes only.
+    func sendDestination(for device: ConnectedDevice) -> (any SendDestination)? {
+        switch device {
+        case .volume(_, let name, let url): return VolumeCopyDestination(volumeRoot: url, displayName: name)
+        case .camera: return nil   // Stage B2: AirDropDestination
+        }
+    }
+
+    /// Map a library item to a SendItem (read-only original + fingerprint).
+    func sendItem(for item: TimelineItem) -> SendItem? {
+        guard let url = library?.absoluteURL(for: item) else { return nil }
+        return SendItem(
+            hash: item.hash, originalURL: url,
+            fingerprint: PresenceFingerprint(size: item.size, captureDateMs: item.takenAtMs, hash: item.hash),
+            displayName: (item.relPath as NSString).lastPathComponent)
+    }
+
+    /// Send a selection to a connected device, reporting progress. Returns the result.
+    func send(_ items: [TimelineItem], to device: ConnectedDevice,
+              progress: @escaping @Sendable (SendProgress) -> Void) async -> SendEngine.Result? {
+        guard let library, let vault = library.vaults.first,
+              let sends = sendRegistry, let devices = deviceRegistry,
+              let destination = sendDestination(for: device) else { return nil }
+        let sendItems = items.compactMap { sendItem(for: $0) }
+        let engine = SendEngine(library: library, sends: sends, devices: devices)
+        let result = await engine.run(destination: destination, items: sendItems, vault: vault, progress: progress)
+        try? refreshQueries()
+        return result
     }
 
     private func startWatcher(roots: [URL]) {
