@@ -63,6 +63,14 @@ extension Catalog {
         }
     }
 
+    /// All local instances of an asset (across vaults) — for presence/Locations.
+    public func instances(forHash hash: String) throws -> [InstanceRecord] {
+        try dbQueue.read { db in
+            try InstanceRecord.fetchAll(db, sql: "SELECT * FROM instances WHERE hash = ?",
+                                        arguments: [hash])
+        }
+    }
+
     /// Lightweight instance lookup (Live Photo pair resolution, viewer).
     public func instanceItem(hash: String, vaultID: String) throws -> InstanceRecord? {
         try dbQueue.read { db in

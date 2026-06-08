@@ -59,6 +59,12 @@ public final class SendRegistry: @unchecked Sendable {
         return byKey.values.filter { $0.destinationKey == key }
     }
 
+    /// All confirmed-send entries for these exact bytes (any device).
+    public func entries(forHash hash: String) -> [Entry] {
+        lock.lock(); defer { lock.unlock() }
+        return byKey.values.filter { $0.hash == hash }
+    }
+
     /// Has anything with this fingerprint been confirmed-sent to this device?
     /// Matches size + capture second (filenames aren't recorded — Photos rewrites
     /// them). An unknown (0) capture date never matches.

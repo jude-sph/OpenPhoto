@@ -62,6 +62,12 @@ public final class ImportRegistry: @unchecked Sendable {
         return byKey.values.filter { $0.sourceKey == key }
     }
 
+    /// All import entries that recorded these exact bytes (any device).
+    public func entries(forHash hash: String) -> [Entry] {
+        lock.lock(); defer { lock.unlock() }
+        return byKey.values.filter { $0.hash == hash }
+    }
+
     /// Device source-keys that have imported these exact bytes (any folder).
     public func deviceKeys(forHash hash: String) -> Set<String> {
         lock.lock(); defer { lock.unlock() }
