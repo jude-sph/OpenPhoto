@@ -149,10 +149,11 @@ struct InspectorView: View {
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(Theme.text)
                                 .underline(filenameHovered)
-                                .onHover { hovering in
-                                    filenameHovered = hovering
-                                    if hovering { NSCursor.iBeam.push() } else { NSCursor.pop() }
-                                }
+                                .onHover { filenameHovered = $0 }
+                                // System-managed cursor — auto-balanced, so it can
+                                // never get stuck (the manual NSCursor.push/pop did
+                                // when the label was swapped for the editor mid-hover).
+                                .pointerStyle(.horizontalText)
                                 .onTapGesture {
                                     newName = filename
                                     renaming = true

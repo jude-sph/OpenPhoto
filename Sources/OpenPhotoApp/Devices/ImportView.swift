@@ -1,6 +1,14 @@
 import SwiftUI
 import OpenPhotoCore
 
+/// Collects each import tile's frame (in the grid coordinate space) for rubber-band hit-testing.
+private struct CellFramesKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
 struct ImportView: View {
     @Bindable var state: AppState
     let device: ConnectedDevice
@@ -18,6 +26,11 @@ struct ImportView: View {
     @State private var showFreeUp = false
     @State private var stateStreamTask: Task<Void, Never>?
     @State private var importedIDCache = Set<String>()
+    // Selection interactions: shift-click range + rubber-band drag.
+    @State private var selectionAnchor: Int?
+    @State private var dragBaseSelection: Set<String>?
+    @State private var dragRect: CGRect?
+    @State private var cellFrames: [String: CGRect] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,17 +92,38 @@ struct ImportView: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: Theme.gridGap)],
                           spacing: Theme.gridGap) {
-                    ForEach(displayItems) { item in
+                    ForEach(Array(displayItems.enumerated()), id: \.element.id) { index, item in
                         ImportTile(
                             item: item, source: source!,
                             alreadyImported: isImported(item),
                             importedThisSession: sessionImportedIDs.contains(item.id),
                             selected: selection.contains(item.id),
-                            onToggle: { toggle(item) })
+                            onToggle: { handleTap(index: index, item: item) })
+                            .background(GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: CellFramesKey.self,
+                                    value: [item.id: geo.frame(in: .named("importgrid"))])
+                            })
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 12)
+                .overlay {
+                    if let r = dragRect {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Theme.accent.opacity(0.12))
+                            .overlay(RoundedRectangle(cornerRadius: 2)
+                                .strokeBorder(Theme.accent.opacity(0.7), lineWidth: 1))
+                            .frame(width: r.width, height: r.height)
+                            .position(x: r.midX, y: r.midY)
+                            .allowsHitTesting(false)
+                    }
+                }
             }
+            .coordinateSpace(name: "importgrid")
+            .onPreferenceChange(CellFramesKey.self) { frames in
+                Task { @MainActor in cellFrames = frames }
+            }
+            .simultaneousGesture(dragSelectGesture)
         }
     }
 
@@ -187,6 +221,52 @@ struct ImportView: View {
             if selection.contains(item.id) { selection.insert(pid) }
             else { selection.remove(pid) }
         }
+    }
+
+    private func select(_ item: ImportItem) {
+        selection.insert(item.id)
+        if let pid = item.livePartnerID { selection.insert(pid) }
+    }
+
+    /// Click = toggle + set anchor. Shift-click = select range from anchor.
+    private func handleTap(index: Int, item: ImportItem) {
+        if NSEvent.modifierFlags.contains(.shift), let anchor = selectionAnchor,
+           displayItems.indices.contains(anchor) {
+            for i in min(anchor, index)...max(anchor, index) { select(displayItems[i]) }
+        } else {
+            toggle(item)
+            selectionAnchor = index
+        }
+    }
+
+    /// Rubber-band drag selection. Two-finger scroll is unaffected (it's a
+    /// separate input from a click-drag), so this coexists with scrolling.
+    private var dragSelectGesture: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .named("importgrid"))
+            .onChanged { value in
+                if dragBaseSelection == nil {
+                    dragBaseSelection = selection
+                    selectionAnchor = nil
+                }
+                let rect = CGRect(
+                    x: min(value.startLocation.x, value.location.x),
+                    y: min(value.startLocation.y, value.location.y),
+                    width: abs(value.location.x - value.startLocation.x),
+                    height: abs(value.location.y - value.startLocation.y))
+                dragRect = rect
+                var newSel = dragBaseSelection ?? []
+                for item in displayItems {
+                    if let f = cellFrames[item.id], f.intersects(rect) {
+                        newSel.insert(item.id)
+                        if let pid = item.livePartnerID { newSel.insert(pid) }
+                    }
+                }
+                selection = newSel
+            }
+            .onEnded { _ in
+                dragBaseSelection = nil
+                dragRect = nil
+            }
     }
 
     private func connect() async {
