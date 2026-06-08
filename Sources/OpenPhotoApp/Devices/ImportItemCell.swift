@@ -19,21 +19,23 @@ struct ImportItemCell: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .overlay {
-            if selected && !alreadyImported {
+        .clipShape(RoundedRectangle(cornerRadius: 10))   // clip the MEDIA only
+        .overlay {                                        // selection ring + tint (never clipped away)
+            if selected {
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(Theme.accent, lineWidth: 3)
-                    .background(Theme.accent.opacity(0.12).clipShape(RoundedRectangle(cornerRadius: 10)))
+                    .background(Theme.accent.opacity(0.18).clipShape(RoundedRectangle(cornerRadius: 10)))
             }
         }
-        .overlay(alignment: .topLeading) {
-            if !alreadyImported {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(selected ? Theme.accent : .white.opacity(0.85))
-                    .shadow(radius: 2).padding(8)
-            }
+        .overlay(alignment: .topLeading) {                // ALWAYS show checkbox (imported too)
+            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 22, weight: .semibold))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(selected ? Color.white : Color.white.opacity(0.95),
+                                 selected ? Theme.accent : Color.black.opacity(0.35))
+                .background(Circle().fill(.black.opacity(0.25)).padding(2))
+                .shadow(radius: 2)
+                .padding(8)
         }
         .overlay(alignment: .topTrailing) {
             if item.livePartnerID != nil, item.kind == .photo {
@@ -53,10 +55,8 @@ struct ImportItemCell: View {
                 badge("Already in library", color: Theme.textFaint)
             }
         }
-        .opacity(alreadyImported && !importedThisSession ? 0.45 : 1)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
         .contentShape(Rectangle())
-        .onTapGesture { if !alreadyImported { onToggle() } }
+        .onTapGesture { onToggle() }                      // selectable regardless of imported state
         .task(id: item.id) {
             thumb = await source.thumbnail(item, maxPixel: 360)
         }

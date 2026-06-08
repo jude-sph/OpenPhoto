@@ -8,18 +8,22 @@ struct FreeUpPhoneView: View {
     let registry: ImportRegistry
     let library: LibraryService          // for the device-delete sync-log event
     let vault: Vault
-    let deviceItems: [ImportItem]
+    let deviceItems: [ImportItem]        // initial value only; live list takes over
     let sessionImportedIDs: Set<String>
     let onDone: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var liveItems: [ImportItem] = []
     @State private var selection = Set<String>()
     @State private var deleting = false
     @State private var results: [DeleteResult]?
     @State private var confirming = false
+    @State private var trashCount = 0
+    @State private var confirmingEmptyTrash = false
+    @State private var emptyingTrash = false
 
     private var verifiedOnDevice: [ImportItem] {
-        deviceItems.filter { item in
+        liveItems.filter { item in
             let taken = item.takenAt.map(ISO8601Millis.string(from:)) ?? ""
             return registry.contains(sourceKey: source.sourceKey, name: item.name,
                                      size: item.byteSize, takenAt: taken)
@@ -79,6 +83,15 @@ struct FreeUpPhoneView: View {
                 Text("Only photos verified in your library are listed.")
                     .font(.system(size: 11)).foregroundStyle(Theme.textFaint)
                 Spacer()
+                if trashCount > 0 {
+                    if emptyingTrash { ProgressView().controlSize(.small) }
+                    Button("Permanently delete \(trashCount) trashed item(s) on \(source.displayName)…") {
+                        confirmingEmptyTrash = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(emptyingTrash)
+                }
                 if deleting { ProgressView().controlSize(.small) }
                 Button("Delete \(selection.count) from \(source.displayName)…", role: .destructive) {
                     confirming = true
@@ -88,6 +101,10 @@ struct FreeUpPhoneView: View {
             .padding(16)
         }
         .frame(width: 720, height: 560)
+        .task {
+            liveItems = (try? await source.enumerateItems()) ?? []
+            trashCount = await source.reclaimableTrashCount()
+        }
         .confirmationDialog(
             "Delete \(selection.count) photos from \(source.displayName)?",
             isPresented: $confirming, titleVisibility: .visible
@@ -98,6 +115,17 @@ struct FreeUpPhoneView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("There is no Recently Deleted on the device for USB deletion. Verified copies exist in your library.")
+        }
+        .confirmationDialog(
+            "Permanently delete \(trashCount) trashed item(s) on \(source.displayName)?",
+            isPresented: $confirmingEmptyTrash, titleVisibility: .visible
+        ) {
+            Button("Empty trash — this cannot be undone", role: .destructive) {
+                Task { await runEmptyTrash() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("These items were moved to the device trash by a previous deletion. This permanently removes them from the device.")
         }
     }
 
@@ -162,6 +190,17 @@ struct FreeUpPhoneView: View {
         library.appendSyncLog(vault: vault, event: "device-delete",
             summary: "\(r.count - failed) deleted from \(source.displayName), \(failed) failed",
             counterpartyKey: source.sourceKey)
+        // Refresh live list and trash count after deletion
+        liveItems = (try? await source.enumerateItems()) ?? []
+        trashCount = await source.reclaimableTrashCount()
         selection.removeAll()
+    }
+
+    private func runEmptyTrash() async {
+        emptyingTrash = true
+        defer { emptyingTrash = false }
+        try? await source.emptyTrash()
+        liveItems = (try? await source.enumerateItems()) ?? []
+        trashCount = await source.reclaimableTrashCount()
     }
 }
