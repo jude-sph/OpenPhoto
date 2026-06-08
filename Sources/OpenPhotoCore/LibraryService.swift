@@ -248,11 +248,25 @@ public final class LibraryService: Sendable {
         return out.sorted { $0.item.deletedAt > $1.item.deletedAt }
     }
 
-    private func rescan(vaultID: String) async throws {
+    public func rescan(vaultID: String) async throws {
         guard let v = vault(id: vaultID) else { return }
         try await Task.detached(priority: .utility) { [catalog] in
             _ = try await Scanner.scan(vault: v, catalog: catalog)
         }.value
         try ingestSidecars(vault: v)
+    }
+
+    /// Append an event to the vault's sync-log.jsonl (format §9, informative).
+    public func appendSyncLog(vault: Vault, event: String, summary: String,
+                              counterpartyKey: String) {
+        let line: [String: Any] = ["event": event,
+                                   "at": ISO8601Millis.string(from: Date()),
+                                   "counterparty_vault_id": counterpartyKey,
+                                   "summary": summary]
+        guard let data = try? JSONSerialization.data(withJSONObject: line,
+                                                     options: [.sortedKeys]) else { return }
+        var existing = (try? Data(contentsOf: vault.syncLogURL)) ?? Data()
+        existing.append(data); existing.append(0x0A)
+        try? AtomicFile.write(existing, to: vault.syncLogURL)
     }
 }
