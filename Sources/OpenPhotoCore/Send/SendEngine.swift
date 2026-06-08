@@ -8,6 +8,7 @@ public final class SendEngine: Sendable {
         public var alreadyPresent: [SendOutcome] = []
         public var unconfirmed: [SendOutcome] = []
         public var failed: [SendOutcome] = []
+        public init() {}
     }
 
     private let library: LibraryService

@@ -6,6 +6,7 @@ struct TimelineView: View {
     @State private var selectMode = false
     @State private var selection = SelectionModel()
     @State private var showEvict = false
+    @State private var showSend = false
 
     private var orderedSelectable: [SelectableItem] {
         state.flatItems.map { SelectableItem(id: $0.instanceID) }
@@ -32,6 +33,13 @@ struct TimelineView: View {
         } message: {
             Text(evictAlertMessage(total: selection.count,
                                    onlyCopy: state.onlyCopyCount(selectedItems)))
+        }
+        .sheet(isPresented: $showSend) {
+            if let target = state.connectedSendTarget() {
+                SendSheet(state: state, items: selectedItems, device: target) {
+                    selection.clear(); selectMode = false
+                }
+            }
         }
     }
 
@@ -94,10 +102,13 @@ struct TimelineView: View {
     }
 
     private var selectionBar: some View {
-        SelectionActionBar(count: selection.count,
-                           onEvict: { showEvict = true },
-                           onDeselect: { selection.clear() },
-                           onDone: { selection.clear(); selectMode = false })
+        SelectionActionBar(
+            count: selection.count,
+            sendTargetName: state.connectedSendTarget()?.name,
+            onSend: { showSend = true },
+            onEvict: { showEvict = true },
+            onDeselect: { selection.clear() },
+            onDone: { selection.clear(); selectMode = false })
     }
 
     private var toolbar: some View {

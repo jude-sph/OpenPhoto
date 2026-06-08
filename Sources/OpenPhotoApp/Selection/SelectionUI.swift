@@ -94,9 +94,11 @@ struct RubberBandModifier: ViewModifier {
     }
 }
 
-/// The toolbar shown while a grid is in select mode. (Send is added in Stage B.)
+/// The toolbar shown while a grid is in select mode.
 struct SelectionActionBar: View {
     let count: Int
+    var sendTargetName: String? = nil       // non-nil → show "Send to <name>"
+    var onSend: () -> Void = {}
     let onEvict: () -> Void
     let onDeselect: () -> Void
     let onDone: () -> Void
@@ -107,6 +109,11 @@ struct SelectionActionBar: View {
                 .foregroundStyle(Theme.textDim)
             Spacer()
             Button("Deselect", action: onDeselect).disabled(count == 0).controlSize(.small)
+            if let name = sendTargetName {
+                Button(action: onSend) {
+                    Label("Send to \(name)", systemImage: "paperplane")
+                }.disabled(count == 0).controlSize(.small)
+            }
             Button(role: .destructive, action: onEvict) {
                 Label("Evict…", systemImage: "trash")
             }
