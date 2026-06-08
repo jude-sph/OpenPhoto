@@ -117,6 +117,16 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     }
 
     public func enumerateItems() async throws -> [ImportItem] {
+        // iPhone media catalogs keep growing for a moment after "ready", so a
+        // single read catches a varying partial count. Wait until the count is
+        // stable across two checks (capped at ~6s) before snapshotting.
+        var last = -1
+        for _ in 0..<30 {
+            let count = camera.mediaFiles?.count ?? 0
+            if count > 0 && count == last { break }
+            last = count
+            try? await Task.sleep(for: .milliseconds(200))
+        }
         let files = (camera.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
         itemsByID.removeAll()
         // ptpObjectHandle is unreliable on iPhones (often 0 for every file), which
