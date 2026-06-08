@@ -41,6 +41,8 @@ struct ImportItemCell: View {
             if selected { Theme.accent.opacity(0.18) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()   // pin size to the square (like ThumbView) so the .fill image
+                     // can't push the cell taller and shove the checkbox off-screen
     }
 
     private var checkbox: some View {
