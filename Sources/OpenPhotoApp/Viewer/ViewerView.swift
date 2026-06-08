@@ -8,9 +8,12 @@ struct ViewerView: View {
     @State private var playingLive = false
     @State private var player: AVPlayer?
     @FocusState private var stageFocused: Bool
+    @State private var liveURL: URL?   // paired Live Photo video, resolved on load
 
-    private var flatItems: [TimelineItem] { state.flatItems }
-    private var index: Int? { flatItems.firstIndex { $0.hash == state.openedItem?.hash } }
+    private var flatItems: [TimelineItem] {
+        state.viewerItems.isEmpty ? state.flatItems : state.viewerItems
+    }
+    private var index: Int? { flatItems.firstIndex { $0.instanceID == state.openedItem?.instanceID } }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -22,9 +25,10 @@ struct ViewerView: View {
             }
         }
         .focusable()
+        .focusEffectDisabled()   // keep keyboard focus for arrow-keys, hide the blue focus ring
         .focused($stageFocused)
         .onAppear { stageFocused = true }
-        .onChange(of: state.openedItem?.hash) { stageFocused = true }
+        .onChange(of: state.openedItem?.instanceID) { stageFocused = true }
         .background(Color.black.opacity(0.96))
         .onKeyPress(.escape) { state.openedItem = nil; return .handled }
         .onKeyPress(.leftArrow) { step(-1); return .handled }
@@ -32,12 +36,10 @@ struct ViewerView: View {
         .onKeyPress(KeyEquivalent("i")) { state.inspectorShown.toggle(); return .handled }
         .onKeyPress(.deleteForward) { deleteCurrent(); return .handled }
         .onKeyPress(.delete) { deleteCurrent(); return .handled }
-        .task(id: state.openedItem?.hash) { await loadFull() }
+        .task(id: state.openedItem?.instanceID) { await loadFull() }
         .onChange(of: playingLive) { _, live in
-            if live, let item = state.openedItem,
-               let pair = item.livePairHash,
-               let pairURL = livePairURL(photo: item, pairHash: pair) {
-                let p = AVPlayer(url: pairURL)
+            if live, let url = liveURL {
+                let p = AVPlayer(url: url)
                 p.play()
                 player = p
             } else if !live {
@@ -60,9 +62,10 @@ struct ViewerView: View {
                         .foregroundStyle(.white.opacity(0.85))
                 }
                 Spacer()
-                if state.openedItem?.livePairHash != nil {
+                if liveURL != nil {
                     Button { playingLive.toggle() } label: {
-                        Label("Live", systemImage: "livephoto")
+                        Label(playingLive ? "Photo" : "Live",
+                              systemImage: playingLive ? "photo" : "livephoto")
                     }.buttonStyle(.bordered).controlSize(.small)
                 }
                 Button { state.inspectorShown.toggle() } label: {
@@ -93,10 +96,10 @@ struct ViewerView: View {
                     VideoPlayer(player: player)
                 }
             } else if let fullImage {
-                Image(nsImage: fullImage)
-                    .resizable().aspectRatio(contentMode: .fit)
-                    .shadow(radius: 22)
-                    .padding(20)
+                // GPU-composited zoom/pan via a CALayer — no SwiftUI re-render during
+                // gestures, so it stays smooth on full-res photos. Keyed per photo.
+                ZoomableImageView(image: fullImage)
+                    .id(state.openedItem?.instanceID)
             } else {
                 ProgressView().controlSize(.large)
             }
@@ -107,21 +110,21 @@ struct ViewerView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 5) {
-                    ForEach(flatItems, id: \.hash) { item in
+                    ForEach(flatItems, id: \.instanceID) { item in
                         ThumbView(item: item, library: state.library!)
                             .frame(width: 52, height: 52)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                             .overlay(RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(item.hash == state.openedItem?.hash
+                                .strokeBorder(item.instanceID == state.openedItem?.instanceID
                                               ? Theme.accent : .clear, lineWidth: 2))
-                            .id(item.hash)
+                            .id(item.instanceID)
                             .onTapGesture { state.openedItem = item }
                     }
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
             }
-            .onChange(of: state.openedItem?.hash) { _, hash in
-                if let hash { withAnimation { proxy.scrollTo(hash, anchor: .center) } }
+            .onChange(of: state.openedItem?.instanceID) { _, id in
+                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
         }
         .frame(height: 70)
@@ -139,7 +142,7 @@ struct ViewerView: View {
     private func deleteCurrent() {
         guard let item = state.openedItem else { return }
         step(1)
-        if state.openedItem?.hash == item.hash { state.openedItem = nil }  // was last item
+        if state.openedItem?.instanceID == item.instanceID { state.openedItem = nil }  // was last item
         Task {
             try? await state.library?.delete(item)
             try? state.refreshQueries()
@@ -150,12 +153,14 @@ struct ViewerView: View {
         fullImage = nil
         player = nil
         playingLive = false
+        liveURL = nil
         guard let item = state.openedItem,
               let url = state.library?.absoluteURL(for: item) else { return }
         if item.kind == MediaKind.video.rawValue {
             player = AVPlayer(url: url)
             return
         }
+        liveURL = resolveLiveURL(for: item, photoURL: url)
         // NSImage is not Sendable; load raw Data in the detached task, construct on main actor.
         let data = await Task.detached(priority: .userInitiated) {
             try? Data(contentsOf: url)
@@ -172,8 +177,108 @@ struct ViewerView: View {
         return vault.absoluteURL(forRelativePath: rec.relPath)
     }
 
+    /// Resolve a Live Photo's video: prefer the catalog-recorded pair; otherwise
+    /// fall back to a same-folder, same-basename .mov/.mp4 on disk (robust even if
+    /// the pairing metadata didn't persist for an imported Live Photo).
+    private func resolveLiveURL(for item: TimelineItem, photoURL: URL) -> URL? {
+        if let pair = item.livePairHash, let u = livePairURL(photo: item, pairHash: pair) {
+            return u
+        }
+        guard item.kind == MediaKind.photo.rawValue else { return nil }
+        let dir = photoURL.deletingLastPathComponent()
+        let stem = photoURL.deletingPathExtension().lastPathComponent
+        for ext in ["mov", "MOV", "mp4", "MP4"] {
+            let candidate = dir.appendingPathComponent(stem + "." + ext)
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return nil
+    }
+
     private func title(for item: TimelineItem) -> String {
         let d = Date(timeIntervalSince1970: Double(item.takenAtMs) / 1000)
         return d.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+/// GPU-composited zoomable/pannable image. The CGImage is uploaded once as a
+/// CALayer's contents; pinch/scroll/double-click only adjust the layer's frame
+/// (a GPU transform), so there is no per-frame rasterization or SwiftUI re-render.
+private struct ZoomableImageView: NSViewRepresentable {
+    let image: NSImage
+    func makeNSView(context: Context) -> ZoomPanLayerView {
+        let v = ZoomPanLayerView()
+        v.setImageIfChanged(image)
+        return v
+    }
+    // Only (re)set when the image instance actually changes — otherwise an
+    // incidental SwiftUI re-render would re-decode the bitmap and reset the zoom
+    // mid-gesture, which is what made zooming feel laggy.
+    func updateNSView(_ v: ZoomPanLayerView, context: Context) { v.setImageIfChanged(image) }
+}
+
+final class ZoomPanLayerView: NSView {
+    private let imageLayer = CALayer()
+    private var zoom: CGFloat = 1
+    private var pan = CGPoint.zero
+    private var imageSize: CGSize = .zero
+    private var currentImage: NSImage?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        imageLayer.contentsGravity = .resizeAspect
+        imageLayer.masksToBounds = true
+        layer?.addSublayer(imageLayer)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }   // top-left origin → CGImage renders upright
+
+    func setImageIfChanged(_ image: NSImage) {
+        guard image !== currentImage else { return }
+        currentImage = image
+        var rect = CGRect(origin: .zero, size: image.size)
+        imageLayer.contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        imageSize = image.size
+        zoom = 1; pan = .zero
+        relayout()
+    }
+
+    override func layout() { super.layout(); relayout() }
+
+    private func relayout() {
+        guard imageSize.width > 0, bounds.width > 0 else { return }
+        let inset: CGFloat = 20
+        let avail = bounds.insetBy(dx: inset, dy: inset)
+        let fit = min(avail.width / imageSize.width, avail.height / imageSize.height)
+        let w = imageSize.width * fit * zoom
+        let h = imageSize.height * fit * zoom
+        // Clamp pan so the image can't be dragged past its own edges.
+        let maxX = max(0, (w - bounds.width) / 2)
+        let maxY = max(0, (h - bounds.height) / 2)
+        pan.x = min(max(pan.x, -maxX), maxX)
+        pan.y = min(max(pan.y, -maxY), maxY)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        imageLayer.frame = CGRect(x: (bounds.width - w) / 2 + pan.x,
+                                  y: (bounds.height - h) / 2 + pan.y, width: w, height: h)
+        CATransaction.commit()
+    }
+
+    override func scrollWheel(with e: NSEvent) {
+        guard zoom > 1 else { return }
+        pan.x += e.scrollingDeltaX
+        pan.y += e.scrollingDeltaY
+        relayout()
+    }
+    override func magnify(with e: NSEvent) {
+        zoom = min(max(1, zoom * (1 + e.magnification)), 8)
+        if zoom <= 1 { pan = .zero }
+        relayout()
+    }
+    override func mouseDown(with e: NSEvent) {
+        guard e.clickCount == 2 else { return }
+        zoom = zoom > 1 ? 1 : 2.5
+        pan = .zero
+        relayout()
     }
 }

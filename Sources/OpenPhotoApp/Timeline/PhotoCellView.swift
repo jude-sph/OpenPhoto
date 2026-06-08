@@ -4,13 +4,14 @@ import OpenPhotoCore
 struct PhotoCellView: View {
     let item: TimelineItem
     let library: LibraryService
+    var targetPixel: Int = ThumbnailStore.maxPixel
     var onDelete: () -> Void = {}
-    @State private var hovering = false
 
     var body: some View {
-        ThumbView(item: item, library: library)
-            .scaleEffect(hovering ? 1.045 : 1)
-            .animation(.easeOut(duration: 0.15), value: hovering)
+        // No per-cell hover effect: at high density (tiny cells in continuous mode)
+        // hundreds of .onHover tracking areas make scrolling lag. Apple Photos
+        // doesn't hover-scale either.
+        ThumbView(item: item, library: library, targetPixel: targetPixel)
             .overlay(alignment: .topTrailing) {
                 if item.livePairHash != nil {
                     badge(symbol: "livephoto")
@@ -28,10 +29,9 @@ struct PhotoCellView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: Theme.cellRadius))
             .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .contextMenu {
-                Button("Delete", systemImage: "trash", role: .destructive) { onDelete() }
-            }
+            // No per-cell .contextMenu: SwiftUI builds menu infrastructure per cell,
+            // which makes dense LazyVGrid scrolling janky. Delete is available in the
+            // viewer (open a photo → Delete key).
     }
 
     private var duration: String? {
@@ -49,4 +49,14 @@ struct PhotoCellView: View {
         .background(.black.opacity(0.45), in: Capsule())
         .padding(5)
     }
+}
+
+/// Texture size to render a grid cell at, for a given grid min-cell size. Sized for
+/// the worst case (adaptive cells grow up to ~2× the min) at retina (~2×), bucketed
+/// to multiples of 64 so the slider doesn't re-decode every tick, and capped at the
+/// stored thumbnail size. Small zoom → small textures → no Space-switch hitch.
+func gridThumbnailPixels(forCellMin minSize: CGFloat) -> Int {
+    let needed = Int(minSize * 4)              // ~2× adaptive growth × ~2× retina
+    let bucket = ((needed + 63) / 64) * 64     // round up to a 64px bucket
+    return min(ThumbnailStore.maxPixel, max(128, bucket))
 }

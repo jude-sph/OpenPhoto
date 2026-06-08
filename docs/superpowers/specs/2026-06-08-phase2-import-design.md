@@ -19,7 +19,8 @@ Import photos and videos from iPhones (USB, ImageCaptureCore) and mounted volume
 | Already-imported detection | **Durable import registry** — `imports.jsonl` in the primary vault's `.openphoto/`, keyed by `(source_key, name, size, taken_at)`, recording content hash |
 | Phone deletion | Session-end, opt-in, **selection screen with nothing preselected**; quick-select chips (This session · Screenshots · All · None); collapsed section for previously-imported items still on device; explicit permanence warning (spike: bypasses Recently Deleted) |
 | Deletable set | Structurally limited to registry-verified items — never anything unverified |
-| SD-card deletion | Move to `.openphoto-trash/` on the card — never unlink, even on removable media |
+| SD-card deletion | Move to `.openphoto-trash/` on the card — never unlink, even on removable media. An explicit, confirmed **"empty device trash"** action (volume sources only) is the single sanctioned hard-delete |
+| Import dedup (revised during validation) | **Destination-aware**: an item is skipped only if THIS destination folder already holds those exact bytes (true no-op). The same source photo CAN be re-imported into a *different* folder, creating a second instance. "Select all new" still excludes registry-known items as a convenience; manual selection of an already-imported item re-imports it |
 | Spike findings honored | Lock-wait-retry on error −9943; sort by capture date (device order is arbitrary); download→hash-verify→delete ritual |
 
 ## 3. Core components (all headless)

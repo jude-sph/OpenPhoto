@@ -22,6 +22,28 @@
 4. **The download→verify→delete ritual works exactly as the design specs it** and should be lifted into the Phase 2 importer: `requestDownloadFile` → hash/size verify on disk → only then `requestDeleteFiles`.
 5. **Verified by Jude on-device:** USB deletion **bypasses "Recently Deleted" entirely** — the photo is gone immediately and permanently from the phone. ImageCaptureCore/PTP deletes at the media-store level, not through the Photos app's soft-delete flow. Consequence for Phase 2: the verified Mac copy is the ONLY copy after deletion, so the import flow's checksum-verify-before-delete step is not optional politeness — it is the sole safety net, and the UI must say plainly that deletion from the phone is immediate and permanent (no on-device undo).
 
+## Live Photo motion is NOT available over USB (2026-06-08)
+
+Settled enumeration of the iPhone (4,361 items) by type:
+`HEIC=2268 PNG=1160 JPG=686 MOV=189 MP4=53 JPEG=3 WEBP=2`.
+
+Standalone videos (`.MOV`/`.MP4`) **are** exposed and import/play fine. But the
+**Live Photo motion component** — the per-still `IMG_xxxx.MOV` — is **not listed**
+by ImageCaptureCore/PTP: for Live Photo stills `IMG_6388.HEIC` / `IMG_6387.HEIC`,
+no matching `.MOV` appears in `mediaFiles`. Apple's Photos.app obtains Live Photo
+motion via a private device-sync protocol unavailable to third-party USB import;
+Image Capture.app has the same limitation.
+
+**Consequence:** importing a Live Photo over USB yields the still only. The app's
+Live-pairing logic still works whenever both halves *are* present (SD cards,
+cameras, or files added directly), so the LIVE badge + motion playback work in
+those cases — just not for iPhone-over-USB Live Photos.
+
+Also confirmed: `mediaFiles` populates **incrementally after**
+`deviceDidBecomeReady(withCompleteContentCatalog:)` — a single immediate read
+returns a partial/zero count, so enumeration must settle (poll until the count
+stabilizes) before snapshotting. This is implemented in `CameraSource`.
+
 ## Raw output (deletion run)
 
 ```

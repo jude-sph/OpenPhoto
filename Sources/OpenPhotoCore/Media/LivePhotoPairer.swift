@@ -41,7 +41,10 @@ public enum LivePhotoPairer {
             }
         }
 
-        // 2. Fallback: same folder + same basename + taken within 2 s.
+        // 2. Fallback: a still + .mov sharing the exact basename in the same folder
+        //    is Apple's Live Photo signature. No capture-time check — an imported
+        //    .mov's metadata time is often unreliable (can be years off the photo's
+        //    EXIF date), which is why time-gated pairing missed imported Live Photos.
         func dir(_ s: String) -> String { (s as NSString).deletingLastPathComponent }
         func base(_ s: String) -> String {
             ((s as NSString).lastPathComponent as NSString).deletingPathExtension.lowercased()
@@ -50,9 +53,11 @@ public enum LivePhotoPairer {
         for v in videos where !pairedVideos.contains(v.relPath) {
             videosByKey[dir(v.relPath) + "|" + base(v.relPath)] = v
         }
+        var usedVideos = Set<String>()
         for p in unpaired {
-            guard let v = videosByKey[dir(p.relPath) + "|" + base(p.relPath)],
-                  abs(p.takenAt.timeIntervalSince(v.takenAt)) <= 2 else { continue }
+            let key = dir(p.relPath) + "|" + base(p.relPath)
+            guard let v = videosByKey[key], !usedVideos.contains(v.relPath) else { continue }
+            usedVideos.insert(v.relPath)
             result.append(Pair(photoHash: p.hash, videoHash: v.hash,
                                photoRelPath: p.relPath, videoRelPath: v.relPath))
         }

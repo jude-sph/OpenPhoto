@@ -231,6 +231,43 @@ public final class LibraryService: Sendable {
         try await rescan(vaultID: item.vaultID)
     }
 
+    /// Evict a selection to the bin (vault-format §8). The still is the unit of
+    /// success; its Live-pair video is binned best-effort alongside it. Resilient:
+    /// a file already gone is skipped, not fatal. One rescan + one sync-log `evict`
+    /// event per vault touched. Returns the count actually binned.
+    @discardableResult
+    public func evict(_ items: [TimelineItem]) async throws -> Int {
+        var byVault: [String: [TimelineItem]] = [:]
+        for it in items { byVault[it.vaultID, default: []].append(it) }
+        var evicted = 0
+        for (vaultID, group) in byVault {
+            guard let bin = binStores[vaultID], let v = vault(id: vaultID) else { continue }
+            var n = 0
+            for item in group {
+                do {
+                    try bin.moveToBin(relPath: item.relPath,
+                                      hash: ContentHash(stringValue: item.hash), origin: .user)
+                } catch { continue }   // primary already gone / unreadable — skip, not counted
+                n += 1                  // the still is in the bin → counted
+                // Best-effort: the Live pair's video goes too. A rare failure here
+                // (e.g. the .mov already missing) leaves the video to be evicted
+                // separately — never lost — rather than un-counting the binned still.
+                if let pairHash = item.livePairHash,
+                   let pairInstance = try? catalog.instanceItem(hash: pairHash, vaultID: vaultID) {
+                    try? bin.moveToBin(relPath: pairInstance.relPath,
+                                       hash: ContentHash(stringValue: pairHash), origin: .user)
+                }
+            }
+            if n > 0 {
+                appendSyncLog(vault: v, event: "evict", summary: "\(n) evicted to bin",
+                              counterpartyKey: "")
+                try await rescan(vaultID: vaultID)
+            }
+            evicted += n
+        }
+        return evicted
+    }
+
     public func restore(_ entry: BinEntry) async throws {
         try binStores[entry.vaultID]?.restore(relPath: entry.item.path)
         try await rescan(vaultID: entry.vaultID)
@@ -248,11 +285,25 @@ public final class LibraryService: Sendable {
         return out.sorted { $0.item.deletedAt > $1.item.deletedAt }
     }
 
-    private func rescan(vaultID: String) async throws {
+    public func rescan(vaultID: String) async throws {
         guard let v = vault(id: vaultID) else { return }
         try await Task.detached(priority: .utility) { [catalog] in
             _ = try await Scanner.scan(vault: v, catalog: catalog)
         }.value
         try ingestSidecars(vault: v)
+    }
+
+    /// Append an event to the vault's sync-log.jsonl (format §9, informative).
+    public func appendSyncLog(vault: Vault, event: String, summary: String,
+                              counterpartyKey: String) {
+        let line: [String: Any] = ["event": event,
+                                   "at": ISO8601Millis.string(from: Date()),
+                                   "counterparty_vault_id": counterpartyKey,
+                                   "summary": summary]
+        guard let data = try? JSONSerialization.data(withJSONObject: line,
+                                                     options: [.sortedKeys]) else { return }
+        var existing = (try? Data(contentsOf: vault.syncLogURL)) ?? Data()
+        existing.append(data); existing.append(0x0A)
+        try? AtomicFile.write(existing, to: vault.syncLogURL)
     }
 }

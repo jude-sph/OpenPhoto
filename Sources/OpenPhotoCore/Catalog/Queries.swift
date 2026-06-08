@@ -63,6 +63,14 @@ extension Catalog {
         }
     }
 
+    /// All local instances of an asset (across vaults) — for presence/Locations.
+    public func instances(forHash hash: String) throws -> [InstanceRecord] {
+        try dbQueue.read { db in
+            try InstanceRecord.fetchAll(db, sql: "SELECT * FROM instances WHERE hash = ?",
+                                        arguments: [hash])
+        }
+    }
+
     /// Lightweight instance lookup (Live Photo pair resolution, viewer).
     public func instanceItem(hash: String, vaultID: String) throws -> InstanceRecord? {
         try dbQueue.read { db in
@@ -83,6 +91,16 @@ extension Catalog {
     }
 
     /// Mirror a sidecar edit into the catalog (sidecar written separately).
+    /// True if an instance with this hash already exists in the given folder of the vault.
+    public func hashPresent(inVault vaultID: String, dirPath: String, hash: String) throws -> Bool {
+        try dbQueue.read { db in
+            try Bool.fetchOne(db, sql: """
+                SELECT EXISTS(SELECT 1 FROM instances
+                              WHERE hash = ? AND vaultID = ? AND dirPath = ?)
+                """, arguments: [hash, vaultID, dirPath]) ?? false
+        }
+    }
+
     public func updateHumanMetadata(hash: String, favorite: Bool, rating: Int,
                                     caption: String?, tagsJSON: String) throws {
         try dbQueue.write { db in

@@ -31,12 +31,22 @@ private func cand(_ path: String, _ kind: MediaKind, taken: TimeInterval,
     #expect(pairs.count == 1)
 }
 
-@Test func doesNotPairAcrossFoldersOrBeyondTimeWindow() {
+@Test func doesNotPairAcrossFolders() {
+    // Same basename but different folders → not a pair.
     let pairs = LivePhotoPairer.pair(candidates: [
         cand("a/IMG_4.heic", .photo, taken: 0),
-        cand("b/IMG_4.mov", .video, taken: 0),      // other folder
-        cand("a/IMG_5.heic", .photo, taken: 0),
-        cand("a/IMG_5.mov", .video, taken: 10),     // 10s apart — unrelated video
+        cand("b/IMG_4.mov", .video, taken: 0),
     ])
     #expect(pairs.isEmpty)
+}
+
+@Test func pairsSameBasenameRegardlessOfTime() {
+    // Imported Live Photos: the .mov's metadata time is often far off the photo's,
+    // so same-folder + same-basename pairs even when timestamps differ widely.
+    let pairs = LivePhotoPairer.pair(candidates: [
+        cand("a/IMG_5.heic", .photo, taken: 0),
+        cand("a/IMG_5.mov", .video, taken: 99999),
+    ])
+    #expect(pairs.count == 1)
+    #expect(pairs[0].photoRelPath == "a/IMG_5.heic")
 }

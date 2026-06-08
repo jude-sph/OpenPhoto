@@ -1,8 +1,13 @@
 import Foundation
 import ImageCaptureCore
 
+setvbuf(stdout, nil, _IONBF, 0)   // unbuffered so output streams live (not block-buffered to a pipe)
+
 final class SpikeDelegate: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate,
-                           ICCameraDeviceDownloadDelegate {
+                           ICCameraDeviceDownloadDelegate, @unchecked Sendable {
+    var settleCamera: ICCameraDevice?
+    var settleLast = -1
+    var settleStable = 0
     let deleteTest = CommandLine.arguments.contains("--delete-test")
     let downloadFirst = CommandLine.arguments.contains("--download-first")
     let deleteNewest = CommandLine.arguments.contains("--delete-newest")
@@ -30,17 +35,42 @@ final class SpikeDelegate: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDele
     }
 
     func deviceDidBecomeReady(withCompleteContentCatalog camera: ICCameraDevice) {
+        print("Catalog ready (count now \(camera.mediaFiles?.count ?? 0)). Settling…")
+        settleCamera = camera
+        settleLast = -1
+        settleStable = 0
+        scheduleSettleTick()
+    }
+
+    private func scheduleSettleTick() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.settleTick()
+        }
+    }
+
+    /// mediaFiles populates incrementally after "ready"; poll until the count is
+    /// stable for a couple of checks, then report the type histogram.
+    func settleTick() {
+        guard let camera = settleCamera else { return }
+        let count = camera.mediaFiles?.count ?? 0
+        settleStable = (count > 0 && count == settleLast) ? settleStable + 1 : 0
+        settleLast = count
+        if settleStable >= 2 { report(camera); return }
+        scheduleSettleTick()
+    }
+
+    func report(_ camera: ICCameraDevice) {
         let files = camera.mediaFiles ?? []
         print("Items visible: \(files.count)")
-        for f in files.prefix(10) {
-            let sizeStr: String
-            if let file = f as? ICCameraFile {
-                sizeStr = "\(file.fileSize) bytes"
-            } else {
-                sizeStr = "? bytes"
-            }
-            print("  \(f.name ?? "?")  \(sizeStr)  locked=\(f.isLocked)")
+        var byExt: [String: Int] = [:]
+        for f in files {
+            let ext = ((f.name ?? "") as NSString).pathExtension.uppercased()
+            byExt[ext, default: 0] += 1
         }
+        print("By type: " + byExt.sorted { $0.value > $1.value }
+            .map { "\($0.key.isEmpty ? "(none)" : $0.key)=\($0.value)" }.joined(separator: " "))
+        // FINDING (2026-06-08): standalone MOV/MP4 are exposed, but Live Photo motion
+        // components (the per-still IMG_xxxx.MOV) are NOT listed over PTP/ICC.
         if deleteNewest {
             // Target the most recent photo by capture date (user-designated test
             // photo). Phase-2 ritual: download → verify → delete.
