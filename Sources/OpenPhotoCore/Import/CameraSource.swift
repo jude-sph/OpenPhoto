@@ -26,6 +26,7 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     private let lock = NSLock()
     private var isGone = false
     private var isReady = false   // session open + catalog ready; lets open() short-circuit on reuse
+    private var isOpening = false  // an open is in flight — don't issue requestOpenSession twice
     private var readyContinuations: [CheckedContinuation<Void, Error>] = []
     private var downloadContinuation: CheckedContinuation<Void, Error>?
     private var deleteContinuation: CheckedContinuation<Void, Error>?
@@ -72,23 +73,38 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
         if gone { throw URLError(.cancelled) }
         if ready { return }   // cached source already open — reuse instantly, no reconnect
 
+        enum OpenAction { case cancel, wait, open }
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-            // Re-check under lock — didRemove could fire between the check above and now.
-            var alreadyGone = false
-            lock.withLock {
-                if isGone {
-                    alreadyGone = true
-                } else {
-                    readyContinuations.append(c)
-                }
+            // Single-flight: only the FIRST caller issues requestOpenSession; others
+            // just wait on the same in-flight open. Calling requestOpenSession twice
+            // yields ICC -21347 "session already open".
+            let action: OpenAction = lock.withLock {
+                if isGone { return .cancel }
+                readyContinuations.append(c)
+                if isOpening || isReady { return .wait }
+                isOpening = true
+                return .open
             }
-            if alreadyGone {
-                c.resume(throwing: URLError(.cancelled))
-                return
+            switch action {
+            case .cancel: c.resume(throwing: URLError(.cancelled))
+            case .wait: break   // resumed when the in-flight open resolves
+            case .open:
+                stateContinuation.yield(.connected)
+                camera.requestOpenSession()
             }
-            stateContinuation.yield(.connected)
-            camera.requestOpenSession()
         }
+    }
+
+    /// Mark the session ready and resume everyone waiting (success).
+    private func resolveReady() {
+        let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
+            isReady = true
+            isOpening = false
+            let p = readyContinuations
+            readyContinuations.removeAll()
+            return p
+        }
+        pending.forEach { $0.resume() }
     }
 
     /// Enumerate items sorted by capture date descending, Live pairs linked.
@@ -232,25 +248,27 @@ extension CameraSource: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
                 stateContinuation.yield(.waitingForUnlock)
                 return
             }
+            if ns.code == -21347 {
+                // "A session is already open" — a usable session exists (e.g. left by
+                // a prior run, or a redundant open). Treat as ready and proceed.
+                resolveReady()
+                return
+            }
             let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
+                isOpening = false
                 let p = readyContinuations
                 readyContinuations.removeAll()
                 return p
             }
             pending.forEach { $0.resume(throwing: error) }
         }
+        // Success with no error: wait for deviceDidBecomeReady to resolve.
     }
 
     /// Content catalog fully loaded — open() resolves here.
     public func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
         stateContinuation.yield(.ready)
-        let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
-            isReady = true
-            let p = readyContinuations
-            readyContinuations.removeAll()
-            return p
-        }
-        pending.forEach { $0.resume() }
+        resolveReady()
     }
 
     /// Device unlocked — retry session (spike-proven auto-retry pattern).
@@ -272,6 +290,7 @@ extension CameraSource: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
         ) = lock.withLock {
             isGone = true
             isReady = false
+            isOpening = false
             let r = readyContinuations
             readyContinuations.removeAll()
             let d = downloadContinuation
