@@ -16,14 +16,19 @@ struct TimelineView: View {
                     ForEach(state.sections, id: \.dayStartMs) { section in
                         Section {
                             ForEach(section.items, id: \.hash) { item in
-                                PhotoCellView(item: item, library: state.library!) {
-                                    Task {
-                                        try? await state.library?.delete(item)
-                                        try? state.refreshQueries()
+                                Color.clear
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .overlay {
+                                        PhotoCellView(item: item, library: state.library!) {
+                                            Task {
+                                                try? await state.library?.delete(item)
+                                                try? state.refreshQueries()
+                                            }
+                                        }
                                     }
-                                }
-                                .aspectRatio(1, contentMode: .fill)
-                                .onTapGesture { state.openedItem = item }
+                                    .clipped()
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { state.openedItem = item }
                             }
                         } header: {
                             if state.grouping != .none {

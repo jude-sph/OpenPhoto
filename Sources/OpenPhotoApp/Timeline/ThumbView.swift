@@ -26,6 +26,7 @@ struct ThumbView: View {
                     .resizable().aspectRatio(contentMode: .fill)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .task(id: item.hash) {
             let key = item.hash as NSString

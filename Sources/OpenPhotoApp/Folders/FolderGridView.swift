@@ -18,15 +18,20 @@ struct FolderGridView: View {
                                                  spacing: Theme.gridGap)],
                               spacing: Theme.gridGap) {
                         ForEach(items, id: \.hash) { item in
-                            PhotoCellView(item: item, library: state.library!) {
-                                Task {
-                                    try? await state.library?.delete(item)
-                                    try? state.refreshQueries()
-                                    reload()
+                            Color.clear
+                                .aspectRatio(1, contentMode: .fit)
+                                .overlay {
+                                    PhotoCellView(item: item, library: state.library!) {
+                                        Task {
+                                            try? await state.library?.delete(item)
+                                            try? state.refreshQueries()
+                                            reload()
+                                        }
+                                    }
                                 }
-                            }
-                            .aspectRatio(1, contentMode: .fill)
-                            .onTapGesture { state.openedItem = item }
+                                .clipped()
+                                .contentShape(Rectangle())
+                                .onTapGesture { state.openedItem = item }
                         }
                     }
                     .padding(12)
