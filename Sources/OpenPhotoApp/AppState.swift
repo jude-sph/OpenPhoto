@@ -148,6 +148,24 @@ final class AppState {
         refreshToken += 1
     }
 
+    /// How many of `items` appear to exist only on this Mac (no known backup).
+    /// No registry yet → we can't prove a backup, so treat all as only-copies.
+    func onlyCopyCount(_ items: [TimelineItem]) -> Int {
+        guard let reg = importRegistry else { return items.count }
+        return BackupProbe(registry: reg).onlyOnThisMac(hashes: items.map(\.hash)).count
+    }
+
+    /// Evict a selection to the bin, then refresh all queries.
+    func evict(_ items: [TimelineItem]) async {
+        guard let library else { return }
+        do {
+            _ = try await library.evict(items)
+            try refreshQueries()
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
     private func startWatcher(roots: [URL]) {
         watcher = FolderWatcher(paths: roots.map(\.path)) { [weak self] in
             Task { @MainActor in await self?.rescan() }
