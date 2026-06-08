@@ -1,14 +1,6 @@
 import SwiftUI
 import OpenPhotoCore
 
-/// Collects each import tile's frame (in the grid coordinate space) for rubber-band hit-testing.
-private struct CellFramesKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue()) { _, new in new }
-    }
-}
-
 struct ImportView: View {
     @Bindable var state: AppState
     let device: ConnectedDevice
