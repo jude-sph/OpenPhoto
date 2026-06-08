@@ -132,6 +132,7 @@ Backfill estimate for current library on M4 Pro: hashing minutes; thumbnails ~1�
 
 - **2026-06-07** — Initial approved design. Added UI reference section after Claude Design handoff landed in `UI-Design/`, with three mockup-vs-spec deltas resolved in the spec's favor.
 - **2026-06-08** — Phase 1 implemented (45+ commits on `phase1-browse`). ICC deletion spike resolved §11's iPhone-deletion risk positively (works with iCloud Photos ON). Hash algorithm pinned to SHA-256 (`sha256:` prefix) in format v1 — see format doc §2. Timeline gained grouping modes (day/week/month/year/continuous) and the viewer a rename action, both from first user-testing feedback.
+- **2026-06-08** — Phase 2 (Device Import) implemented and user-validated (iPhone via ImageCaptureCore, SD/volume, import registry §12, opt-in free-up-phone). Added a **Library Selection / Evict / Send-to-device / Locations** feature on top — its own design spec (`2026-06-08-library-selection-evict-send-design.md`): shared multi-select in timeline + folders, evict-to-bin with an only-copy warning, send back to an iPhone via **AirDrop** (verified by re-enumeration) and to volumes by hash-verified copy (new registries: `sends.jsonl` §13, `devices.jsonl` §14), and an inspector **Locations** panel (confirmed/believed/historical presence). Key finding: **USB push to an iPhone is impossible** (ImageCaptureCore is read+delete only) — AirDrop is the transport, the cable is identity/verification only; two spikes proved AirDrop lands photos at their original date and round-trips byte-for-byte. **Deferred to Phase 5:** a tiled thumbnail renderer to fix the dense-grid Space-switch compositing lag (`docs/spikes/2026-06-08-dense-grid-compositing-lag.md`). **Outstanding:** SD-card *send* hardware smoke. Next up: **Phase 3 (Drives)**.
 
 ## 8. Error-handling doctrine
 
@@ -155,9 +156,9 @@ Permissions: Full Disk Access for `~/Pictures`/`~/Movies` if sandboxed-out; secu
 
 Each phase is its own implementation plan and ends with a usable app:
 
-1. **Browse** — Core foundation (vault/manifest/hash/catalog/scanner), timeline, folder tree, viewer, inspector, local bin. *Includes the ImageCaptureCore deletion spike to de-risk phase 2.*
-2. **Import** — iPhone/SD grid, verify-then-delete, dedup-on-import.
-3. **Drives** — canonical sync, evict/rehydrate, clone/migrate, drift review, integrity verify, delete propagation, catalog snapshot.
+1. **Browse** ✅ — Core foundation (vault/manifest/hash/catalog/scanner), timeline, folder tree, viewer, inspector, local bin. *Includes the ImageCaptureCore deletion spike to de-risk phase 2.*
+2. **Import** ✅ — iPhone/SD grid, verify-then-delete, dedup-on-import. *Plus the out-of-band Library Selection / Evict / Send-to-device / Locations feature (see changelog).*
+3. **Drives** ⬅ next — canonical sync, evict/rehydrate, clone/migrate, drift review, integrity verify, delete propagation, catalog snapshot.
 4. **Intelligence** — pipeline, People view, unified search, Map, OCR.
 5. **Extras** — LLM query parsing, perceptual near-duplicate detection, CLI tool, sidecar layout export.
 

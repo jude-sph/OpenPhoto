@@ -6,7 +6,13 @@ Your photos and videos live in your own folders (`~/Pictures`, `~/Movies` — ar
 
 ## Status
 
-**Phases 1–2** — browse + device import implemented; Phases 3–5 designed. Phase 1: library indexing (content-hash identity, manifest, rebuildable catalog), timeline, folder tree, viewer, inspector with XMP-sidecar metadata editing, bin. Phase 2: import from iPhones (ImageCaptureCore) and SD cards / arbitrary folders, with staged copy, hash verification, durable import registry, and opt-in free-up-phone flow — see `docs/`.
+**Phases 1–2 implemented (plus a library-management feature on top); Phases 3–5 designed.**
+
+- **Phase 1 — Browse:** library indexing (content-hash identity, manifest, rebuildable catalog), timeline, folder tree, viewer, inspector with XMP-sidecar metadata editing, bin.
+- **Phase 2 — Import:** import from iPhones (ImageCaptureCore) and SD cards / arbitrary folders, with staged copy, hash verification, a durable import registry, and an opt-in free-up-phone flow.
+- **Library selection · evict · send · locations** (built after Phase 2): multi-select in the timeline and folders (click / shift / rubber-band, with pinch-to-zoom and edge auto-scroll); **evict** to the recoverable bin with an "only-copy" warning; **send to a device** — back to an iPhone via AirDrop (confirmed by re-enumerating the phone) or to an SD/USB volume by hash-verified copy — tracked in `sends.jsonl`/`devices.jsonl`; and a **Locations** inspector panel showing everywhere a photo is known to exist (This Mac / phones / cards) with confidence.
+
+See `docs/` for the designs and hardware-spike findings.
 
 ## Build & run
 
@@ -28,8 +34,11 @@ then point the welcome screen at `fixtures-library/`.
 
 ## Documentation
 
-- `docs/superpowers/specs/2026-06-07-openphoto-design.md` — full architecture design
-- `docs/format/vault-format-v1.md` — **the on-disk format, documented as a normative spec** for third-party implementors
+- `docs/superpowers/specs/2026-06-07-openphoto-design.md` — full architecture design (phases, sync engine, intelligence) + changelog
+- `docs/superpowers/specs/2026-06-08-phase2-import-design.md` — Phase 2 device-import design
+- `docs/superpowers/specs/2026-06-08-library-selection-evict-send-design.md` — selection, evict & send-to-device design
+- `docs/format/vault-format-v1.md` — **the on-disk format, documented as a normative spec** for third-party implementors (manifest, sidecars, bin, registries §12–§14)
+- `docs/spikes/` — hardware investigation findings (ICC deletion, AirDrop placement + byte-for-byte round-trip, dense-grid compositing lag)
 - `docs/SPECS.md` — original requirements
 - `CLAUDE.md` — project invariants and documentation discipline
 
