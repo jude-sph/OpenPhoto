@@ -25,15 +25,28 @@ public final class FolderWatcher: @unchecked Sendable {
         guard streamRef == nil else { return }
         var context = FSEventStreamContext()
         context.info = Unmanaged.passUnretained(self).toOpaque()
-        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+        let callback: FSEventStreamCallback = { _, info, numEvents, eventPaths, _, _ in
             guard let info else { return }
             let watcher = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
-            watcher.scheduleFire()
+            // With kFSEventStreamCreateFlagUseCFTypes, eventPaths is a CFArray of CFString.
+            let cfArray = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
+            let paths = cfArray as? [String] ?? []
+            // Ignore events where every changed path is inside .openphoto/ directories
+            // (sidecar writes, manifest updates, etc. — app-internal state, not user photos).
+            let allInternal = !paths.isEmpty && paths.allSatisfy { path in
+                path.contains("/.openphoto/") || path.hasSuffix("/.openphoto")
+            }
+            if !allInternal {
+                watcher.scheduleFire()
+            }
+            _ = numEvents  // suppress unused-parameter warning
         }
+        let flags = FSEventStreamCreateFlags(
+            kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
         guard let stream = FSEventStreamCreate(
             nil, callback, &context, paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 1.0,
-            FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents)) else { return }
+            flags) else { return }
         streamRef = stream
         FSEventStreamSetDispatchQueue(stream, queue)
         FSEventStreamStart(stream)

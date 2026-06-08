@@ -11,6 +11,8 @@ struct InspectorView: View {
     @State private var favorite = false
     @State private var tags: [String] = []
     @State private var newTag = ""
+    @State private var renaming = false
+    @State private var newName = ""
 
     var body: some View {
         ScrollView {
@@ -108,10 +110,44 @@ struct InspectorView: View {
                 }
 
                 section("File") {
-                    Text(item.relPath)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.textDim)
-                        .textSelection(.enabled)
+                    HStack(spacing: 6) {
+                        if renaming {
+                            TextField("Filename", text: $newName)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 11, design: .monospaced))
+                                .onSubmit {
+                                    let name = newName.trimmingCharacters(in: .whitespaces)
+                                    guard !name.isEmpty else { renaming = false; return }
+                                    Task {
+                                        if let lib = state.library {
+                                            try? await lib.rename(item, to: name)
+                                            try? state.refreshQueries()
+                                            if let updated = try? lib.item(hash: item.hash) {
+                                                state.openedItem = updated
+                                            }
+                                        }
+                                        renaming = false
+                                    }
+                                }
+                            Button("Cancel") { renaming = false }
+                                .controlSize(.mini).buttonStyle(.plain)
+                                .foregroundStyle(Theme.textFaint)
+                        } else {
+                            Text(item.relPath)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Theme.textDim)
+                                .textSelection(.enabled)
+                            Spacer()
+                            Button {
+                                newName = (item.relPath as NSString).lastPathComponent
+                                renaming = true
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.textFaint)
+                            }.buttonStyle(.plain)
+                        }
+                    }
                     HStack {
                         Text(ByteCountFormatter.string(fromByteCount: item.size,
                                                        countStyle: .file))

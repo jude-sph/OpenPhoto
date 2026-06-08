@@ -7,6 +7,7 @@ struct ViewerView: View {
     @State private var fullImage: NSImage?
     @State private var playingLive = false
     @State private var player: AVPlayer?
+    @FocusState private var stageFocused: Bool
 
     private var flatItems: [TimelineItem] { state.flatItems }
     private var index: Int? { flatItems.firstIndex { $0.hash == state.openedItem?.hash } }
@@ -20,6 +21,10 @@ struct ViewerView: View {
                     .frame(width: Theme.inspectorWidth)
             }
         }
+        .focusable()
+        .focused($stageFocused)
+        .onAppear { stageFocused = true }
+        .onChange(of: state.openedItem?.hash) { stageFocused = true }
         .background(Color.black.opacity(0.96))
         .onKeyPress(.escape) { state.openedItem = nil; return .handled }
         .onKeyPress(.leftArrow) { step(-1); return .handled }
@@ -46,6 +51,9 @@ struct ViewerView: View {
             HStack(spacing: 14) {
                 Button { state.openedItem = nil } label: {
                     Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 44, height: 36)
+                        .contentShape(Rectangle())
                 }.buttonStyle(.plain)
                 if let item = state.openedItem {
                     Text(title(for: item)).font(.system(size: 13, weight: .medium))
@@ -59,6 +67,9 @@ struct ViewerView: View {
                 }
                 Button { state.inspectorShown.toggle() } label: {
                     Image(systemName: "sidebar.right")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 44, height: 36)
+                        .contentShape(Rectangle())
                 }.buttonStyle(.plain)
             }
             .padding(.horizontal, 16).frame(height: 44)

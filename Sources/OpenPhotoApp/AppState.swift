@@ -39,6 +39,14 @@ final class AppState {
     var scanProgress: Scanner.Progress?
     var scanning = false
     var refreshToken = 0
+    var grouping: TimelineGrouping = {
+        let raw = UserDefaults.standard.string(forKey: "timelineGrouping") ?? ""
+        return TimelineGrouping(rawValue: raw) ?? .day
+    }() {
+        didSet {
+            UserDefaults.standard.set(grouping.rawValue, forKey: "timelineGrouping")
+        }
+    }
     private var watcher: FolderWatcher?
 
     var configuredRoots: [URL] {
@@ -66,7 +74,7 @@ final class AppState {
         defer { scanning = false; scanProgress = nil }
         do {
             try await library.scanAll { [weak self] p in
-                Task { @MainActor in self?.scanProgress = p }
+                Task { @MainActor in if p.total > 50 { self?.scanProgress = p } }
             }
             try refreshQueries()
         } catch {
@@ -76,7 +84,7 @@ final class AppState {
 
     func refreshQueries() throws {
         guard let library else { return }
-        sections = try library.timelineSections()
+        sections = try library.timelineSections(grouping: grouping)
         flatItems = sections.flatMap(\.items)
         folderTree = try library.folderTree()
         if expandedFolders.isEmpty && !folderTree.isEmpty {

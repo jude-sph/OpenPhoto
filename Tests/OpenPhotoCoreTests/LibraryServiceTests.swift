@@ -80,3 +80,51 @@ private func makeLibrary(_ t: TestDirs) throws -> LibraryService {
 private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     Dictionary(uniqueKeysWithValues: nodes.map { ($0.name, $0) })
 }
+
+@Test func renameMovesFileAndSidecarKeepingIdentity() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try makeLibrary(t)
+    try await lib.scanAll()
+    let item = try lib.timelineSections()[0].items[0]   // lisbon25/IMG_2.jpg (newest first)
+    // Write a sidecar so we can verify it follows the rename
+    try lib.updateMetadata(for: item, rating: 2, favorite: false, caption: nil, tags: [])
+    // Rename
+    try await lib.rename(item, to: "renamed.jpg")
+    // Verify new path exists in catalog via hash identity
+    let renamed = try #require(try lib.item(hash: item.hash))
+    #expect(renamed.relPath.hasSuffix("/renamed.jpg") || renamed.relPath == "renamed.jpg")
+    // Rating preserved (sidecar followed)
+    #expect(renamed.rating == 2)
+    // Old file is gone
+    let pics = t.root.appendingPathComponent("Pictures")
+    #expect(!FileManager.default.fileExists(atPath: pics.appendingPathComponent("lisbon25/IMG_2.jpg").path))
+    // Sidecar is in new location
+    let newSidecar = pics.appendingPathComponent("lisbon25/.openphoto/renamed.jpg.xmp")
+    #expect(FileManager.default.fileExists(atPath: newSidecar.path))
+}
+
+@Test func timelineGroupingNoneReturnsSingleSection() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try makeLibrary(t)
+    try await lib.scanAll()
+    let sections = try lib.timelineSections(grouping: .none)
+    #expect(sections.count == 1)
+    #expect(sections[0].title == "All photos")
+    #expect(sections[0].items.count == 2)
+}
+
+@Test func timelineGroupingMonthMergesSameDayDifferentItems() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    // Both in October 2022 but different days → should merge into one month section
+    try makeJPEG(at: pics.appendingPathComponent("a/IMG_1.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    try makeJPEG(at: pics.appendingPathComponent("a/IMG_2.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:08 10:00:00", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let sections = try lib.timelineSections(grouping: .month)
+    #expect(sections.count == 1)
+    #expect(sections[0].title == "October 2022")
+    #expect(sections[0].items.count == 2)
+}

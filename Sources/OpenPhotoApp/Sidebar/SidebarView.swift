@@ -26,10 +26,12 @@ struct SidebarView: View {
                                 .foregroundStyle(Theme.textFaint)
                         }
                     }
+                    .frame(maxWidth: .infinity)
                     .padding(.horizontal, 10).padding(.vertical, 6)
                     .background(active ? Theme.accentDim : .clear,
                                 in: RoundedRectangle(cornerRadius: 7))
                     .foregroundStyle(active ? Theme.accent : Theme.text)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 8)

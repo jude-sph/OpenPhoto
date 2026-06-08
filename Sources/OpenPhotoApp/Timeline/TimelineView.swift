@@ -26,16 +26,18 @@ struct TimelineView: View {
                                 .onTapGesture { state.openedItem = item }
                             }
                         } header: {
-                            HStack {
-                                Text(section.title)
-                                    .font(.system(size: 16, weight: .bold))
-                                Spacer()
-                                Text("\(section.items.count) items")
-                                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                                    .foregroundStyle(Theme.textFaint)
+                            if state.grouping != .none {
+                                HStack {
+                                    Text(section.title)
+                                        .font(.system(size: 16, weight: .bold))
+                                    Spacer()
+                                    Text("\(section.items.count) items")
+                                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                        .foregroundStyle(Theme.textFaint)
+                                }
+                                .padding(.horizontal, 4).padding(.vertical, 8)
+                                .background(Theme.windowBG.opacity(0.92))
                             }
-                            .padding(.horizontal, 4).padding(.vertical, 8)
-                            .background(Theme.windowBG.opacity(0.92))
                         }
                     }
                 }
@@ -50,6 +52,16 @@ struct TimelineView: View {
             Text(stats).font(.system(size: 12).monospacedDigit())
                 .foregroundStyle(Theme.textDim)
             Spacer()
+            Picker("Group", selection: $state.grouping) {
+                Text("Day").tag(TimelineGrouping.day)
+                Text("Week").tag(TimelineGrouping.week)
+                Text("Month").tag(TimelineGrouping.month)
+                Text("Year").tag(TimelineGrouping.year)
+                Text("Continuous").tag(TimelineGrouping.none)
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .onChange(of: state.grouping) { try? state.refreshQueries() }
             Image(systemName: "square.grid.2x2")
                 .font(.system(size: 11)).foregroundStyle(Theme.textFaint)
             Slider(value: $state.gridMinSize, in: 92...220).frame(width: 120)

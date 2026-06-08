@@ -1,5 +1,9 @@
 import Foundation
 
+public enum TimelineGrouping: String, CaseIterable, Sendable {
+    case day, week, month, year, none
+}
+
 public struct TimelineSection: Sendable, Equatable {
     public let dayStartMs: Int64
     public let title: String        // "Friday, June 6" etc.
@@ -79,6 +83,63 @@ public final class LibraryService: Sendable {
         sections(from: try catalog.timelineItems())
     }
 
+    public func timelineSections(grouping: TimelineGrouping) throws -> [TimelineSection] {
+        let items = try catalog.timelineItems()
+        switch grouping {
+        case .day:
+            return sections(from: items)
+        case .none:
+            return items.isEmpty ? [] : [TimelineSection(dayStartMs: 0, title: "All photos", items: items)]
+        case .week, .month, .year:
+            return groupedSections(from: items, grouping: grouping)
+        }
+    }
+
+    private func groupedSections(from items: [TimelineItem], grouping: TimelineGrouping) -> [TimelineSection] {
+        let cal = Calendar.current
+        let component: Calendar.Component
+        let fmt = DateFormatter()
+        switch grouping {
+        case .week:
+            component = .weekOfYear
+            fmt.dateStyle = .medium; fmt.timeStyle = .none
+        case .month:
+            component = .month
+            fmt.dateFormat = "MMMM yyyy"
+        case .year:
+            component = .year
+            fmt.dateFormat = "yyyy"
+        default:
+            component = .day
+            fmt.dateStyle = .full; fmt.timeStyle = .none
+        }
+        var result: [TimelineSection] = []
+        var current: (bucketMs: Int64, title: String, items: [TimelineItem])?
+        for item in items {
+            let date = Date(timeIntervalSince1970: Double(item.takenAtMs) / 1000)
+            guard let intervalStart = cal.dateInterval(of: component, for: date)?.start else { continue }
+            let bucketMs = Int64(intervalStart.timeIntervalSince1970 * 1000)
+            let title: String
+            if grouping == .week {
+                title = "Week of \(fmt.string(from: intervalStart))"
+            } else {
+                title = fmt.string(from: intervalStart)
+            }
+            if current?.bucketMs == bucketMs {
+                current?.items.append(item)
+            } else {
+                if let c = current {
+                    result.append(TimelineSection(dayStartMs: c.bucketMs, title: c.title, items: c.items))
+                }
+                current = (bucketMs, title, [item])
+            }
+        }
+        if let c = current {
+            result.append(TimelineSection(dayStartMs: c.bucketMs, title: c.title, items: c.items))
+        }
+        return result
+    }
+
     public func items(inDir dir: String) throws -> [TimelineItem] {
         try catalog.items(inDir: dir)
     }
@@ -154,6 +215,25 @@ public final class LibraryService: Sendable {
         let tagsJSON = String(data: try JSONEncoder().encode(tags), encoding: .utf8) ?? "[]"
         try catalog.updateHumanMetadata(hash: item.hash, favorite: favorite,
                                         rating: rating, caption: caption, tagsJSON: tagsJSON)
+    }
+
+    /// Rename a file on disk (explicit user action). Sidecar moves with it.
+    public func rename(_ item: TimelineItem, to newFileName: String) async throws {
+        guard let vault = vault(id: item.vaultID) else { return }
+        let oldURL = vault.absoluteURL(forRelativePath: item.relPath)
+        let dir = (item.relPath as NSString).deletingLastPathComponent
+        let newRel = dir.isEmpty ? newFileName : dir + "/" + newFileName
+        let newURL = vault.absoluteURL(forRelativePath: newRel)
+        guard !FileManager.default.fileExists(atPath: newURL.path) else {
+            throw CocoaError(.fileWriteFileExists)
+        }
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+        let oldSidecar = vault.sidecarURL(forMediaAt: oldURL)
+        if FileManager.default.fileExists(atPath: oldSidecar.path) {
+            try FileManager.default.moveItem(at: oldSidecar,
+                                             to: vault.sidecarURL(forMediaAt: newURL))
+        }
+        try await rescan(vaultID: item.vaultID)
     }
 
     // MARK: Delete / restore
