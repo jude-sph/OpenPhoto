@@ -87,30 +87,37 @@ public final class LibraryService: Sendable {
 
     public func folderTree() throws -> [FolderNode] {
         let counts = try catalog.folderCounts()
+        // Materialize every path (and intermediate parents) with direct counts.
         var byPath: [String: FolderNode] = [:]
         for (path, count) in counts where !path.isEmpty {
             byPath[path] = FolderNode(path: path,
                                       name: (path as NSString).lastPathComponent,
                                       count: count, children: [])
             var parent = (path as NSString).deletingLastPathComponent
-            while !parent.isEmpty, byPath[parent] == nil {
-                byPath[parent] = FolderNode(path: parent,
-                                            name: (parent as NSString).lastPathComponent,
-                                            count: counts[parent] ?? 0, children: [])
+            while !parent.isEmpty {
+                if byPath[parent] == nil {
+                    byPath[parent] = FolderNode(path: parent,
+                                                name: (parent as NSString).lastPathComponent,
+                                                count: counts[parent] ?? 0, children: [])
+                }
                 parent = (parent as NSString).deletingLastPathComponent
             }
         }
-        var roots: [FolderNode] = []
-        for node in byPath.values.sorted(by: { $0.path > $1.path }) {  // deepest first
-            let parent = (node.path as NSString).deletingLastPathComponent
-            if parent.isEmpty {
-                roots.append(node)
-            } else {
-                byPath[parent]?.children.append(node)
-                byPath[parent]?.children.sort { $0.name < $1.name }
-            }
+        // Parent → children relationships, then build the tree recursively so
+        // every node carries its children (value-type snapshot bug fixed).
+        var childPaths: [String: [String]] = [:]
+        var rootPaths: [String] = []
+        for path in byPath.keys {
+            let parent = (path as NSString).deletingLastPathComponent
+            if parent.isEmpty { rootPaths.append(path) }
+            else { childPaths[parent, default: []].append(path) }
         }
-        return roots.sorted { $0.name < $1.name }
+        func build(_ path: String) -> FolderNode {
+            var node = byPath[path]!
+            node.children = (childPaths[path] ?? []).sorted().map(build)
+            return node
+        }
+        return rootPaths.sorted().map(build)
     }
 
     private func sections(from items: [TimelineItem]) -> [TimelineSection] {

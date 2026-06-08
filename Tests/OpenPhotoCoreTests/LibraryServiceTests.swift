@@ -57,3 +57,26 @@ private func makeLibrary(_ t: TestDirs) throws -> LibraryService {
     let rome = try lib.items(inDir: "rome2022")
     #expect(rome[0].rating == 3 && rome[0].tagsJSON.contains("pre"))
 }
+
+@Test func folderTreeNestsChildrenCorrectly() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    try makeJPEG(at: pics.appendingPathComponent("mac-screenshots/2024/s1.jpg").creatingParent(),
+                 dateTimeOriginal: nil, lat: nil, lon: nil)
+    try makeJPEG(at: pics.appendingPathComponent("2025/lisbon25/IMG.jpg").creatingParent(),
+                 dateTimeOriginal: nil, lat: nil, lon: nil)
+    try makeJPEG(at: pics.appendingPathComponent("rome2022/IMG.jpg").creatingParent(),
+                 dateTimeOriginal: nil, lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let tree = lib2Dict(try lib.folderTree())
+    #expect(tree["mac-screenshots"]?.children.map(\.name) == ["2024"])     // THE BUG: was []
+    #expect(tree["2025"]?.children.map(\.name) == ["lisbon25"])
+    #expect(tree["rome2022"]?.children.isEmpty == true)
+    #expect(tree["mac-screenshots"]?.count == 0)                            // no direct items
+    #expect(tree["mac-screenshots"]?.children.first?.count == 1)
+}
+
+private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
+    Dictionary(uniqueKeysWithValues: nodes.map { ($0.name, $0) })
+}
