@@ -19,7 +19,6 @@ public struct SelectionModel: Equatable, Sendable {
     /// Index (into the caller's ordered item list) of the last plain tap — the
     /// origin for a subsequent shift-click range.
     public private(set) var anchor: Int?
-    private var dragBase: Set<String>?
 
     public init() {}
 
@@ -27,7 +26,7 @@ public struct SelectionModel: Equatable, Sendable {
     public func contains(_ id: String) -> Bool { selected.contains(id) }
 
     public mutating func clear() {
-        selected.removeAll(); anchor = nil; dragBase = nil
+        selected.removeAll(); anchor = nil
     }
 
     /// Flip one item (mirrors its partner).
@@ -64,19 +63,19 @@ public struct SelectionModel: Equatable, Sendable {
         }
     }
 
-    /// Snapshot the current selection as the base for a rubber-band drag.
-    public mutating func beginDrag() { dragBase = selected; anchor = nil }
+    /// Begin a rubber-band drag (clears the shift-anchor).
+    public mutating func beginDrag() { anchor = nil }
 
-    /// Recompute selection = base ∪ (items whose frame intersects `rect`).
+    /// Add every item whose frame intersects `rect` (with partners). Additive: a
+    /// drag only ever grows the selection, so cells accumulate as the grid
+    /// auto-scrolls under the pointer instead of being dropped when they scroll off.
     public mutating func updateDrag(rect: CGRect, frames: [String: CGRect],
                                     items: [SelectableItem]) {
-        var newSel = dragBase ?? selected
         for it in items where frames[it.id]?.intersects(rect) == true {
-            newSel.insert(it.id)
-            if let p = it.partnerID { newSel.insert(p) }
+            selected.insert(it.id)
+            if let p = it.partnerID { selected.insert(p) }
         }
-        selected = newSel
     }
 
-    public mutating func endDrag() { dragBase = nil }
+    public mutating func endDrag() {}
 }

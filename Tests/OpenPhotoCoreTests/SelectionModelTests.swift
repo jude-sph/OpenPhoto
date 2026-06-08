@@ -75,3 +75,21 @@ private func items(_ ids: String...) -> [SelectableItem] { ids.map { SelectableI
     s.clear()
     #expect(s.count == 0 && s.anchor == nil)
 }
+
+@Test func dragIsAdditiveAndDoesNotDropCells() {
+    // A drag only grows the selection — a cell once inside the band stays selected
+    // even if a later (smaller) rect no longer covers it. This is what lets the
+    // selection accumulate while the grid auto-scrolls under the pointer.
+    var s = SelectionModel()
+    let list = items("a", "b", "c")
+    let frames: [String: CGRect] = [
+        "a": CGRect(x: 0, y: 0, width: 10, height: 10),
+        "b": CGRect(x: 20, y: 0, width: 10, height: 10),
+        "c": CGRect(x: 40, y: 0, width: 10, height: 10),
+    ]
+    s.beginDrag()
+    s.updateDrag(rect: CGRect(x: 0, y: 0, width: 50, height: 10), frames: frames, items: list)  // all
+    #expect(s.contains("a") && s.contains("b") && s.contains("c"))
+    s.updateDrag(rect: CGRect(x: 0, y: 0, width: 5, height: 10), frames: frames, items: list)    // only a
+    #expect(s.contains("a") && s.contains("b") && s.contains("c"))   // b, c retained (additive)
+}

@@ -53,6 +53,16 @@ struct RubberBandModifier: ViewModifier {
     let enabled: Bool
     @State private var cellFrames: [String: CGRect] = [:]
     @State private var dragRect: CGRect?
+    // Auto-scroll while the pointer is dragged near the top/bottom edge.
+    @State private var scrollPos = ScrollPosition(edge: .top)
+    @State private var viewportH: CGFloat = 0
+    @State private var contentOffsetY: CGFloat = 0
+    @State private var maxOffsetY: CGFloat = 0
+    @State private var edgeDir: CGFloat = 0          // -1 up, +1 down, 0 none
+    @State private var lastRect: CGRect = .zero
+
+    private struct ScrollMetrics: Equatable { var offset: CGFloat; var maxOffset: CGFloat }
+    private let edgeZone: CGFloat = 48
 
     func body(content: Content) -> some View {
         content
@@ -60,7 +70,16 @@ struct RubberBandModifier: ViewModifier {
             .onPreferenceChange(CellFramesKey.self) { frames in
                 Task { @MainActor in cellFrames = frames }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportH = $0 }
+            .scrollPosition($scrollPos)
+            .onScrollGeometryChange(for: ScrollMetrics.self) {
+                ScrollMetrics(offset: $0.contentOffset.y,
+                              maxOffset: max(0, $0.contentSize.height - $0.containerSize.height))
+            } action: { _, m in
+                contentOffsetY = m.offset; maxOffsetY = m.maxOffset
+            }
             .simultaneousGesture(dragGesture)
+            .task(id: edgeDir) { await autoScroll() }
     }
 
     @ViewBuilder private var overlayRect: some View {
@@ -85,12 +104,31 @@ struct RubberBandModifier: ViewModifier {
                                   width: abs(v.location.x - v.startLocation.x),
                                   height: abs(v.location.y - v.startLocation.y))
                 dragRect = rect
+                lastRect = rect
                 selection.updateDrag(rect: rect, frames: cellFrames, items: items)
+                // Near an edge → start/keep auto-scrolling in that direction.
+                let y = v.location.y
+                edgeDir = y < edgeZone ? -1
+                        : (viewportH > 0 && y > viewportH - edgeZone ? 1 : 0)
             }
             .onEnded { _ in
                 guard enabled else { return }
-                selection.endDrag(); dragRect = nil
+                selection.endDrag(); dragRect = nil; edgeDir = 0
             }
+    }
+
+    /// While held near an edge, scroll that way (animations off, for smoothness)
+    /// and keep extending the selection to cells entering the viewport-fixed rect.
+    private func autoScroll() async {
+        guard enabled, edgeDir != 0 else { return }
+        var target = contentOffsetY
+        while !Task.isCancelled && edgeDir != 0 {
+            target = min(maxOffsetY, max(0, target + 22 * edgeDir))
+            var tx = Transaction(); tx.disablesAnimations = true
+            withTransaction(tx) { scrollPos.scrollTo(y: target) }
+            selection.updateDrag(rect: lastRect, frames: cellFrames, items: items)
+            try? await Task.sleep(for: .milliseconds(16))
+        }
     }
 }
 
