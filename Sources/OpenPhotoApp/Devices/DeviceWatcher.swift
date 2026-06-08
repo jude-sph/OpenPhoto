@@ -31,6 +31,7 @@ enum ConnectedDevice: Identifiable, Equatable {
 final class DeviceWatcher: NSObject {
     private(set) var devices: [ConnectedDevice] = []
     private var cameras: [String: ICCameraDevice] = [:]
+    private var sourceCache: [String: any ImportSource] = [:]   // keep one open source per device
     private let browser = ICDeviceBrowser()
 
     /// Set by AppState; called with the removed device's id.
@@ -54,13 +55,20 @@ final class DeviceWatcher: NSObject {
         if !devices.contains(where: { $0.id == dev.id }) { devices.append(dev) }
     }
 
+    /// Returns the (cached) source for a device. Caching keeps a single open ICC
+    /// session alive across ImportView appearances — without it, re-entering the
+    /// import screen opens a second session and enumeration comes back empty.
     func source(for device: ConnectedDevice) -> (any ImportSource)? {
+        if let cached = sourceCache[device.id] { return cached }
+        let made: (any ImportSource)?
         switch device {
         case .camera(let id, _):
-            cameras[id].map { CameraSource(camera: $0) }
+            made = cameras[id].map { CameraSource(camera: $0) }
         case .volume(_, _, let url):
-            VolumeSource(rootURL: url, displayName: device.name)
+            made = VolumeSource(rootURL: url, displayName: device.name)
         }
+        if let made { sourceCache[device.id] = made }
+        return made
     }
 
     @objc private func volumesChanged() {
@@ -100,6 +108,7 @@ extension DeviceWatcher: ICDeviceBrowserDelegate {
         Task { @MainActor in
             if let (id, _) = self.cameras.first(where: { $0.value.name == name }) {
                 self.cameras[id] = nil
+                self.sourceCache["cam-\(id)"] = nil   // drop stale source so a replug makes a fresh session
                 self.devices.removeAll { $0.id == "cam-\(id)" }
                 if self.openedDeviceRemoved != nil { self.openedDeviceRemoved?("cam-\(id)") }
             }

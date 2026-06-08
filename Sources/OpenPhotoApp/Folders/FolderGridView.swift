@@ -31,7 +31,7 @@ struct FolderGridView: View {
                                 }
                                 .clipped()
                                 .contentShape(Rectangle())
-                                .onTapGesture { state.openedItem = item }
+                                .onTapGesture { state.openViewer(item, within: items) }
                         }
                     }
                     .padding(12)

@@ -29,6 +29,7 @@ final class AppState {
     var selection: SidebarItem = .timeline
     var selectedFolder: String?              // dirPath in Folders view
     var openedItem: TimelineItem?            // non-nil → Viewer is presented
+    var viewerItems: [TimelineItem] = []     // the set the viewer navigates (timeline or one folder)
     var inspectorShown = true
     var gridMinSize: CGFloat = 132           // grid-size slider, 48…220
     var sections: [TimelineSection] = []
@@ -64,6 +65,12 @@ final class AppState {
         return _importRegistry
     }
     private var watcher: FolderWatcher?
+
+    /// Open the viewer on `item`, navigating within `items` (timeline set or one folder).
+    func openViewer(_ item: TimelineItem, within items: [TimelineItem]) {
+        viewerItems = items
+        openedItem = item
+    }
 
     /// Prompt for a folder and add it as an import source, then open it.
     /// Shared by the sidebar IMPORT button and the File-menu command.

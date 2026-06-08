@@ -8,8 +8,16 @@ struct ViewerView: View {
     @State private var playingLive = false
     @State private var player: AVPlayer?
     @FocusState private var stageFocused: Bool
+    // Pinch-to-zoom + pan state (reset on photo change).
+    @State private var zoom: CGFloat = 1
+    @State private var lastZoom: CGFloat = 1
+    @State private var pan: CGSize = .zero
+    @State private var lastPan: CGSize = .zero
+    @State private var liveURL: URL?   // paired Live Photo video, resolved on load
 
-    private var flatItems: [TimelineItem] { state.flatItems }
+    private var flatItems: [TimelineItem] {
+        state.viewerItems.isEmpty ? state.flatItems : state.viewerItems
+    }
     private var index: Int? { flatItems.firstIndex { $0.hash == state.openedItem?.hash } }
 
     var body: some View {
@@ -34,10 +42,8 @@ struct ViewerView: View {
         .onKeyPress(.delete) { deleteCurrent(); return .handled }
         .task(id: state.openedItem?.hash) { await loadFull() }
         .onChange(of: playingLive) { _, live in
-            if live, let item = state.openedItem,
-               let pair = item.livePairHash,
-               let pairURL = livePairURL(photo: item, pairHash: pair) {
-                let p = AVPlayer(url: pairURL)
+            if live, let url = liveURL {
+                let p = AVPlayer(url: url)
                 p.play()
                 player = p
             } else if !live {
@@ -60,9 +66,10 @@ struct ViewerView: View {
                         .foregroundStyle(.white.opacity(0.85))
                 }
                 Spacer()
-                if state.openedItem?.livePairHash != nil {
+                if liveURL != nil {
                     Button { playingLive.toggle() } label: {
-                        Label("Live", systemImage: "livephoto")
+                        Label(playingLive ? "Photo" : "Live",
+                              systemImage: playingLive ? "photo" : "livephoto")
                     }.buttonStyle(.bordered).controlSize(.small)
                 }
                 Button { state.inspectorShown.toggle() } label: {
@@ -95,8 +102,29 @@ struct ViewerView: View {
             } else if let fullImage {
                 Image(nsImage: fullImage)
                     .resizable().aspectRatio(contentMode: .fit)
+                    .scaleEffect(zoom)
+                    .offset(pan)
                     .shadow(radius: 22)
                     .padding(20)
+                    .gesture(
+                        MagnifyGesture()
+                            .onChanged { v in zoom = min(max(1, lastZoom * v.magnification), 8) }
+                            .onEnded { _ in lastZoom = zoom; if zoom <= 1 { resetZoom() } }
+                    )
+                    .simultaneousGesture(
+                        DragGesture()
+                            .onChanged { v in
+                                guard zoom > 1 else { return }
+                                pan = CGSize(width: lastPan.width + v.translation.width,
+                                             height: lastPan.height + v.translation.height)
+                            }
+                            .onEnded { _ in lastPan = pan }
+                    )
+                    .onTapGesture(count: 2) {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            if zoom > 1 { resetZoom() } else { zoom = 2.5; lastZoom = 2.5 }
+                        }
+                    }
             } else {
                 ProgressView().controlSize(.large)
             }
@@ -133,7 +161,12 @@ struct ViewerView: View {
         let j = i + delta
         guard flatItems.indices.contains(j) else { return }
         playingLive = false
+        resetZoom()
         state.openedItem = flatItems[j]
+    }
+
+    private func resetZoom() {
+        zoom = 1; lastZoom = 1; pan = .zero; lastPan = .zero
     }
 
     private func deleteCurrent() {
@@ -150,12 +183,15 @@ struct ViewerView: View {
         fullImage = nil
         player = nil
         playingLive = false
+        liveURL = nil
+        resetZoom()
         guard let item = state.openedItem,
               let url = state.library?.absoluteURL(for: item) else { return }
         if item.kind == MediaKind.video.rawValue {
             player = AVPlayer(url: url)
             return
         }
+        liveURL = resolveLiveURL(for: item, photoURL: url)
         // NSImage is not Sendable; load raw Data in the detached task, construct on main actor.
         let data = await Task.detached(priority: .userInitiated) {
             try? Data(contentsOf: url)
@@ -170,6 +206,23 @@ struct ViewerView: View {
               let rec = try? lib.catalog.instanceItem(hash: pairHash, vaultID: photo.vaultID),
               let vault = lib.vault(id: photo.vaultID) else { return nil }
         return vault.absoluteURL(forRelativePath: rec.relPath)
+    }
+
+    /// Resolve a Live Photo's video: prefer the catalog-recorded pair; otherwise
+    /// fall back to a same-folder, same-basename .mov/.mp4 on disk (robust even if
+    /// the pairing metadata didn't persist for an imported Live Photo).
+    private func resolveLiveURL(for item: TimelineItem, photoURL: URL) -> URL? {
+        if let pair = item.livePairHash, let u = livePairURL(photo: item, pairHash: pair) {
+            return u
+        }
+        guard item.kind == MediaKind.photo.rawValue else { return nil }
+        let dir = photoURL.deletingLastPathComponent()
+        let stem = photoURL.deletingPathExtension().lastPathComponent
+        for ext in ["mov", "MOV", "mp4", "MP4"] {
+            let candidate = dir.appendingPathComponent(stem + "." + ext)
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return nil
     }
 
     private func title(for item: TimelineItem) -> String {

@@ -25,6 +25,7 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     // Guarded by `lock`:
     private let lock = NSLock()
     private var isGone = false
+    private var isReady = false   // session open + catalog ready; lets open() short-circuit on reuse
     private var readyContinuations: [CheckedContinuation<Void, Error>] = []
     private var downloadContinuation: CheckedContinuation<Void, Error>?
     private var deleteContinuation: CheckedContinuation<Void, Error>?
@@ -67,7 +68,9 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     /// surfaces as .waitingForUnlock on stateStream and the call keeps waiting —
     /// unlock auto-retries the session (spike-proven pattern, cameraDeviceDidRemoveAccessRestriction).
     public func open() async throws {
-        if lock.withLock({ isGone }) { throw URLError(.cancelled) }
+        let (gone, ready) = lock.withLock { (isGone, isReady) }
+        if gone { throw URLError(.cancelled) }
+        if ready { return }   // cached source already open — reuse instantly, no reconnect
 
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
             // Re-check under lock — didRemove could fire between the check above and now.
@@ -242,6 +245,7 @@ extension CameraSource: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
     public func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
         stateContinuation.yield(.ready)
         let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
+            isReady = true
             let p = readyContinuations
             readyContinuations.removeAll()
             return p
@@ -267,6 +271,7 @@ extension CameraSource: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
             CheckedContinuation<Void, Error>?
         ) = lock.withLock {
             isGone = true
+            isReady = false
             let r = readyContinuations
             readyContinuations.removeAll()
             let d = downloadContinuation

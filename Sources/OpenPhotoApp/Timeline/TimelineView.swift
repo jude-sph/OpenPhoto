@@ -28,7 +28,7 @@ struct TimelineView: View {
                                         }
                                         .clipped()
                                         .contentShape(Rectangle())
-                                        .onTapGesture { state.openedItem = item }
+                                        .onTapGesture { state.openViewer(item, within: state.flatItems) }
                                 }
                             }
                         } header: {
