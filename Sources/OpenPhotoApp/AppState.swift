@@ -36,6 +36,8 @@ final class AppState {
     var folderTree: [FolderNode] = []
     var expandedFolders: Set<String> = []
     var binEntries: [LibraryService.BinEntry] = []
+    var deviceWatcher = DeviceWatcher()
+    var openedDevice: ConnectedDevice?      // non-nil → ImportView is shown
     var scanProgress: Scanner.Progress?
     var scanning = false
     var refreshToken = 0
@@ -69,6 +71,10 @@ final class AppState {
                 .appendingPathComponent("OpenPhoto")
             library = try LibraryService(vaultRoots: roots, appSupportDir: appSupport)
             startWatcher(roots: roots)
+            deviceWatcher.start()
+            deviceWatcher.openedDeviceRemoved = { [weak self] id in
+                if self?.openedDevice?.id == id { self?.openedDevice = nil }
+            }
             Task { await rescan() }
         } catch {
             NSAlert(error: error).runModal()

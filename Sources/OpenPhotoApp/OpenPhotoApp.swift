@@ -67,10 +67,14 @@ struct RootView: View {
     }
 
     @ViewBuilder private var detail: some View {
-        switch state.selection {
-        case .timeline: TimelineView(state: state)
-        case .folders: FoldersView(state: state)
-        case .bin: BinView(state: state)
+        if let device = state.openedDevice {
+            ImportView(state: state, device: device)
+        } else {
+            switch state.selection {
+            case .timeline: TimelineView(state: state)
+            case .folders: FoldersView(state: state)
+            case .bin: BinView(state: state)
+            }
         }
     }
 }
