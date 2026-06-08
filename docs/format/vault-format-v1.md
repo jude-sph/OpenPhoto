@@ -21,6 +21,8 @@ A **vault** is a folder tree containing media files, organized however the user 
     bin.jsonl                      ← deletion records
     bin/                           ← deleted files, original relative paths preserved
     catalog-snapshot/              ← OPTIONAL binary cache (see §7) — safe to ignore/delete
+    imports.jsonl                  ← device-import registry (§12)
+    staging/                       ← transient import workspace — readers MUST ignore
   rome2022/
     IMG_4123.heic
     IMG_4123.mov                   ← Live Photo pair of the HEIC (see §6)
@@ -131,7 +133,7 @@ Conforming software never hard-deletes. Deletion = move the file (and its sideca
 
 ## 9. `sync-log.jsonl` (informative)
 
-Append-only journal of import/sync/clone/evict sessions, one JSON object per line with at minimum `{"event", "at", "counterparty_vault_id", "summary"}`. Diagnostic and forensic value; readers MUST NOT require it.
+Append-only journal of import/sync/clone/evict sessions, one JSON object per line with at minimum `{"event", "at", "counterparty_vault_id", "summary"}`. Event names include `"import"`, `"device-delete"`, `"sync"`, `"clone"`, `"evict"`. Diagnostic and forensic value; readers MUST NOT require it.
 
 ## 10. Rules for third-party writers
 
@@ -150,3 +152,22 @@ If your software (e.g. a photo server ingesting a plugged-in canonical drive) wa
 - Backwards-compatible additions (new optional JSON fields, new informative files) do not bump `format_version`.
 - Any change that alters the meaning of existing data bumps `format_version`; OpenPhoto will read all older versions and migrate forward only with user consent.
 - This document is the single source of truth for the format. The implementation defers to it; divergence is a bug.
+
+## 12. Import registry (`imports.jsonl`)
+
+Durable record of every item OpenPhoto has imported from an external device
+(phone, SD card). One JSON object per line:
+
+```json
+{"hash":"sha256:…","imported_at":"2026-06-08T02:10:00.000Z","imported_to":"rome2026/IMG_6385.HEIC","name":"IMG_6385.HEIC","size":2888127,"source_key":"jude-iphone-ABC123","taken_at":"2026-06-08T01:15:58.000Z"}
+```
+
+- `source_key` — stable device identity (device name + serial, or volume UUID).
+- Lookup key is `(source_key, name, size, taken_at)`; `hash` records what the
+  bytes were. Entries are never removed: "imported once" is permanent memory,
+  surviving renames, evictions, and deletion from the library.
+- Lives in the **primary** vault's `.openphoto/` (the first configured root).
+- `.openphoto/staging/` is a transient import workspace; readers MUST ignore
+  it. OpenPhoto clears it at session start.
+- On removable volumes OpenPhoto deletes by moving files into
+  `.openphoto-trash/` at the volume root — never unlinking (§8 spirit).
