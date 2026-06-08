@@ -25,9 +25,10 @@ struct SidebarView: View {
                 .foregroundStyle(Theme.textFaint)
                 .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
             ForEach(SidebarItem.allCases, id: \.self) { item in
-                let active = state.selection == item
+                let active = state.selection == item && state.openedDevice == nil
                 Button {
                     state.selection = item
+                    state.openedDevice = nil
                 } label: {
                     HStack(spacing: 9) {
                         Image(systemName: item.symbol).frame(width: 18)

@@ -20,10 +20,17 @@ struct ImportItemCell: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .overlay {
+            if selected && !alreadyImported {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Theme.accent, lineWidth: 3)
+                    .background(Theme.accent.opacity(0.12).clipShape(RoundedRectangle(cornerRadius: 10)))
+            }
+        }
         .overlay(alignment: .topLeading) {
             if !alreadyImported {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 20))
+                    .font(.system(size: 22))
                     .foregroundStyle(selected ? Theme.accent : .white.opacity(0.85))
                     .shadow(radius: 2).padding(8)
             }

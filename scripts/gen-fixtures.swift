@@ -1,5 +1,5 @@
 #!/usr/bin/swift
-// Usage: swift scripts/gen-fixtures.swift [count]
+// Usage: swift scripts/gen-fixtures.swift [count] [outputDir] [seedOffset]
 // Generates a nested mock library of small JPEGs with varied EXIF dates/GPS.
 // Repo-local only — never touches real photo folders.
 import Foundation
@@ -9,7 +9,9 @@ import AVFoundation
 import UniformTypeIdentifiers
 
 let count = CommandLine.arguments.count > 1 ? Int(CommandLine.arguments[1]) ?? 300 : 300
-let root = URL(fileURLWithPath: "fixtures-library")
+let rootPath = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "fixtures-library"
+let seedOffset = CommandLine.arguments.count > 3 ? Int(CommandLine.arguments[3]) ?? 0 : 0
+let root = URL(fileURLWithPath: rootPath)
 let folders = ["rome2022", "canada23", "mac-screenshots/2024", "2025/lisbon25", "_inbox"]
 let fm = FileManager.default
 
@@ -39,11 +41,12 @@ func writeJPEG(to url: URL, date: String, lat: Double?, lon: Double?, hue: Doubl
 
 let places: [(Double, Double)?] = [(41.9, 12.5), (51.18, -115.57), nil, (38.71, -9.14), nil]
 for i in 0..<count {
-    let f = i % folders.count
-    let day = 1 + (i % 27), month = 1 + (i % 12), year = 2021 + (i % 5)
-    let date = String(format: "%04d:%02d:%02d %02d:00:00", year, month, day, i % 24)
-    writeJPEG(to: root.appendingPathComponent("\(folders[f])/IMG_\(1000 + i).jpg"),
+    let seed = i + seedOffset
+    let f = seed % folders.count
+    let day = 1 + (seed % 27), month = 1 + (seed % 12), year = 2021 + (seed % 5)
+    let date = String(format: "%04d:%02d:%02d %02d:00:00", year, month, day, seed % 24)
+    writeJPEG(to: root.appendingPathComponent("\(folders[f])/IMG_\(1000 + seed).jpg"),
               date: date, lat: places[f]?.0, lon: places[f]?.1,
-              hue: Double(i % 100) / 100)
+              hue: Double(seed % 100) / 100)
 }
 print("Generated \(count) JPEGs in \(root.path)")
