@@ -96,6 +96,25 @@ private func makeAsset(_ n: Int, taken: String, kind: MediaKind = .photo) -> Ass
                                 caption: nil, tagsJSON: "[]")
 }
 
+@Test func hashPresentScopedToVaultAndDir() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.registerVault(id: "v-1", role: "local", rootPath: "/p")
+    try cat.registerVault(id: "v-2", role: "local", rootPath: "/q")
+    let a = makeAsset(11, taken: "2024-05-01T00:00:00.000Z")
+    try cat.upsert(assets: [a])
+    try cat.upsert(instances: [
+        InstanceRecord(hash: a.hash, vaultID: "v-1", relPath: "trips/IMG.jpg",
+                       dirPath: "trips", size: 1, mtimeMs: 0),
+    ])
+    // True when (hash, vault, dir) all match.
+    #expect(try cat.hashPresent(inVault: "v-1", dirPath: "trips", hash: a.hash) == true)
+    // False for a different dir in the same vault.
+    #expect(try cat.hashPresent(inVault: "v-1", dirPath: "other", hash: a.hash) == false)
+    // False for a different vault (same dir).
+    #expect(try cat.hashPresent(inVault: "v-2", dirPath: "trips", hash: a.hash) == false)
+}
+
 @Test func folderQueriesScopeByVault() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))

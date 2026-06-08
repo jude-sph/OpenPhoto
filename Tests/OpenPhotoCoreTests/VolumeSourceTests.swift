@@ -36,6 +36,51 @@ import Foundation
         atPath: card.appendingPathComponent(".openphoto-trash/DCIM/IMG_9.jpg").path))
 }
 
+@Test func deleteIsIdempotentOnRepeat() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let card = try t.sub("CARD")
+    try makeJPEG(at: card.appendingPathComponent("DCIM/IMG_A.jpg").creatingParent(),
+                 dateTimeOriginal: nil, lat: nil, lon: nil)
+    let src = VolumeSource(rootURL: card, displayName: "Test Card")
+    let items = try await src.enumerateItems()
+    #expect(items.count == 1)
+    // First delete.
+    let r1 = try await src.delete(items)
+    #expect(r1[0].error == nil)
+    #expect(!FileManager.default.fileExists(
+        atPath: card.appendingPathComponent("DCIM/IMG_A.jpg").path))
+    #expect(FileManager.default.fileExists(
+        atPath: card.appendingPathComponent(".openphoto-trash/DCIM/IMG_A.jpg").path))
+    // Second delete — source file already gone; must still succeed (idempotent).
+    let r2 = try await src.delete(items)
+    #expect(r2[0].error == nil)
+    // Trashed file still there.
+    #expect(FileManager.default.fileExists(
+        atPath: card.appendingPathComponent(".openphoto-trash/DCIM/IMG_A.jpg").path))
+}
+
+@Test func emptyTrashRemovesTrashedFiles() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let card = try t.sub("CARD")
+    try makeJPEG(at: card.appendingPathComponent("DCIM/IMG_B.jpg").creatingParent(),
+                 dateTimeOriginal: nil, lat: nil, lon: nil)
+    let src = VolumeSource(rootURL: card, displayName: "Test Card")
+    let items = try await src.enumerateItems()
+    _ = try await src.delete(items)
+    let count1 = await src.reclaimableTrashCount()
+    #expect(count1 == 1)
+    try await src.emptyTrash()
+    let count2 = await src.reclaimableTrashCount()
+    #expect(count2 == 0)
+    // .openphoto-trash directory itself should be gone or empty.
+    let trashDir = card.appendingPathComponent(".openphoto-trash")
+    let exists = FileManager.default.fileExists(atPath: trashDir.path)
+    if exists {
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: trashDir.path)) ?? []
+        #expect(contents.isEmpty)
+    }
+}
+
 @Test func sourceKeyStableForSameRoot() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let card = try t.sub("CARD")

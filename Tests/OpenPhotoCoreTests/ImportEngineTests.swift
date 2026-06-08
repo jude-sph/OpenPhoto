@@ -39,7 +39,7 @@ private func fakeItems() -> [(ImportItem, Data)] {
     #expect(leftover.isEmpty)
 }
 
-@Test func skipsAlreadyImportedAndAlreadyInLibrary() async throws {
+@Test func sameFolderReimportSkips() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let (lib, vault, reg) = try makeEnv(t)
     try await lib.scanAll()
@@ -47,10 +47,22 @@ private func fakeItems() -> [(ImportItem, Data)] {
     let engine = ImportEngine(library: lib, registry: reg)
     let items = try await fake.enumerateItems()
     _ = await engine.run(source: fake, items: items, vault: vault, dirPath: "a")
-    // Second run: registry-known → both skipped, nothing copied anywhere.
-    let result2 = await engine.run(source: fake, items: items, vault: vault, dirPath: "b")
-    #expect(result2.imported.isEmpty && result2.skipped.count == 2)
-    #expect(try lib.items(inDir: "b").isEmpty)
+    let again = await engine.run(source: fake, items: items, vault: vault, dirPath: "a")
+    #expect(again.imported.isEmpty && again.skipped.count == 2)   // same folder → no-op
+}
+
+@Test func differentFolderReimportPlacesSecondInstance() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, vault, reg) = try makeEnv(t)
+    try await lib.scanAll()
+    let fake = FakeSource(sourceKey: "fk", items: fakeItems())
+    let engine = ImportEngine(library: lib, registry: reg)
+    let items = try await fake.enumerateItems()
+    _ = await engine.run(source: fake, items: items, vault: vault, dirPath: "a")
+    let b = await engine.run(source: fake, items: items, vault: vault, dirPath: "b")
+    #expect(b.imported.count == 2 && b.skipped.isEmpty)            // different folder → copies
+    #expect(try lib.items(inDir: "b").count == 2)
+    #expect(try lib.items(inDir: "a").count == 2)                  // original still there
 }
 
 @Test func collisionGetsSuffixedName() async throws {
@@ -99,25 +111,3 @@ private func fakeItems() -> [(ImportItem, Data)] {
     _ = (photo, video)
 }
 
-@Test func registrySkippedItemsDontCountTowardDiskPrecheck() async throws {
-    let t = try TestDirs(); defer { t.cleanup() }
-    let pics = try t.sub("Pictures")
-    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
-    let vault = lib.vaults[0]
-    let reg = ImportRegistry(vault: vault)
-    try await lib.scanAll()
-    // Item with an absurd byteSize, but already in the registry → must be
-    // skipped BEFORE the disk precheck, so the batch succeeds.
-    let huge = ImportItem(id: "h", name: "HUGE.JPG", byteSize: Int64.max / 4,
-                          takenAt: Date(timeIntervalSince1970: 1), kind: .photo, livePartnerID: nil)
-    try reg.append(.init(sourceKey: "fk", name: "HUGE.JPG", size: huge.byteSize,
-                         takenAt: ISO8601Millis.string(from: huge.takenAt!),
-                         hash: "sha256:" + String(repeating: "f", count: 64),
-                         importedAt: "2026-01-01T00:00:00.000Z", importedTo: "x"))
-    let small = ImportItem(id: "s", name: "S.JPG", byteSize: 3,
-                           takenAt: Date(timeIntervalSince1970: 2), kind: .photo, livePartnerID: nil)
-    let fake = FakeSource(sourceKey: "fk", items: [(huge, Data()), (small, Data("sml".utf8))])
-    let engine = ImportEngine(library: lib, registry: reg)
-    let result = await engine.run(source: fake, items: [huge, small], vault: vault, dirPath: "d")
-    #expect(result.skipped.count == 1 && result.imported.count == 1 && result.failed.isEmpty)
-}

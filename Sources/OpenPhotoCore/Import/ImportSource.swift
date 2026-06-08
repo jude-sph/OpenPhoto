@@ -42,6 +42,17 @@ public protocol ImportSource: Sendable {
     func fetch(_ item: ImportItem, to url: URL) async throws
     func delete(_ items: [ImportItem]) async throws -> [DeleteResult]
     func thumbnail(_ item: ImportItem, maxPixel: Int) async -> CGImage?
+    /// Number of items sitting in the source's reclaimable trash (volumes only). Default 0.
+    func reclaimableTrashCount() async -> Int
+    /// Permanently remove the source's reclaimable trash. Default no-op.
+    func emptyTrash() async throws
+}
+
+public extension ImportSource {
+    /// Number of items sitting in the source's reclaimable trash (volumes only). Default 0.
+    func reclaimableTrashCount() async -> Int { 0 }
+    /// Permanently remove the source's reclaimable trash. Default no-op.
+    func emptyTrash() async throws {}
 }
 
 /// Pair Live Photo halves among device items: same lowercased basename,

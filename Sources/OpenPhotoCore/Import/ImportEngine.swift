@@ -14,7 +14,7 @@ public final class ImportEngine: Sendable {
     }
     public struct BatchResult: Sendable {
         public var imported: [ImportedItem] = []
-        public var skipped: [ImportItem] = []      // duplicates (registry or library)
+        public var skipped: [ImportItem] = []      // duplicates (destination-aware)
         public var failed: [FailedItem] = []
     }
     public struct Progress: Sendable {
@@ -59,45 +59,36 @@ public final class ImportEngine: Sendable {
         try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: staging) }
 
-        // 2. Registry skip first (no fetch needed), then disk-space precheck over remainder.
-        var toFetch: [ImportItem] = []
-        var registrySkipped: [ImportItem] = []
-        for item in work {
-            let takenStr = item.takenAt.map(ISO8601Millis.string(from:)) ?? ""
-            if registry.contains(sourceKey: source.sourceKey, name: item.name,
-                                 size: item.byteSize, takenAt: takenStr) {
-                registrySkipped.append(item)
-            } else {
-                toFetch.append(item)
-            }
-        }
-        result.skipped.append(contentsOf: registrySkipped)
-
-        let needed = toFetch.reduce(Int64(0)) { $0 + $1.byteSize }
+        // 2. Disk-space precheck over all work items.
+        let needed = work.reduce(Int64(0)) { $0 + $1.byteSize }
         if let free = (try? vault.rootURL.resourceValues(
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
                 .volumeAvailableCapacityForImportantUsage,
            free < needed * 2 {   // ×2: staging + placed copies coexist briefly
-            result.failed = toFetch.map { FailedItem(item: $0, reason: "not enough disk space") }
+            result.failed = work.map { FailedItem(item: $0, reason: "not enough disk space") }
             return result
         }
 
-        // 3. Per-item: fetch → hash → dedup-check → remember staged file.
+        // 3. Per-item: fetch → hash → destination-aware dedup-check → remember staged file.
         var staged: [(item: ImportItem, url: URL, hash: String)] = []
-        let known = (try? library.catalog.knownHashes()) ?? []
-        for (i, item) in toFetch.enumerated() {
-            progress?(Progress(stage: .fetching, done: i, total: toFetch.count, currentName: item.name))
+        for (i, item) in work.enumerated() {
+            progress?(Progress(stage: .fetching, done: i, total: work.count, currentName: item.name))
             let takenStr = item.takenAt.map(ISO8601Millis.string(from:)) ?? ""
             let dest = staging.appendingPathComponent(UUID().uuidString + "-" + item.name)
             do {
                 try await source.fetch(item, to: dest)
                 let hash = try ContentHash.ofFile(at: dest).stringValue
-                if known.contains(hash) {
-                    // Library already has these bytes — record and skip.
+                // Destination-aware dedup: the same source photo CAN be imported into a
+                // different folder (creates a second instance); only skip if THIS folder
+                // already holds these exact bytes (true no-op).
+                if (try? library.catalog.hashPresent(
+                        inVault: vault.descriptor.vaultID,
+                        dirPath: dirPath,
+                        hash: hash)) == true {
                     try? registry.append(.init(sourceKey: source.sourceKey, name: item.name,
                         size: item.byteSize, takenAt: takenStr, hash: hash,
                         importedAt: ISO8601Millis.string(from: Date()),
-                        importedTo: ""))
+                        importedTo: "\(dirPath)/\(item.name)"))
                     result.skipped.append(item)
                     try? fm.removeItem(at: dest)
                     continue
