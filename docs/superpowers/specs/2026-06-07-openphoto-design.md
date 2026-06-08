@@ -131,6 +131,7 @@ Backfill estimate for current library on M4 Pro: hashing minutes; thumbnails ~1�
 ## Changelog
 
 - **2026-06-07** — Initial approved design. Added UI reference section after Claude Design handoff landed in `UI-Design/`, with three mockup-vs-spec deltas resolved in the spec's favor.
+- **2026-06-08** — Phase 1 implemented (45+ commits on `phase1-browse`). ICC deletion spike resolved §11's iPhone-deletion risk positively (works with iCloud Photos ON). Hash algorithm pinned to SHA-256 (`sha256:` prefix) in format v1 — see format doc §2. Timeline gained grouping modes (day/week/month/year/continuous) and the viewer a rename action, both from first user-testing feedback.
 
 ## 8. Error-handling doctrine
 
@@ -162,7 +163,7 @@ Each phase is its own implementation plan and ends with a usable app:
 
 ## 11. Known risks & spikes
 
-- **iPhone deletion over USB**: iOS restricts ImageCaptureCore deletion when iCloud Photos is enabled (and is generally flaky). Spike in phase 1. Fallback: user confirms deletion on-phone after verified import.
+- **iPhone deletion over USB**: ~~iOS restricts ImageCaptureCore deletion when iCloud Photos is enabled~~ **RESOLVED by spike (2026-06-08, see `docs/spikes/2026-06-08-icc-deletion.md`)**: deletion via `requestDeleteFiles` SUCCEEDED with iCloud Photos ON on Jude's device. Phase 2 may offer "Delete from iPhone" after verified import, with per-item failure surfacing as a fallback for other configurations. The locked-phone state (error −9943) must be handled by waiting for `cameraDeviceDidRemoveAccessRestriction` and retrying; device item order is not chronological — sort by `creationDate`.
 - **MobileCLIP model selection/conversion**: verify a Core ML build with acceptable quality and a usable text encoder before phase 4.
 - **Offline reverse-geocode dataset**: choose one (~tens of MB, city-level is sufficient) before phase 4.
 - **HEIC/Live Photo edge cases**: pairing relies on Apple's content identifier; some third-party apps strip it. Fallback heuristic: same basename + adjacent timestamps.
