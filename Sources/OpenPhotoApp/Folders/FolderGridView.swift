@@ -62,6 +62,9 @@ struct FolderGridView: View {
                 } label: { Label("Reveal in Finder", systemImage: "arrow.up.forward.app") }
                     .buttonStyle(.bordered).controlSize(.small)
             }
+            Image(systemName: "square.grid.2x2")
+                .font(.system(size: 11)).foregroundStyle(Theme.textFaint)
+            Slider(value: $state.gridMinSize, in: 48...220).frame(width: 120)
         }
         .padding(.horizontal, 16)
         .frame(height: Theme.toolbarHeight)
