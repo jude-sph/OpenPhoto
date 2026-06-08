@@ -83,16 +83,12 @@ struct ImportView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 178), spacing: 10)],
                           spacing: 10) {
                     ForEach(displayItems) { item in
-                        Color.clear.aspectRatio(1, contentMode: .fit)
-                            .overlay {
-                                ImportItemCell(
-                                    item: item, source: source!,
-                                    alreadyImported: isImported(item),
-                                    importedThisSession: sessionImportedIDs.contains(item.id),
-                                    selected: selection.contains(item.id),
-                                    onToggle: { toggle(item) })
-                            }
-                            .clipped()
+                        ImportItemCell(
+                            item: item, source: source!,
+                            alreadyImported: isImported(item),
+                            importedThisSession: sessionImportedIDs.contains(item.id),
+                            selected: selection.contains(item.id),
+                            onToggle: { toggle(item) })
                     }
                 }
                 .padding(12)

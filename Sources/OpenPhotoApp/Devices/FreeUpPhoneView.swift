@@ -142,18 +142,14 @@ struct FreeUpPhoneView: View {
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
                 ForEach(items) { item in
-                    Color.clear.aspectRatio(1, contentMode: .fit)
-                        .overlay {
-                            ImportItemCell(item: item, source: source,
-                                           alreadyImported: false,
-                                           importedThisSession: false,
-                                           selected: selection.contains(item.id),
-                                           onToggle: {
-                                               if selection.contains(item.id) { selection.remove(item.id) }
-                                               else { selection.insert(item.id) }
-                                           })
-                        }
-                        .clipped()
+                    ImportItemCell(item: item, source: source,
+                                   alreadyImported: false,
+                                   importedThisSession: false,
+                                   selected: selection.contains(item.id),
+                                   onToggle: {
+                                       if selection.contains(item.id) { selection.remove(item.id) }
+                                       else { selection.insert(item.id) }
+                                   })
                 }
             }
             .padding(.horizontal, 16)
