@@ -42,12 +42,14 @@ public final class ImportEngine: Sendable {
         // 0. Expand Live pairs: selecting either half imports both (spec §3).
         var work = items
         let ids = Set(items.map(\.id))
-        for item in items {
-            if let pid = item.livePartnerID, !ids.contains(pid) {
-                // Partner not in the selection — pull it from the source listing.
-                if let partner = try? await source.enumerateItems().first(where: { $0.id == pid }) {
-                    work.append(partner)
-                }
+        let missingPartnerIDs = items.compactMap { item in
+            item.livePartnerID.flatMap { ids.contains($0) ? nil : $0 }
+        }
+        if !missingPartnerIDs.isEmpty {
+            let all = (try? await source.enumerateItems()) ?? []
+            let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+            for pid in missingPartnerIDs {
+                if let partner = byID[pid] { work.append(partner) }
             }
         }
 
@@ -57,27 +59,35 @@ public final class ImportEngine: Sendable {
         try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: staging) }
 
-        // 2. Disk-space precheck (plan-then-act).
-        let needed = work.reduce(Int64(0)) { $0 + $1.byteSize }
+        // 2. Registry skip first (no fetch needed), then disk-space precheck over remainder.
+        var toFetch: [ImportItem] = []
+        var registrySkipped: [ImportItem] = []
+        for item in work {
+            let takenStr = item.takenAt.map(ISO8601Millis.string(from:)) ?? ""
+            if registry.contains(sourceKey: source.sourceKey, name: item.name,
+                                 size: item.byteSize, takenAt: takenStr) {
+                registrySkipped.append(item)
+            } else {
+                toFetch.append(item)
+            }
+        }
+        result.skipped.append(contentsOf: registrySkipped)
+
+        let needed = toFetch.reduce(Int64(0)) { $0 + $1.byteSize }
         if let free = (try? vault.rootURL.resourceValues(
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
                 .volumeAvailableCapacityForImportantUsage,
            free < needed * 2 {   // ×2: staging + placed copies coexist briefly
-            result.failed = work.map { FailedItem(item: $0, reason: "not enough disk space") }
+            result.failed = toFetch.map { FailedItem(item: $0, reason: "not enough disk space") }
             return result
         }
 
         // 3. Per-item: fetch → hash → dedup-check → remember staged file.
         var staged: [(item: ImportItem, url: URL, hash: String)] = []
         let known = (try? library.catalog.knownHashes()) ?? []
-        for (i, item) in work.enumerated() {
-            progress?(Progress(stage: .fetching, done: i, total: work.count, currentName: item.name))
+        for (i, item) in toFetch.enumerated() {
+            progress?(Progress(stage: .fetching, done: i, total: toFetch.count, currentName: item.name))
             let takenStr = item.takenAt.map(ISO8601Millis.string(from:)) ?? ""
-            if registry.contains(sourceKey: source.sourceKey, name: item.name,
-                                 size: item.byteSize, takenAt: takenStr) {
-                result.skipped.append(item)
-                continue
-            }
             let dest = staging.appendingPathComponent(UUID().uuidString + "-" + item.name)
             do {
                 try await source.fetch(item, to: dest)
@@ -118,7 +128,7 @@ public final class ImportEngine: Sendable {
         do { try await library.rescan(vaultID: vault.descriptor.vaultID) }
         catch {
             result.failed.append(contentsOf: placed.map {
-                FailedItem(item: $0.item, reason: "rescan failed: \(error)") })
+                FailedItem(item: $0.item, reason: "rescan failed (files are placed and will be adopted by the next scan): \(error)") })
             return result
         }
 
