@@ -103,4 +103,9 @@ public struct TimelineItem: Codable, FetchableRecord, Sendable, Equatable {
     public var relPath: String
     public var dirPath: String
     public var size: Int64
+
+    /// Unique per physical instance (the same photo can exist in two folders →
+    /// same `hash`, different path). Use this — not `hash` — as a ForEach id, or
+    /// duplicate hashes leave gaps in the grid.
+    public var instanceID: String { vaultID + "|" + relPath }
 }

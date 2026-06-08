@@ -15,7 +15,7 @@ struct TimelineView: View {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: state.gridMinSize),
                                                          spacing: Theme.gridGap)],
                                       spacing: Theme.gridGap) {
-                                ForEach(section.items, id: \.hash) { item in
+                                ForEach(section.items, id: \.instanceID) { item in
                                     Color.clear
                                         .aspectRatio(1, contentMode: .fit)
                                         .overlay {

@@ -13,7 +13,7 @@ struct ViewerView: View {
     private var flatItems: [TimelineItem] {
         state.viewerItems.isEmpty ? state.flatItems : state.viewerItems
     }
-    private var index: Int? { flatItems.firstIndex { $0.hash == state.openedItem?.hash } }
+    private var index: Int? { flatItems.firstIndex { $0.instanceID == state.openedItem?.instanceID } }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -25,9 +25,10 @@ struct ViewerView: View {
             }
         }
         .focusable()
+        .focusEffectDisabled()   // keep keyboard focus for arrow-keys, hide the blue focus ring
         .focused($stageFocused)
         .onAppear { stageFocused = true }
-        .onChange(of: state.openedItem?.hash) { stageFocused = true }
+        .onChange(of: state.openedItem?.instanceID) { stageFocused = true }
         .background(Color.black.opacity(0.96))
         .onKeyPress(.escape) { state.openedItem = nil; return .handled }
         .onKeyPress(.leftArrow) { step(-1); return .handled }
@@ -35,7 +36,7 @@ struct ViewerView: View {
         .onKeyPress(KeyEquivalent("i")) { state.inspectorShown.toggle(); return .handled }
         .onKeyPress(.deleteForward) { deleteCurrent(); return .handled }
         .onKeyPress(.delete) { deleteCurrent(); return .handled }
-        .task(id: state.openedItem?.hash) { await loadFull() }
+        .task(id: state.openedItem?.instanceID) { await loadFull() }
         .onChange(of: playingLive) { _, live in
             if live, let url = liveURL {
                 let p = AVPlayer(url: url)
@@ -98,7 +99,7 @@ struct ViewerView: View {
                 // GPU-composited zoom/pan via a CALayer — no SwiftUI re-render during
                 // gestures, so it stays smooth on full-res photos. Keyed per photo.
                 ZoomableImageView(image: fullImage)
-                    .id(state.openedItem?.hash)
+                    .id(state.openedItem?.instanceID)
             } else {
                 ProgressView().controlSize(.large)
             }
@@ -109,21 +110,21 @@ struct ViewerView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 5) {
-                    ForEach(flatItems, id: \.hash) { item in
+                    ForEach(flatItems, id: \.instanceID) { item in
                         ThumbView(item: item, library: state.library!)
                             .frame(width: 52, height: 52)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                             .overlay(RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(item.hash == state.openedItem?.hash
+                                .strokeBorder(item.instanceID == state.openedItem?.instanceID
                                               ? Theme.accent : .clear, lineWidth: 2))
-                            .id(item.hash)
+                            .id(item.instanceID)
                             .onTapGesture { state.openedItem = item }
                     }
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
             }
-            .onChange(of: state.openedItem?.hash) { _, hash in
-                if let hash { withAnimation { proxy.scrollTo(hash, anchor: .center) } }
+            .onChange(of: state.openedItem?.instanceID) { _, id in
+                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
         }
         .frame(height: 70)
@@ -141,7 +142,7 @@ struct ViewerView: View {
     private func deleteCurrent() {
         guard let item = state.openedItem else { return }
         step(1)
-        if state.openedItem?.hash == item.hash { state.openedItem = nil }  // was last item
+        if state.openedItem?.instanceID == item.instanceID { state.openedItem = nil }  // was last item
         Task {
             try? await state.library?.delete(item)
             try? state.refreshQueries()
@@ -206,10 +207,13 @@ private struct ZoomableImageView: NSViewRepresentable {
     let image: NSImage
     func makeNSView(context: Context) -> ZoomPanLayerView {
         let v = ZoomPanLayerView()
-        v.setImage(image)
+        v.setImageIfChanged(image)
         return v
     }
-    func updateNSView(_ v: ZoomPanLayerView, context: Context) { v.setImage(image) }
+    // Only (re)set when the image instance actually changes — otherwise an
+    // incidental SwiftUI re-render would re-decode the bitmap and reset the zoom
+    // mid-gesture, which is what made zooming feel laggy.
+    func updateNSView(_ v: ZoomPanLayerView, context: Context) { v.setImageIfChanged(image) }
 }
 
 final class ZoomPanLayerView: NSView {
@@ -217,6 +221,7 @@ final class ZoomPanLayerView: NSView {
     private var zoom: CGFloat = 1
     private var pan = CGPoint.zero
     private var imageSize: CGSize = .zero
+    private var currentImage: NSImage?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -229,7 +234,9 @@ final class ZoomPanLayerView: NSView {
 
     override var isFlipped: Bool { true }   // top-left origin → CGImage renders upright
 
-    func setImage(_ image: NSImage) {
+    func setImageIfChanged(_ image: NSImage) {
+        guard image !== currentImage else { return }
+        currentImage = image
         var rect = CGRect(origin: .zero, size: image.size)
         imageLayer.contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
         imageSize = image.size
@@ -246,6 +253,11 @@ final class ZoomPanLayerView: NSView {
         let fit = min(avail.width / imageSize.width, avail.height / imageSize.height)
         let w = imageSize.width * fit * zoom
         let h = imageSize.height * fit * zoom
+        // Clamp pan so the image can't be dragged past its own edges.
+        let maxX = max(0, (w - bounds.width) / 2)
+        let maxY = max(0, (h - bounds.height) / 2)
+        pan.x = min(max(pan.x, -maxX), maxX)
+        pan.y = min(max(pan.y, -maxY), maxY)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         imageLayer.frame = CGRect(x: (bounds.width - w) / 2 + pan.x,
                                   y: (bounds.height - h) / 2 + pan.y, width: w, height: h)
