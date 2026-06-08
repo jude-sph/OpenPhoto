@@ -38,6 +38,25 @@ public final class ThumbnailStore: Sendable {
         return img
     }
 
+    /// A display-sized thumbnail, downsampled from the cached 512px thumb, so small
+    /// grid cells don't hand the compositor oversized GPU textures (a screen full of
+    /// 512px textures hitches on Space switches). Ensures the canonical cache exists,
+    /// then decodes the cached JPEG at `maxPixel` (capped at the stored size).
+    public func displayImage(for hash: ContentHash, sourceURL: URL, kind: MediaKind,
+                             maxPixel: Int) async throws -> CGImage? {
+        let cached = cacheURL(for: hash)
+        if !FileManager.default.fileExists(atPath: cached.path) {
+            _ = try await thumbnail(for: hash, sourceURL: sourceURL, kind: kind)
+        }
+        guard let src = CGImageSourceCreateWithURL(cached as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: min(max(maxPixel, 1), Self.maxPixel),
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+    }
+
     private func generate(from url: URL, kind: MediaKind) async throws -> CGImage? {
         switch kind {
         case .photo:

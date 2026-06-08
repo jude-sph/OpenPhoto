@@ -4,13 +4,14 @@ import OpenPhotoCore
 struct PhotoCellView: View {
     let item: TimelineItem
     let library: LibraryService
+    var targetPixel: Int = ThumbnailStore.maxPixel
     var onDelete: () -> Void = {}
 
     var body: some View {
         // No per-cell hover effect: at high density (tiny cells in continuous mode)
         // hundreds of .onHover tracking areas make scrolling lag. Apple Photos
         // doesn't hover-scale either.
-        ThumbView(item: item, library: library)
+        ThumbView(item: item, library: library, targetPixel: targetPixel)
             .overlay(alignment: .topTrailing) {
                 if item.livePairHash != nil {
                     badge(symbol: "livephoto")
@@ -48,4 +49,14 @@ struct PhotoCellView: View {
         .background(.black.opacity(0.45), in: Capsule())
         .padding(5)
     }
+}
+
+/// Texture size to render a grid cell at, for a given grid min-cell size. Sized for
+/// the worst case (adaptive cells grow up to ~2× the min) at retina (~2×), bucketed
+/// to multiples of 64 so the slider doesn't re-decode every tick, and capped at the
+/// stored thumbnail size. Small zoom → small textures → no Space-switch hitch.
+func gridThumbnailPixels(forCellMin minSize: CGFloat) -> Int {
+    let needed = Int(minSize * 4)              // ~2× adaptive growth × ~2× retina
+    let bucket = ((needed + 63) / 64) * 64     // round up to a 64px bucket
+    return min(ThumbnailStore.maxPixel, max(128, bucket))
 }

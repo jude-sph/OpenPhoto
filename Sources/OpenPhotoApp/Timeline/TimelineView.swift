@@ -14,6 +14,7 @@ struct TimelineView: View {
     private var selectedItems: [TimelineItem] {
         state.flatItems.filter { selection.contains($0.instanceID) }
     }
+    private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -69,7 +70,7 @@ struct TimelineView: View {
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
-            .overlay { PhotoCellView(item: item, library: state.library!) }
+            .overlay { PhotoCellView(item: item, library: state.library!, targetPixel: thumbPixels) }
             .clipped()
             .selectionChrome(selected: selection.contains(item.instanceID), show: selectMode)
             .cellFrame(item.instanceID, in: "timelinegrid")

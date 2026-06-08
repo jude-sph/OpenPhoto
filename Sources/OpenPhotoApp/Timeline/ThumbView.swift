@@ -16,13 +16,20 @@ nonisolated(unsafe) private let thumbMemoryCache: NSCache<NSString, CGImageBox> 
 struct ThumbView: View {
     let item: TimelineItem
     let library: LibraryService
+    /// Target texture size in pixels — sized to the cell so tiny cells don't carry
+    /// 512px textures (the cause of the Space-switch compositing hitch at min zoom).
+    var targetPixel: Int = ThumbnailStore.maxPixel
     @State private var asyncImage: CGImage?
+
+    // Cache (and reuse) one decoded image per (asset, texture-size) bucket.
+    private var cacheKey: NSString { "\(item.hash)@\(targetPixel)" as NSString }
 
     var body: some View {
         // Read the memory cache SYNCHRONOUSLY so a recycled cell shows its cached
-        // image on the very first render — no nil→tile→async flash and no extra
-        // render pass per cell, which is what made dense scrolling janky.
-        let cached = asyncImage ?? thumbMemoryCache.object(forKey: item.hash as NSString)?.image
+        // image on the very first render — no nil→tile→async flash. On a zoom-bucket
+        // change for the SAME cell, `asyncImage` (the prior bucket) bridges the gap
+        // so there's still no flash, just a one-frame size change.
+        let cached = thumbMemoryCache.object(forKey: cacheKey)?.image ?? asyncImage
         ZStack {
             Theme.tile
             if let cached {
@@ -32,15 +39,15 @@ struct ThumbView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .task(id: item.hash) {
-            let key = item.hash as NSString
-            if thumbMemoryCache.object(forKey: key) != nil { return }   // already cached
-            let lib = library, it = item
+        .task(id: cacheKey) {
+            let key = cacheKey
+            if let hit = thumbMemoryCache.object(forKey: key)?.image { asyncImage = hit; return }
+            let lib = library, it = item, px = targetPixel
             let result = await Task.detached(priority: .userInitiated) {
                 guard let url = lib.absoluteURL(for: it) else { return CGImage?.none }
-                return try? await lib.thumbnails.thumbnail(
+                return try? await lib.thumbnails.displayImage(
                     for: ContentHash(stringValue: it.hash), sourceURL: url,
-                    kind: MediaKind(rawValue: it.kind) ?? .photo)
+                    kind: MediaKind(rawValue: it.kind) ?? .photo, maxPixel: px)
             }.value
             if let img = result {
                 thumbMemoryCache.setObject(CGImageBox(img), forKey: key)
