@@ -10,36 +10,11 @@ struct ImportItemCell: View {
     let onToggle: () -> Void
     @State private var thumb: CGImage?
 
+    // The grid squares this cell via a Color.clear wrapper. We clip only the
+    // MEDIA (rounded corners); the checkbox / badges / selection ring are
+    // overlays on top. The grid wrapper must NOT apply .clipped(), or the
+    // corner checkbox gets sliced off.
     var body: some View {
-        // Self-squaring: a clear 1:1 spacer drives the cell size; the real content
-        // is an overlay filling that square. Only the MEDIA is clipped (rounded
-        // corners). The checkbox / badges / selection ring are stacked on top and
-        // are NEVER clipped — there must be no outer .clipped() around this cell,
-        // or the corner checkbox gets cut off.
-        Color.clear
-            .aspectRatio(1, contentMode: .fit)
-            .overlay {
-                ZStack(alignment: .topLeading) {
-                    media
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    if selected {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Theme.accent.opacity(0.18))
-                        RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(Theme.accent, lineWidth: 3)
-                    }
-                    checkbox.padding(8)
-                }
-                .overlay(alignment: .topTrailing) { kindBadge }
-                .overlay(alignment: .bottom) { statusBadge }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { onToggle() }
-            .task(id: item.id) { thumb = await source.thumbnail(item, maxPixel: 360) }
-    }
-
-    private var media: some View {
         ZStack {
             Theme.tile
             if let thumb {
@@ -47,15 +22,29 @@ struct ImportItemCell: View {
                     .aspectRatio(contentMode: .fill)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            if selected {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Theme.accent, lineWidth: 3)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Theme.accent.opacity(0.18)))
+            }
+        }
+        .overlay(alignment: .topLeading) { checkbox.padding(8) }
+        .overlay(alignment: .topTrailing) { kindBadge }
+        .overlay(alignment: .bottom) { statusBadge }
+        .contentShape(Rectangle())
+        .onTapGesture { onToggle() }
+        .task(id: item.id) { thumb = await source.thumbnail(item, maxPixel: 360) }
     }
 
     private var checkbox: some View {
         Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-            .font(.system(size: 24, weight: .bold))
+            .font(.system(size: 22, weight: .bold))
             .symbolRenderingMode(.palette)
-            .foregroundStyle(selected ? Color.white : Color.white,
-                             selected ? Theme.accent : Color.black.opacity(0.45))
-            .background(Circle().fill(.black.opacity(0.3)).padding(3))
+            .foregroundStyle(Color.white,
+                             selected ? Theme.accent : Color.black.opacity(0.4))
             .shadow(radius: 2)
     }
 
