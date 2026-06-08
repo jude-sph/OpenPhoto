@@ -113,6 +113,23 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     #expect(sections[0].items.count == 2)
 }
 
+@Test func daySectionsHaveUniqueIdsAndDescendingOrder() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    for (i, date) in ["2025:11:20 10:00:00", "2025:11:14 09:00:00",
+                      "2025:11:14 08:00:00", "2025:11:08 07:00:00"].enumerated() {
+        try makeJPEG(at: pics.appendingPathComponent("a/IMG_\(i).jpg").creatingParent(),
+                     dateTimeOriginal: date, lat: nil, lon: nil)
+    }
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let sections = try lib.timelineSections(grouping: .day)
+    #expect(sections.count == 3)                              // two photos share Nov 14
+    #expect(Set(sections.map(\.dayStartMs)).count == 3)       // unique ids
+    #expect(sections.map(\.dayStartMs) == sections.map(\.dayStartMs).sorted(by: >))  // newest first
+    #expect(sections[1].items.count == 2)
+}
+
 @Test func timelineGroupingMonthMergesSameDayDifferentItems() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let pics = try t.sub("Pictures")

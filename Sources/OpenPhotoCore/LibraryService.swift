@@ -80,17 +80,15 @@ public final class LibraryService: Sendable {
     // MARK: Browse
 
     public func timelineSections() throws -> [TimelineSection] {
-        sections(from: try catalog.timelineItems())
+        try timelineSections(grouping: .day)
     }
 
     public func timelineSections(grouping: TimelineGrouping) throws -> [TimelineSection] {
         let items = try catalog.timelineItems()
         switch grouping {
-        case .day:
-            return sections(from: items)
         case .none:
             return items.isEmpty ? [] : [TimelineSection(dayStartMs: 0, title: "All photos", items: items)]
-        case .week, .month, .year:
+        default:
             return groupedSections(from: items, grouping: grouping)
         }
     }
@@ -179,31 +177,6 @@ public final class LibraryService: Sendable {
             return node
         }
         return rootPaths.sorted().map(build)
-    }
-
-    private func sections(from items: [TimelineItem]) -> [TimelineSection] {
-        let cal = Calendar.current
-        let fmt = DateFormatter()
-        fmt.dateStyle = .full; fmt.timeStyle = .none
-        var result: [TimelineSection] = []
-        var current: (dayMs: Int64, title: String, items: [TimelineItem])?
-        for item in items {   // already newest-first
-            let day = cal.startOfDay(for: Date(timeIntervalSince1970:
-                Double(item.takenAtMs) / 1000))
-            let dayMs = Int64(day.timeIntervalSince1970 * 1000)
-            if current?.dayMs == dayMs {
-                current?.items.append(item)
-            } else {
-                if let c = current {
-                    result.append(TimelineSection(dayStartMs: c.dayMs, title: c.title, items: c.items))
-                }
-                current = (dayMs, fmt.string(from: day), [item])
-            }
-        }
-        if let c = current {
-            result.append(TimelineSection(dayStartMs: c.dayMs, title: c.title, items: c.items))
-        }
-        return result
     }
 
     // MARK: Edit

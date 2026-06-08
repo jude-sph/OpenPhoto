@@ -9,26 +9,27 @@ struct TimelineView: View {
             toolbar
             Divider().overlay(Theme.hairline)
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: state.gridMinSize),
-                                             spacing: Theme.gridGap)],
-                          spacing: Theme.gridGap,
-                          pinnedViews: [.sectionHeaders]) {
+                LazyVStack(spacing: Theme.gridGap, pinnedViews: [.sectionHeaders]) {
                     ForEach(state.sections, id: \.dayStartMs) { section in
                         Section {
-                            ForEach(section.items, id: \.hash) { item in
-                                Color.clear
-                                    .aspectRatio(1, contentMode: .fit)
-                                    .overlay {
-                                        PhotoCellView(item: item, library: state.library!) {
-                                            Task {
-                                                try? await state.library?.delete(item)
-                                                try? state.refreshQueries()
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: state.gridMinSize),
+                                                         spacing: Theme.gridGap)],
+                                      spacing: Theme.gridGap) {
+                                ForEach(section.items, id: \.hash) { item in
+                                    Color.clear
+                                        .aspectRatio(1, contentMode: .fit)
+                                        .overlay {
+                                            PhotoCellView(item: item, library: state.library!) {
+                                                Task {
+                                                    try? await state.library?.delete(item)
+                                                    try? state.refreshQueries()
+                                                }
                                             }
                                         }
-                                    }
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { state.openedItem = item }
+                                        .clipped()
+                                        .contentShape(Rectangle())
+                                        .onTapGesture { state.openedItem = item }
+                                }
                             }
                         } header: {
                             if state.grouping != .none {
