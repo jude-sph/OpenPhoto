@@ -109,6 +109,13 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     }
 
     /// Enumerate items sorted by capture date descending, Live pairs linked.
+    /// Release the ICC session so it doesn't leak across plug/unplug cycles
+    /// (leaked sessions accumulate and the daemon starts returning partial catalogs).
+    public func close() {
+        lock.withLock { isReady = false; isOpening = false }
+        camera.requestCloseSession()
+    }
+
     public func enumerateItems() async throws -> [ImportItem] {
         let files = (camera.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
         itemsByID.removeAll()

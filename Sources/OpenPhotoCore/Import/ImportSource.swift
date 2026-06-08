@@ -46,6 +46,8 @@ public protocol ImportSource: Sendable {
     func reclaimableTrashCount() async -> Int
     /// Permanently remove the source's reclaimable trash. Default no-op.
     func emptyTrash() async throws
+    /// Release any held session/resources (e.g. an ICC camera session). Default no-op.
+    func close()
 }
 
 public extension ImportSource {
@@ -53,6 +55,7 @@ public extension ImportSource {
     func reclaimableTrashCount() async -> Int { 0 }
     /// Permanently remove the source's reclaimable trash. Default no-op.
     func emptyTrash() async throws {}
+    func close() {}
 }
 
 /// Pair Live Photo halves among device items: same lowercased basename,

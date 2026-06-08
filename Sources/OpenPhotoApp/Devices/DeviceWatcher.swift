@@ -46,7 +46,14 @@ final class DeviceWatcher: NSObject {
                        name: NSWorkspace.didMountNotification, object: nil)
         nc.addObserver(self, selector: #selector(volumesChanged),
                        name: NSWorkspace.didUnmountNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(closeAllSessions),
+                                               name: NSApplication.willTerminateNotification, object: nil)
         volumesChanged()
+    }
+
+    /// Release all camera sessions on quit so they don't linger into the next launch.
+    @objc private func closeAllSessions() {
+        for src in sourceCache.values { src.close() }
     }
 
     func addManualVolume(url: URL) {
@@ -108,7 +115,8 @@ extension DeviceWatcher: ICDeviceBrowserDelegate {
         Task { @MainActor in
             if let (id, _) = self.cameras.first(where: { $0.value.name == name }) {
                 self.cameras[id] = nil
-                self.sourceCache["cam-\(id)"] = nil   // drop stale source so a replug makes a fresh session
+                self.sourceCache["cam-\(id)"]?.close()   // release the ICC session — don't leak it
+                self.sourceCache["cam-\(id)"] = nil       // drop stale source so a replug makes a fresh session
                 self.devices.removeAll { $0.id == "cam-\(id)" }
                 if self.openedDeviceRemoved != nil { self.openedDeviceRemoved?("cam-\(id)") }
             }
