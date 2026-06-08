@@ -5,6 +5,9 @@ final class SpikeDelegate: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDele
                            ICCameraDeviceDownloadDelegate {
     let deleteTest = CommandLine.arguments.contains("--delete-test")
     let downloadFirst = CommandLine.arguments.contains("--download-first")
+    let deleteNewest = CommandLine.arguments.contains("--delete-newest")
+    var pendingDelete: ICCameraItem?
+    var deletingCamera: ICCameraDevice?
 
     func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice,
                        moreComing: Bool) {
@@ -37,6 +40,25 @@ final class SpikeDelegate: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDele
                 sizeStr = "? bytes"
             }
             print("  \(f.name ?? "?")  \(sizeStr)  locked=\(f.isLocked)")
+        }
+        if deleteNewest {
+            // Target the most recent photo by capture date (user-designated test
+            // photo). Phase-2 ritual: download → verify → delete.
+            guard let target = files.compactMap({ $0 as? ICCameraFile })
+                .max(by: { ($0.creationDate ?? .distantPast) < ($1.creationDate ?? .distantPast) })
+            else { print("No items."); exit(0) }
+            print("Newest item: \(target.name ?? "?")  \(target.fileSize) bytes  taken \(target.creationDate.map(String.init(describing:)) ?? "?")")
+            let dest = URL(fileURLWithPath: "spike-download", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+            print("Step 1: downloading backup copy…")
+            pendingDelete = target
+            deletingCamera = camera
+            camera.requestDownloadFile(target,
+                options: [.downloadsDirectoryURL: dest as Any],
+                downloadDelegate: self,
+                didDownloadSelector: #selector(didDownloadFile(_:error:options:contextInfo:)),
+                contextInfo: nil)
+            return
         }
         if downloadFirst {
             guard let target = files.first as? ICCameraFile else {
@@ -71,8 +93,17 @@ final class SpikeDelegate: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDele
             print("RESULT: download FAILED: \(error)")
             exit(5)
         }
-        print("RESULT: download SUCCEEDED → spike-download/\(file.name ?? "?")")
-        exit(0)
+        print("Download SUCCEEDED → spike-download/\(file.name ?? "?")")
+        if let victim = pendingDelete, let camera = deletingCamera {
+            print("Step 2: requesting deletion of \(victim.name ?? "?") from the phone…")
+            camera.requestDeleteFiles([victim])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+                print("RESULT: no deletion callback within 15s — treat as NOT SUPPORTED / silently ignored.")
+                exit(2)
+            }
+        } else {
+            exit(0)
+        }
     }
 
     // Called after requestDeleteFiles: completes (legacy path)
