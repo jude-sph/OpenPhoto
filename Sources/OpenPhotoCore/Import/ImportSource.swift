@@ -58,8 +58,10 @@ public extension ImportSource {
     func close() {}
 }
 
-/// Pair Live Photo halves among device items: same lowercased basename,
-/// photo+video, capture times within 2s (mirrors LivePhotoPairer's fallback).
+/// Pair Live Photo halves among device items: a still + .mov sharing the same
+/// lowercased basename (Apple's Live Photo signature). No capture-time check —
+/// the .mov's metadata time is often unreliable, which previously left the video
+/// half unpaired so it never got imported alongside the still.
 public func pairLiveItems(_ items: [ImportItem]) -> [ImportItem] {
     func base(_ name: String) -> String {
         (name as NSString).deletingPathExtension.lowercased()
@@ -68,9 +70,7 @@ public func pairLiveItems(_ items: [ImportItem]) -> [ImportItem] {
     for i in items where i.kind == .video { videosByBase[base(i.name)] = i }
     var out = items
     for (idx, i) in out.enumerated() where i.kind == .photo {
-        guard let v = videosByBase[base(i.name)],
-              let pt = i.takenAt, let vt = v.takenAt,
-              abs(pt.timeIntervalSince(vt)) <= 2 else { continue }
+        guard let v = videosByBase[base(i.name)] else { continue }
         out[idx].livePartnerID = v.id
         if let vIdx = out.firstIndex(where: { $0.id == v.id }) {
             out[vIdx].livePartnerID = i.id
