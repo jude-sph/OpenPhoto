@@ -151,8 +151,9 @@ final class AppState {
     /// How many of `items` appear to exist only on this Mac (no known backup).
     /// No registry yet → we can't prove a backup, so treat all as only-copies.
     func onlyCopyCount(_ items: [TimelineItem]) -> Int {
-        guard let reg = importRegistry else { return items.count }
-        return BackupProbe(registry: reg).onlyOnThisMac(hashes: items.map(\.hash)).count
+        let hashes = Set(items.map(\.hash))
+        guard let reg = importRegistry else { return hashes.count }
+        return BackupProbe(registry: reg).onlyOnThisMac(hashes: Array(hashes)).count
     }
 
     /// Evict a selection to the bin, then refresh all queries.

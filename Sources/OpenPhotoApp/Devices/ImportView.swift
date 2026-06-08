@@ -190,6 +190,7 @@ struct ImportView: View {
         stateStreamTask?.cancel()
         stateStreamTask = nil
         phase = .connecting
+        selection.clear()
         guard let src = state.deviceWatcher.source(for: device) else {
             phase = .failedToConnect("Source unavailable"); return
         }
