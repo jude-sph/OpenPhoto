@@ -48,6 +48,12 @@ final class DeviceWatcher: NSObject {
         volumesChanged()
     }
 
+    func addManualVolume(url: URL) {
+        let dev = ConnectedDevice.volume(id: "manual-" + url.path,
+                                         name: url.lastPathComponent, url: url)
+        if !devices.contains(where: { $0.id == dev.id }) { devices.append(dev) }
+    }
+
     func source(for device: ConnectedDevice) -> (any ImportSource)? {
         switch device {
         case .camera(let id, _):

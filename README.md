@@ -6,7 +6,7 @@ Your photos and videos live in your own folders (`~/Pictures`, `~/Movies` — ar
 
 ## Status
 
-**Phase 1 (Browse)** — implemented: library indexing (content-hash identity, manifest, rebuildable catalog), timeline, folder tree, viewer, inspector with XMP-sidecar metadata editing, bin. Phases 2–5 (device import, drive sync, local-AI search/faces/map, extras) are designed but not yet built — see `docs/`.
+**Phases 1–2** — browse + device import implemented; Phases 3–5 designed. Phase 1: library indexing (content-hash identity, manifest, rebuildable catalog), timeline, folder tree, viewer, inspector with XMP-sidecar metadata editing, bin. Phase 2: import from iPhones (ImageCaptureCore) and SD cards / arbitrary folders, with staged copy, hash verification, durable import registry, and opt-in free-up-phone flow — see `docs/`.
 
 ## Build & run
 

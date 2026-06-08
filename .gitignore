@@ -11,6 +11,7 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 
-# Synthetic validation library (generated, never real photos)
+# Synthetic validation library and fixture card (generated, never real photos)
 fixtures-library/
+fixtures-card/
 spike-download/
