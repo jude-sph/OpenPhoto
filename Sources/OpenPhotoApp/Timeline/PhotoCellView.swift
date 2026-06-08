@@ -5,12 +5,12 @@ struct PhotoCellView: View {
     let item: TimelineItem
     let library: LibraryService
     var onDelete: () -> Void = {}
-    @State private var hovering = false
 
     var body: some View {
+        // No per-cell hover effect: at high density (tiny cells in continuous mode)
+        // hundreds of .onHover tracking areas make scrolling lag. Apple Photos
+        // doesn't hover-scale either.
         ThumbView(item: item, library: library)
-            .scaleEffect(hovering ? 1.045 : 1)
-            .animation(.easeOut(duration: 0.15), value: hovering)
             .overlay(alignment: .topTrailing) {
                 if item.livePairHash != nil {
                     badge(symbol: "livephoto")
@@ -28,7 +28,6 @@ struct PhotoCellView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: Theme.cellRadius))
             .contentShape(Rectangle())
-            .onHover { hovering = $0 }
             .contextMenu {
                 Button("Delete", systemImage: "trash", role: .destructive) { onDelete() }
             }

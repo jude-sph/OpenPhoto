@@ -9,7 +9,7 @@ private final class CGImageBox {
 
 nonisolated(unsafe) private let thumbMemoryCache: NSCache<NSString, CGImageBox> = {
     let c = NSCache<NSString, CGImageBox>()
-    c.countLimit = 2000
+    c.countLimit = 6000   // dense continuous-mode grids keep many tiny cells alive
     return c
 }()
 
