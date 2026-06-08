@@ -31,7 +31,13 @@ final class AppState {
     var openedItem: TimelineItem?            // non-nil → Viewer is presented
     var viewerItems: [TimelineItem] = []     // the set the viewer navigates (timeline or one folder)
     var inspectorShown = true
-    var gridMinSize: CGFloat = 132           // grid-size slider, 48…220
+    // One shared grid-size value across Timeline + Folders, persisted across launches.
+    var gridMinSize: CGFloat = {
+        let v = UserDefaults.standard.double(forKey: "gridMinSize")
+        return v >= 48 ? CGFloat(v) : 132
+    }() {
+        didSet { UserDefaults.standard.set(Double(gridMinSize), forKey: "gridMinSize") }
+    }
     var sections: [TimelineSection] = []
     var flatItems: [TimelineItem] = []
     var folderTree: [FolderNode] = []
