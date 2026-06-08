@@ -101,14 +101,16 @@ struct InspectorView: View {
 
                 Divider().overlay(Theme.hairline)
 
-                section("Presence") {
-                    HStack(spacing: 8) {
-                        Image(systemName: "laptopcomputer")
-                        Text("This Mac").font(.system(size: 12.5))
-                        Spacer()
-                        Image(systemName: "checkmark").foregroundStyle(Theme.green)
+                section("Locations") {
+                    let locations = state.locations(for: item)
+                    if locations.isEmpty {
+                        Text("Only on this Mac")
+                            .font(.system(size: 12)).foregroundStyle(Theme.textFaint)
+                    } else {
+                        ForEach(locations) { loc in
+                            locationRow(loc)
+                        }
                     }
-                    // Drive rows arrive in Phase 3 with the presence map UI.
                 }
 
                 section("File") {
@@ -191,6 +193,46 @@ struct InspectorView: View {
                 GridRow { gLabel("Duration"); gValue(String(format: "%.1fs", d)) }
             }
             GridRow { gLabel("Kind"); gValue(item.livePairHash != nil ? "Live Photo" : item.kind) }
+        }
+    }
+
+    @ViewBuilder private func locationRow(_ loc: Location) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: locationSymbol(loc.place))
+                .foregroundStyle(Theme.textDim).frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(locationName(loc.place)).font(.system(size: 12.5))
+                if !loc.detail.isEmpty {
+                    Text(loc.detail).font(.system(size: 10.5)).foregroundStyle(Theme.textFaint)
+                }
+            }
+            Spacer()
+            confidenceBadge(loc.confidence)
+        }
+    }
+
+    private func locationSymbol(_ place: Location.Place) -> String {
+        switch place {
+        case .thisMac: return "laptopcomputer"
+        case .device(_, _, let kind): return kind == .phone ? "iphone" : "sdcard"
+        }
+    }
+    private func locationName(_ place: Location.Place) -> String {
+        switch place {
+        case .thisMac: return "This Mac"
+        case .device(_, let name, _): return name
+        }
+    }
+    @ViewBuilder private func confidenceBadge(_ c: Location.Confidence) -> some View {
+        switch c {
+        case .confirmed:
+            Image(systemName: "checkmark").foregroundStyle(Theme.green)
+        case .believed:
+            Text("sent").font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Theme.blue)
+        case .historical:
+            Text("was here").font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Theme.textFaint)
         }
     }
 
