@@ -10,7 +10,8 @@ let package = Package(
     targets: [
         .target(
             name: "OpenPhotoCore",
-            dependencies: [.product(name: "GRDB", package: "GRDB.swift")]
+            dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
+            linkerSettings: [.linkedFramework("ImageCaptureCore")]
         ),
         .executableTarget(
             name: "OpenPhotoApp",
