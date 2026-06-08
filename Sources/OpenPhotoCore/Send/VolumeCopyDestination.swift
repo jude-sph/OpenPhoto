@@ -48,8 +48,13 @@ public final class VolumeCopyDestination: SendDestination, @unchecked Sendable {
                 // the page cache, so on removable media an unmount between copy and hash
                 // could otherwise verify against unflushed data (invariant #4).
                 if let fh = try? FileHandle(forUpdating: target) {
-                    try? fh.synchronize()
+                    let flushed = (try? fh.synchronize()) != nil
                     try? fh.close()
+                    if !flushed {
+                        try? fm.removeItem(at: target)
+                        outcomes.append(SendOutcome(item: item, status: .failed, error: "flush failed"))
+                        continue
+                    }
                 }
                 let writtenHash = try ContentHash.ofFile(at: target).stringValue
                 if writtenHash == item.hash {

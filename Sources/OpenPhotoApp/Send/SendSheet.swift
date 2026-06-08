@@ -46,8 +46,13 @@ struct SendSheet: View {
 
     private func resultView(_ r: SendEngine.Result) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("\(r.confirmed.count) sent & verified to \(device.name)",
-                  systemImage: "checkmark.seal").foregroundStyle(Theme.green)
+            if r.confirmed.count > 0 {
+                Label("\(r.confirmed.count) sent & verified to \(device.name)",
+                      systemImage: "checkmark.seal").foregroundStyle(Theme.green)
+            } else {
+                Label("Nothing new sent to \(device.name)", systemImage: "tray")
+                    .foregroundStyle(Theme.textDim)
+            }
             if !r.alreadyPresent.isEmpty {
                 Text("\(r.alreadyPresent.count) already on \(device.name) — skipped")
                     .foregroundStyle(Theme.textDim)

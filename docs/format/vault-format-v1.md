@@ -22,6 +22,8 @@ A **vault** is a folder tree containing media files, organized however the user 
     bin/                           ← deleted files, original relative paths preserved
     catalog-snapshot/              ← OPTIONAL binary cache (see §7) — safe to ignore/delete
     imports.jsonl                  ← device-import registry (§12)
+    sends.jsonl                    ← confirmed-send registry (§13)
+    devices.jsonl                  ← known-device registry (§14)
     staging/                       ← transient import workspace — readers MUST ignore
   rome2022/
     IMG_4123.heic
