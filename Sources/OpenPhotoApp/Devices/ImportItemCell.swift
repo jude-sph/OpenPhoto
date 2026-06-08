@@ -11,6 +11,7 @@ struct ImportTile: View {
     let source: any ImportSource
     let alreadyImported: Bool
     let importedThisSession: Bool
+    var sentFromHere: Bool = false
     let selected: Bool
     let onToggle: () -> Void
 
@@ -21,6 +22,7 @@ struct ImportTile: View {
                 ImportItemCell(item: item, source: source,
                                alreadyImported: alreadyImported,
                                importedThisSession: importedThisSession,
+                               sentFromHere: sentFromHere,
                                selected: selected)
             }
             // Round the whole visible tile to the SAME radius as the ring, so the
@@ -52,6 +54,7 @@ struct ImportItemCell: View {
     let source: any ImportSource
     let alreadyImported: Bool
     let importedThisSession: Bool
+    var sentFromHere: Bool = false
     let selected: Bool
     @State private var thumb: CGImage?
 
@@ -86,6 +89,8 @@ struct ImportItemCell: View {
     @ViewBuilder private var statusBadge: some View {
         if importedThisSession {
             badge("Imported ✓", color: Theme.green)
+        } else if sentFromHere {
+            badge("Sent from here", color: Theme.blue)
         } else if alreadyImported {
             badge("Already in library", color: Theme.textFaint)
         }

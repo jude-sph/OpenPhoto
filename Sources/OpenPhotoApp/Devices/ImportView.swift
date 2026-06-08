@@ -18,6 +18,7 @@ struct ImportView: View {
     @State private var showFreeUp = false
     @State private var stateStreamTask: Task<Void, Never>?
     @State private var importedIDCache = Set<String>()
+    @State private var sentIDCache = Set<String>()
 
     /// Display items (Live video halves hidden) as selectable items carrying their partner.
     private var orderedSelectable: [SelectableItem] {
@@ -91,6 +92,7 @@ struct ImportView: View {
                             item: item, source: source!,
                             alreadyImported: isImported(item),
                             importedThisSession: sessionImportedIDs.contains(item.id),
+                            sentFromHere: sentIDCache.contains(item.id),
                             selected: selection.contains(item.id),
                             onToggle: {
                                 selection.tap(index: index, items: orderedSelectable,
@@ -214,6 +216,7 @@ struct ImportView: View {
         guard let source else { return }
         items = (try? await source.enumerateItems()) ?? []
         rebuildImportedCache()
+        rebuildSentCache()
     }
 
     private func rebuildImportedCache() {
@@ -232,6 +235,21 @@ struct ImportView: View {
         importedIDCache = cache
     }
 
+    /// Mark items that OpenPhoto previously sent to THIS device (so a returned
+    /// photo reads "sent from here", not a new import). Matched by fingerprint.
+    private func rebuildSentCache() {
+        guard let source, let reg = state.sendRegistry else { sentIDCache = []; return }
+        var cache = Set<String>()
+        for item in items {
+            let ms = item.takenAt.map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+            if reg.wasSentToDevice(destinationKey: source.sourceKey,
+                                   size: item.byteSize, captureDateMs: ms) {
+                cache.insert(item.id)
+            }
+        }
+        sentIDCache = cache
+    }
+
     private func runBatch() async {
         guard let source, let lib = state.library, let registry = state.importRegistry,
               let vault = lib.vaults.first else { return }
@@ -246,6 +264,7 @@ struct ImportView: View {
         sessionImported.append(contentsOf: result.imported)
         sessionImportedIDs.formUnion(result.imported.map(\.item.id))
         rebuildImportedCache()
+        rebuildSentCache()
         selection.clear()
         try? state.refreshQueries()
         phase = .ready
