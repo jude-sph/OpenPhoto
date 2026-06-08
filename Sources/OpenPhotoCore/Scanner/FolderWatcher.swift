@@ -22,6 +22,7 @@ public final class FolderWatcher: @unchecked Sendable {
     }
 
     public func start() {
+        guard streamRef == nil else { return }
         var context = FSEventStreamContext()
         context.info = Unmanaged.passUnretained(self).toOpaque()
         let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
