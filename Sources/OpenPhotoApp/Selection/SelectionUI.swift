@@ -94,6 +94,33 @@ struct RubberBandModifier: ViewModifier {
     }
 }
 
+/// Two-finger pinch on a grid changes the cell-size slider value (zoom in/out),
+/// clamped to the slider's range. Apply as a simultaneous gesture so it coexists
+/// with scroll, tap, and rubber-band selection.
+struct PinchZoomGridModifier: ViewModifier {
+    @Binding var gridMinSize: CGFloat
+    let range: ClosedRange<CGFloat>
+    @State private var base: CGFloat?
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            MagnifyGesture(minimumScaleDelta: 0.01)
+                .onChanged { value in
+                    let b = base ?? gridMinSize
+                    if base == nil { base = b }
+                    gridMinSize = min(range.upperBound, max(range.lowerBound, b * value.magnification))
+                }
+                .onEnded { _ in base = nil }
+        )
+    }
+}
+
+extension View {
+    func pinchZoomGrid(_ gridMinSize: Binding<CGFloat>,
+                       in range: ClosedRange<CGFloat> = 48...220) -> some View {
+        modifier(PinchZoomGridModifier(gridMinSize: gridMinSize, range: range))
+    }
+}
+
 /// The toolbar shown while a grid is in select mode.
 struct SelectionActionBar: View {
     let count: Int

@@ -68,6 +68,7 @@ struct FolderGridView: View {
             .coordinateSpace(name: "foldergrid")
             .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
                                          space: "foldergrid", enabled: selectMode))
+            .pinchZoomGrid($state.gridMinSize)
         }
     }
 

@@ -65,6 +65,7 @@ struct TimelineView: View {
         .coordinateSpace(name: "timelinegrid")
         .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
                                      space: "timelinegrid", enabled: selectMode))
+        .pinchZoomGrid($state.gridMinSize)
     }
 
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
