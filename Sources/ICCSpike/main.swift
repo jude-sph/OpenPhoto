@@ -1,1 +1,87 @@
-print("ICC spike — implemented in Task 24")
+import Foundation
+import ImageCaptureCore
+
+final class SpikeDelegate: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
+    let deleteTest = CommandLine.arguments.contains("--delete-test")
+
+    func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice,
+                       moreComing: Bool) {
+        guard let camera = device as? ICCameraDevice else { return }
+        print("Found: \(device.name ?? "?") — opening session…")
+        camera.delegate = self
+        camera.requestOpenSession()
+    }
+
+    func device(_ device: ICDevice, didOpenSessionWithError error: (any Error)?) {
+        if let error { print("Open session FAILED: \(error)"); exit(1) }
+        print("Session open. Waiting for contents…")
+    }
+
+    func deviceDidBecomeReady(withCompleteContentCatalog camera: ICCameraDevice) {
+        let files = camera.mediaFiles ?? []
+        print("Items visible: \(files.count)")
+        for f in files.prefix(10) {
+            let sizeStr: String
+            if let file = f as? ICCameraFile {
+                sizeStr = "\(file.fileSize) bytes"
+            } else {
+                sizeStr = "? bytes"
+            }
+            print("  \(f.name ?? "?")  \(sizeStr)  locked=\(f.isLocked)")
+        }
+        guard deleteTest else {
+            print("Enumeration-only mode. Pass --delete-test to attempt deletion of the FIRST item above.")
+            exit(0)
+        }
+        guard let victim = files.first else { print("No items to test with."); exit(0) }
+        print("Attempting deletion of \(victim.name ?? "?") …")
+        camera.requestDeleteFiles([victim])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+            print("RESULT: no deletion callback within 15s — treat as NOT SUPPORTED / silently ignored.")
+            exit(2)
+        }
+    }
+
+    // Called after requestDeleteFiles: completes (legacy path)
+    func cameraDevice(_ camera: ICCameraDevice, didCompleteDeleteFilesWithError error: (any Error)?) {
+        if let error {
+            print("RESULT: deletion FAILED: \(error)")
+            exit(3)
+        } else {
+            print("RESULT: deletion SUCCEEDED (didCompleteDeleteFilesWithError, no error)")
+            exit(0)
+        }
+    }
+
+    // Required protocol stubs:
+    func deviceBrowser(_ b: ICDeviceBrowser, didRemove d: ICDevice, moreGoing: Bool) {}
+    func device(_ d: ICDevice, didCloseSessionWithError e: (any Error)?) {}
+    func didRemove(_ d: ICDevice) { print("Device removed."); exit(4) }
+    // Required in macOS 15 SDK (non-optional):
+    func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {
+        print("Access restriction removed (device unlocked).")
+    }
+    func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {
+        print("Access restriction enabled (device locked).")
+    }
+    // Optional stubs:
+    func cameraDevice(_ c: ICCameraDevice, didAdd items: [ICCameraItem]) {}
+    func cameraDevice(_ c: ICCameraDevice, didRemove items: [ICCameraItem]) {}
+    func cameraDevice(_ c: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
+    func cameraDeviceDidChangeCapability(_ c: ICCameraDevice) {}
+    func cameraDevice(_ c: ICCameraDevice, didReceiveThumbnail t: CGImage?,
+                      for i: ICCameraItem, error: (any Error)?) {}
+    func cameraDevice(_ c: ICCameraDevice, didReceiveMetadata m: [AnyHashable: Any]?,
+                      for i: ICCameraItem, error: (any Error)?) {}
+    func cameraDevice(_ c: ICCameraDevice, didReceivePTPEvent d: Data) {}
+}
+
+let delegate = SpikeDelegate()
+let browser = ICDeviceBrowser()
+browser.delegate = delegate
+// ICDeviceTypeMask and ICDeviceLocationTypeMask are NS_ENUM (not NS_OPTIONS),
+// so use raw-value OR composition: camera=0x1, local=0x100
+browser.browsedDeviceTypeMask = ICDeviceTypeMask(rawValue: 0x00000001 | 0x00000100)!
+browser.start()
+print("Browsing for USB camera devices… plug in the iPhone and UNLOCK it. Ctrl-C to quit.")
+RunLoop.main.run()

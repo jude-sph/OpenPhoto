@@ -16,7 +16,10 @@ let package = Package(
             name: "OpenPhotoApp",
             dependencies: ["OpenPhotoCore"]
         ),
-        .executableTarget(name: "ICCSpike"),
+        .executableTarget(
+            name: "ICCSpike",
+            linkerSettings: [.linkedFramework("ImageCaptureCore")]
+        ),
         .testTarget(
             name: "OpenPhotoCoreTests",
             dependencies: ["OpenPhotoCore"]
