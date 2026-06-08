@@ -9,7 +9,7 @@ struct ImportView: View {
     @State private var phase: Phase = .connecting
     @State private var source: (any ImportSource)?
     @State private var items: [ImportItem] = []
-    @State private var selection = Set<String>()
+    @State private var selection = SelectionModel()
     @State private var destination: String = ""
     @State private var newFolderName: String = ""
     @State private var sessionImported: [ImportEngine.ImportedItem] = []   // across batches
@@ -18,11 +18,11 @@ struct ImportView: View {
     @State private var showFreeUp = false
     @State private var stateStreamTask: Task<Void, Never>?
     @State private var importedIDCache = Set<String>()
-    // Selection interactions: shift-click range + rubber-band drag.
-    @State private var selectionAnchor: Int?
-    @State private var dragBaseSelection: Set<String>?
-    @State private var dragRect: CGRect?
-    @State private var cellFrames: [String: CGRect] = [:]
+
+    /// Display items (Live video halves hidden) as selectable items carrying their partner.
+    private var orderedSelectable: [SelectableItem] {
+        displayItems.map { SelectableItem(id: $0.id, partnerID: $0.livePartnerID) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,9 +58,11 @@ struct ImportView: View {
             }
             Spacer()
             Button("Select all new") {
-                selection = Set(items.filter { !isImported($0) }.map(\.id))
+                selection.clear()
+                selection.selectAll(displayItems.filter { !isImported($0) }
+                    .map { SelectableItem(id: $0.id, partnerID: $0.livePartnerID) })
             }.controlSize(.small)
-            Button("Deselect") { selection.removeAll() }.controlSize(.small)
+            Button("Deselect") { selection.clear() }.controlSize(.small)
         }
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
     }
@@ -90,32 +92,18 @@ struct ImportView: View {
                             alreadyImported: isImported(item),
                             importedThisSession: sessionImportedIDs.contains(item.id),
                             selected: selection.contains(item.id),
-                            onToggle: { handleTap(index: index, item: item) })
-                            .background(GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: CellFramesKey.self,
-                                    value: [item.id: geo.frame(in: .named("importgrid"))])
+                            onToggle: {
+                                selection.tap(index: index, items: orderedSelectable,
+                                              extendingRange: NSEvent.modifierFlags.contains(.shift))
                             })
+                            .cellFrame(item.id, in: "importgrid")
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 12)
-                .overlay {
-                    if let r = dragRect {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Theme.accent.opacity(0.12))
-                            .overlay(RoundedRectangle(cornerRadius: 2)
-                                .strokeBorder(Theme.accent.opacity(0.7), lineWidth: 1))
-                            .frame(width: r.width, height: r.height)
-                            .position(x: r.midX, y: r.midY)
-                            .allowsHitTesting(false)
-                    }
-                }
             }
             .coordinateSpace(name: "importgrid")
-            .onPreferenceChange(CellFramesKey.self) { frames in
-                Task { @MainActor in cellFrames = frames }
-            }
-            .simultaneousGesture(dragSelectGesture)
+            .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
+                                         space: "importgrid", enabled: true))
         }
     }
 
@@ -154,10 +142,6 @@ struct ImportView: View {
     }
 
     // MARK: Destination picker
-    // Note: Menu containing TextField does not work reliably on macOS — the TextField
-    // inside a Menu is not focusable. Replaced with the plan's sanctioned fallback:
-    // a Picker of existing folders + an adjacent "New folder" TextField whose submit
-    // sets the destination.
     private var destinationPicker: some View {
         HStack(spacing: 6) {
             Picker(selection: $destination) {
@@ -183,12 +167,8 @@ struct ImportView: View {
     // MARK: helpers
 
     private var displayItems: [ImportItem] {
-        // Hide the video halves of Live pairs — the photo tile represents both.
         items.filter { !($0.kind == .video && $0.livePartnerID != nil) }
     }
-    /// Count of selected items that are visible in the grid (excludes hidden Live-pair video halves).
-    /// Use this for UI labels; `selection` itself (which may contain hidden partner IDs) is still
-    /// passed to the engine so it can handle both halves correctly.
     private var selectedDisplayCount: Int {
         displayItems.filter { selection.contains($0.id) }.count
     }
@@ -204,61 +184,6 @@ struct ImportView: View {
     }
     private func isImported(_ item: ImportItem) -> Bool {
         sessionImportedIDs.contains(item.id) || importedIDCache.contains(item.id)
-    }
-    private func toggle(_ item: ImportItem) {
-        if selection.contains(item.id) { selection.remove(item.id) }
-        else { selection.insert(item.id) }
-        // Live pairs select atomically (engine enforces too; UI mirrors it).
-        if let pid = item.livePartnerID {
-            if selection.contains(item.id) { selection.insert(pid) }
-            else { selection.remove(pid) }
-        }
-    }
-
-    private func select(_ item: ImportItem) {
-        selection.insert(item.id)
-        if let pid = item.livePartnerID { selection.insert(pid) }
-    }
-
-    /// Click = toggle + set anchor. Shift-click = select range from anchor.
-    private func handleTap(index: Int, item: ImportItem) {
-        if NSEvent.modifierFlags.contains(.shift), let anchor = selectionAnchor,
-           displayItems.indices.contains(anchor) {
-            for i in min(anchor, index)...max(anchor, index) { select(displayItems[i]) }
-        } else {
-            toggle(item)
-            selectionAnchor = index
-        }
-    }
-
-    /// Rubber-band drag selection. Two-finger scroll is unaffected (it's a
-    /// separate input from a click-drag), so this coexists with scrolling.
-    private var dragSelectGesture: some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .named("importgrid"))
-            .onChanged { value in
-                if dragBaseSelection == nil {
-                    dragBaseSelection = selection
-                    selectionAnchor = nil
-                }
-                let rect = CGRect(
-                    x: min(value.startLocation.x, value.location.x),
-                    y: min(value.startLocation.y, value.location.y),
-                    width: abs(value.location.x - value.startLocation.x),
-                    height: abs(value.location.y - value.startLocation.y))
-                dragRect = rect
-                var newSel = dragBaseSelection ?? []
-                for item in displayItems {
-                    if let f = cellFrames[item.id], f.intersects(rect) {
-                        newSel.insert(item.id)
-                        if let pid = item.livePartnerID { newSel.insert(pid) }
-                    }
-                }
-                selection = newSel
-            }
-            .onEnded { _ in
-                dragBaseSelection = nil
-                dragRect = nil
-            }
     }
 
     private func connect() async {
@@ -290,11 +215,6 @@ struct ImportView: View {
         rebuildImportedCache()
     }
 
-    /// Rebuild the imported-ID cache from the registry (+ this session's imports).
-    /// Called after enumeration AND after every batch so freshly imported *and*
-    /// skipped-as-duplicate items immediately badge "already in library" and the
-    /// free-up button appears without needing to reopen the device. Avoids
-    /// per-render NSLock calls in isImported(_:).
     private func rebuildImportedCache() {
         guard let source else { return }
         var cache = Set<String>()
@@ -313,8 +233,6 @@ struct ImportView: View {
 
     private func runBatch() async {
         guard let source, let lib = state.library, let registry = state.importRegistry,
-              // LIMITATION (v1): destination always targets the primary vault (vaults.first);
-              // multi-vault routing deferred — the app is single-vault in the current shipping configuration.
               let vault = lib.vaults.first else { return }
         let batchItems = items.filter { selection.contains($0.id) }
         phase = .importing(done: 0, total: batchItems.count)
@@ -326,11 +244,8 @@ struct ImportView: View {
         lastResult = result
         sessionImported.append(contentsOf: result.imported)
         sessionImportedIDs.formUnion(result.imported.map(\.item.id))
-        // Rebuild from the registry (now updated by the engine) so BOTH imported
-        // and skipped-as-duplicate items immediately reflect "already in library"
-        // and the free-up button appears without reopening the device.
         rebuildImportedCache()
-        selection.removeAll()
+        selection.clear()
         try? state.refreshQueries()
         phase = .ready
     }
