@@ -56,6 +56,13 @@ final class AppState {
             UserDefaults.standard.set(sidebarShown, forKey: "sidebarShown")
         }
     }
+    private var _importRegistry: ImportRegistry?
+    var importRegistry: ImportRegistry? {
+        if _importRegistry == nil, let primary = library?.vaults.first {
+            _importRegistry = ImportRegistry(vault: primary)
+        }
+        return _importRegistry
+    }
     private var watcher: FolderWatcher?
 
     var configuredRoots: [URL] {
