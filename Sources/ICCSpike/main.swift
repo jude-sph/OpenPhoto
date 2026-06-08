@@ -13,7 +13,14 @@ final class SpikeDelegate: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDele
     }
 
     func device(_ device: ICDevice, didOpenSessionWithError error: (any Error)?) {
-        if let error { print("Open session FAILED: \(error)"); exit(1) }
+        if let error {
+            let nsError = error as NSError
+            if nsError.code == -9943 {   // device locked — wait for unlock, retry
+                print("Phone is locked. Waiting — unlock it and I'll retry automatically…")
+                return
+            }
+            print("Open session FAILED: \(error)"); exit(1)
+        }
         print("Session open. Waiting for contents…")
     }
 
@@ -59,7 +66,8 @@ final class SpikeDelegate: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDele
     func didRemove(_ d: ICDevice) { print("Device removed."); exit(4) }
     // Required in macOS 15 SDK (non-optional):
     func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {
-        print("Access restriction removed (device unlocked).")
+        print("Access restriction removed (device unlocked) — retrying session…")
+        (device as? ICCameraDevice)?.requestOpenSession()
     }
     func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {
         print("Access restriction enabled (device locked).")
