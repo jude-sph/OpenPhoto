@@ -14,7 +14,7 @@ public struct FolderNode: Sendable, Identifiable, Equatable {
     public var children: [FolderNode]
 }
 
-public final class LibraryService: @unchecked Sendable {
+public final class LibraryService: Sendable {
     public let vaults: [Vault]
     public let catalog: Catalog
     public let thumbnails: ThumbnailStore
@@ -193,5 +193,6 @@ public final class LibraryService: @unchecked Sendable {
         try await Task.detached(priority: .utility) { [catalog] in
             _ = try await Scanner.scan(vault: v, catalog: catalog)
         }.value
+        try ingestSidecars(vault: v)
     }
 }
