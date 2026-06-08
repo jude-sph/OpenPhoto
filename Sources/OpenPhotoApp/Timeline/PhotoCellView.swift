@@ -28,9 +28,9 @@ struct PhotoCellView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: Theme.cellRadius))
             .contentShape(Rectangle())
-            .contextMenu {
-                Button("Delete", systemImage: "trash", role: .destructive) { onDelete() }
-            }
+            // No per-cell .contextMenu: SwiftUI builds menu infrastructure per cell,
+            // which makes dense LazyVGrid scrolling janky. Delete is available in the
+            // viewer (open a photo → Delete key).
     }
 
     private var duration: String? {
