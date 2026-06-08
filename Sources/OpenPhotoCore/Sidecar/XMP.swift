@@ -42,11 +42,11 @@ public enum XMP {
             as? XMLElement else { return .empty }
         let rating = Int(attr(desc, "Rating") ?? "0") ?? 0
         let favorite = (attr(desc, "Label") == "Favorite")
-        let caption = (try? desc.nodes(forXPath:
-            ".//*[local-name()='description']//*[local-name()='li']"))?
+        let caption = try desc.nodes(forXPath:
+            ".//*[local-name()='description']//*[local-name()='li']")
             .first?.stringValue
-        let tags = ((try? desc.nodes(forXPath:
-            ".//*[local-name()='subject']//*[local-name()='li']")) ?? [])
+        let tags = try desc.nodes(forXPath:
+            ".//*[local-name()='subject']//*[local-name()='li']")
             .compactMap(\.stringValue)
         return SidecarData(rating: rating, favorite: favorite, caption: caption, tags: tags)
     }

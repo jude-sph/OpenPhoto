@@ -19,6 +19,11 @@ import Foundation
     #expect(parsed.rating == 0 && parsed.tags.isEmpty)
 }
 
+@Test func ratingIsClamped() {
+    #expect(SidecarData(rating: 9, favorite: false, caption: nil, tags: []).rating == 5)
+    #expect(SidecarData(rating: -3, favorite: false, caption: nil, tags: []).rating == 0)
+}
+
 @Test func storeWritesIntoFolderLevelOpenphotoDir() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let root = try t.sub("Pictures")
