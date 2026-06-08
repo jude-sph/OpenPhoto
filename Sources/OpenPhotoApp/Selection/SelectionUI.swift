@@ -10,12 +10,19 @@ struct CellFramesKey: PreferenceKey {
 }
 
 extension View {
-    /// Publish this cell's frame in `space` for rubber-band selection.
-    func cellFrame(_ id: String, in space: String) -> some View {
-        background(GeometryReader { geo in
-            Color.clear.preference(key: CellFramesKey.self,
-                                   value: [id: geo.frame(in: .named(space))])
-        })
+    /// Publish this cell's frame in `space` for rubber-band selection — only while
+    /// `active` (select mode). When browsing, the per-cell GeometryReader (hundreds
+    /// of them, plus the preference aggregation) is gone entirely; the outer
+    /// `.background` stays so the cell keeps its identity (no thumbnail re-decode).
+    func cellFrame(_ id: String, in space: String, active: Bool = true) -> some View {
+        background {
+            if active {
+                GeometryReader { geo in
+                    Color.clear.preference(key: CellFramesKey.self,
+                                           value: [id: geo.frame(in: .named(space))])
+                }
+            }
+        }
     }
 
     /// Selection ring + checkbox, shown only while `show` (select mode) is true.

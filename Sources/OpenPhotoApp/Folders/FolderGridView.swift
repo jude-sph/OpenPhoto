@@ -78,7 +78,7 @@ struct FolderGridView: View {
             .overlay { PhotoCellView(item: item, library: state.library!, targetPixel: thumbPixels) }
             .clipped()
             .selectionChrome(selected: selection.contains(item.instanceID), show: selectMode)
-            .cellFrame(item.instanceID, in: "foldergrid")
+            .cellFrame(item.instanceID, in: "foldergrid", active: selectMode)
             .contentShape(Rectangle())
             .onTapGesture {
                 if selectMode {
