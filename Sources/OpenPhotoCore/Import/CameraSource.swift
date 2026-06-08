@@ -9,6 +9,10 @@ import CoreGraphics
 /// queue (not the Swift concurrency executor). The continuation dance assumes
 /// single-flight fetch/delete: the ImportEngine calls them sequentially per item,
 /// so downloadContinuation and deleteContinuation are never written concurrently.
+/// Thread-safety: `lock` guards `isGone` and all three continuation properties.
+/// Discipline: copy-out the continuation, nil it, unlock, THEN resume — never
+/// resume while holding the lock to avoid re-entrancy deadlocks. In async contexts
+/// use `lock.withLock { }` (the Swift 6-safe closure form).
 public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     public let sourceKey: String
     public let displayName: String
@@ -17,6 +21,10 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
 
     public private(set) var stateStream: AsyncStream<SourceState>!
     private var stateContinuation: AsyncStream<SourceState>.Continuation!
+
+    // Guarded by `lock`:
+    private let lock = NSLock()
+    private var isGone = false
     private var readyContinuations: [CheckedContinuation<Void, Error>] = []
     private var downloadContinuation: CheckedContinuation<Void, Error>?
     private var deleteContinuation: CheckedContinuation<Void, Error>?
@@ -35,12 +43,46 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
         camera.delegate = self
     }
 
+    // MARK: - Private lock helpers (non-async, safe to call from sync ICC callbacks)
+
+    /// Atomically swap downloadContinuation for nil and return the old value.
+    private func takeDownloadContinuation() -> CheckedContinuation<Void, Error>? {
+        lock.withLock {
+            let c = downloadContinuation
+            downloadContinuation = nil
+            return c
+        }
+    }
+
+    /// Atomically swap deleteContinuation for nil and return the old value.
+    private func takeDeleteContinuation() -> CheckedContinuation<Void, Error>? {
+        lock.withLock {
+            let c = deleteContinuation
+            deleteContinuation = nil
+            return c
+        }
+    }
+
     /// Open session; resolves when content catalog is ready. ICC error -9943 (locked)
     /// surfaces as .waitingForUnlock on stateStream and the call keeps waiting —
     /// unlock auto-retries the session (spike-proven pattern, cameraDeviceDidRemoveAccessRestriction).
     public func open() async throws {
+        if lock.withLock({ isGone }) { throw URLError(.cancelled) }
+
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-            readyContinuations.append(c)
+            // Re-check under lock — didRemove could fire between the check above and now.
+            var alreadyGone = false
+            lock.withLock {
+                if isGone {
+                    alreadyGone = true
+                } else {
+                    readyContinuations.append(c)
+                }
+            }
+            if alreadyGone {
+                c.resume(throwing: URLError(.cancelled))
+                return
+            }
             stateContinuation.yield(.connected)
             camera.requestOpenSession()
         }
@@ -69,12 +111,25 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     /// Download file to `url` (directory + filename). Uses ICDownloadsDirectoryURL +
     /// ICSaveAsFilename option keys (ICDownloadOption NS_TYPED_ENUM, spike-validated).
     public func fetch(_ item: ImportItem, to url: URL) async throws {
+        if lock.withLock({ isGone }) { throw URLError(.cancelled) }
+
         guard let file = itemsByID[item.id] as? ICCameraFile else {
             throw CocoaError(.fileNoSuchFile)
         }
         let dir = url.deletingLastPathComponent()
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-            downloadContinuation = c
+            var alreadyGone = false
+            lock.withLock {
+                if isGone {
+                    alreadyGone = true
+                } else {
+                    downloadContinuation = c
+                }
+            }
+            if alreadyGone {
+                c.resume(throwing: URLError(.cancelled))
+                return
+            }
             camera.requestDownloadFile(
                 file,
                 options: [
@@ -93,13 +148,30 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     public func delete(_ items: [ImportItem]) async throws -> [DeleteResult] {
         var results: [DeleteResult] = []
         for item in items {
+            // Guard: if device is gone, mark this and all remaining items disconnected.
+            if lock.withLock({ isGone }) {
+                results.append(DeleteResult(itemID: item.id, error: "device disconnected"))
+                continue
+            }
+
             guard let file = itemsByID[item.id] else {
                 results.append(DeleteResult(itemID: item.id, error: "not found"))
                 continue
             }
             do {
                 try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-                    deleteContinuation = c
+                    var alreadyGone = false
+                    lock.withLock {
+                        if isGone {
+                            alreadyGone = true
+                        } else {
+                            deleteContinuation = c
+                        }
+                    }
+                    if alreadyGone {
+                        c.resume(throwing: URLError(.cancelled))
+                        return
+                    }
                     camera.requestDeleteFiles([file])
                 }
                 results.append(DeleteResult(itemID: item.id, error: nil))
@@ -135,12 +207,12 @@ extension CameraSource: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
     @objc public func didDownloadFile(_ file: ICCameraFile, error: (any Error)?,
                                       options: [String: Any],
                                       contextInfo: UnsafeMutableRawPointer?) {
+        let c = takeDownloadContinuation()
         if let error {
-            downloadContinuation?.resume(throwing: error)
+            c?.resume(throwing: error)
         } else {
-            downloadContinuation?.resume()
+            c?.resume()
         }
-        downloadContinuation = nil
     }
 
     /// Session open result. -9943 = device locked; yield .waitingForUnlock and
@@ -153,16 +225,24 @@ extension CameraSource: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
                 stateContinuation.yield(.waitingForUnlock)
                 return
             }
-            readyContinuations.forEach { $0.resume(throwing: error) }
-            readyContinuations.removeAll()
+            let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
+                let p = readyContinuations
+                readyContinuations.removeAll()
+                return p
+            }
+            pending.forEach { $0.resume(throwing: error) }
         }
     }
 
     /// Content catalog fully loaded — open() resolves here.
     public func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
         stateContinuation.yield(.ready)
-        readyContinuations.forEach { $0.resume() }
-        readyContinuations.removeAll()
+        let pending: [CheckedContinuation<Void, Error>] = lock.withLock {
+            let p = readyContinuations
+            readyContinuations.removeAll()
+            return p
+        }
+        pending.forEach { $0.resume() }
     }
 
     /// Device unlocked — retry session (spike-proven auto-retry pattern).
@@ -176,22 +256,40 @@ extension CameraSource: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
     }
 
     public func didRemove(_ device: ICDevice) {
-        stateContinuation.yield(.gone)
-        readyContinuations.forEach {
-            $0.resume(throwing: URLError(.cancelled))
+        // 1. Atomically mark gone and collect all pending continuations.
+        let (pendingReady, pendingDownload, pendingDelete): (
+            [CheckedContinuation<Void, Error>],
+            CheckedContinuation<Void, Error>?,
+            CheckedContinuation<Void, Error>?
+        ) = lock.withLock {
+            isGone = true
+            let r = readyContinuations
+            readyContinuations.removeAll()
+            let d = downloadContinuation
+            downloadContinuation = nil
+            let del = deleteContinuation
+            deleteContinuation = nil
+            return (r, d, del)
         }
-        readyContinuations.removeAll()
+
+        // 2. Resume everything outside the lock.
+        pendingDownload?.resume(throwing: URLError(.cancelled))
+        pendingDelete?.resume(throwing: URLError(.cancelled))
+        pendingReady.forEach { $0.resume(throwing: URLError(.cancelled)) }
+
+        // 3. Yield gone state on stream.
+        stateContinuation.yield(.gone)
     }
 
     /// Called when requestDeleteFiles completes (spike-proven delegate path).
     public func cameraDevice(_ camera: ICCameraDevice,
                              didCompleteDeleteFilesWithError error: (any Error)?) {
+        let c = takeDeleteContinuation()
         if let error {
-            deleteContinuation?.resume(throwing: error)
+            c?.resume(throwing: error)
         } else {
-            deleteContinuation?.resume()
+            c?.resume()
         }
-        deleteContinuation = nil
     }
 
     // Required stubs (macOS 15 SDK non-optional methods — signatures per spike):
