@@ -222,7 +222,16 @@ struct ImportView: View {
     private func reloadItems() async {
         guard let source else { return }
         items = (try? await source.enumerateItems()) ?? []
-        // Rebuild the imported-ID cache to avoid per-render NSLock calls in isImported(_:).
+        rebuildImportedCache()
+    }
+
+    /// Rebuild the imported-ID cache from the registry (+ this session's imports).
+    /// Called after enumeration AND after every batch so freshly imported *and*
+    /// skipped-as-duplicate items immediately badge "already in library" and the
+    /// free-up button appears without needing to reopen the device. Avoids
+    /// per-render NSLock calls in isImported(_:).
+    private func rebuildImportedCache() {
+        guard let source else { return }
         var cache = Set<String>()
         if let reg = state.importRegistry {
             for item in items {
@@ -252,8 +261,10 @@ struct ImportView: View {
         lastResult = result
         sessionImported.append(contentsOf: result.imported)
         sessionImportedIDs.formUnion(result.imported.map(\.item.id))
-        // Refresh the imported-ID cache so isImported(_:) stays accurate without per-render locks.
-        importedIDCache.formUnion(sessionImportedIDs)
+        // Rebuild from the registry (now updated by the engine) so BOTH imported
+        // and skipped-as-duplicate items immediately reflect "already in library"
+        // and the free-up button appears without reopening the device.
+        rebuildImportedCache()
         selection.removeAll()
         try? state.refreshQueries()
         phase = .ready
