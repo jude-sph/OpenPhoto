@@ -40,13 +40,13 @@ struct TimelineView: View {
                                         .font(.system(size: 12, weight: .semibold).monospacedDigit())
                                         .foregroundStyle(Theme.textFaint)
                                 }
-                                .padding(.horizontal, 4).padding(.vertical, 8)
+                                .padding(.horizontal, 16).padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Theme.windowBG.opacity(0.92))
                             }
                         }
                     }
                 }
-                .padding(.horizontal, 12)
             }
         }
     }
@@ -69,7 +69,7 @@ struct TimelineView: View {
             .onChange(of: state.grouping) { try? state.refreshQueries() }
             Image(systemName: "square.grid.2x2")
                 .font(.system(size: 11)).foregroundStyle(Theme.textFaint)
-            Slider(value: $state.gridMinSize, in: 92...220).frame(width: 120)
+            Slider(value: $state.gridMinSize, in: 48...220).frame(width: 120)
         }
         .padding(.horizontal, 16)
         .frame(height: Theme.toolbarHeight)

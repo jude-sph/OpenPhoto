@@ -30,7 +30,7 @@ final class AppState {
     var selectedFolder: String?              // dirPath in Folders view
     var openedItem: TimelineItem?            // non-nil → Viewer is presented
     var inspectorShown = true
-    var gridMinSize: CGFloat = 132           // grid-size slider, 92…220
+    var gridMinSize: CGFloat = 132           // grid-size slider, 48…220
     var sections: [TimelineSection] = []
     var flatItems: [TimelineItem] = []
     var folderTree: [FolderNode] = []

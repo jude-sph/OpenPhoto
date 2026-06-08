@@ -13,6 +13,8 @@ struct InspectorView: View {
     @State private var newTag = ""
     @State private var renaming = false
     @State private var newName = ""
+    @State private var filenameHovered = false
+    @FocusState private var renameFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -110,11 +112,23 @@ struct InspectorView: View {
                 }
 
                 section("File") {
-                    HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Folder path (everything up to last "/")
+                        let nsPath = item.relPath as NSString
+                        let folder = nsPath.deletingLastPathComponent
+                        let filename = nsPath.lastPathComponent
+                        if !folder.isEmpty {
+                            Text(folder)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Theme.textFaint)
+                        }
+                        // Filename — clickable to rename
                         if renaming {
                             TextField("Filename", text: $newName)
                                 .textFieldStyle(.plain)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(Theme.text)
+                                .focused($renameFocused)
                                 .onSubmit {
                                     let name = newName.trimmingCharacters(in: .whitespaces)
                                     guard !name.isEmpty else { renaming = false; return }
@@ -129,23 +143,21 @@ struct InspectorView: View {
                                         renaming = false
                                     }
                                 }
-                            Button("Cancel") { renaming = false }
-                                .controlSize(.mini).buttonStyle(.plain)
-                                .foregroundStyle(Theme.textFaint)
+                                .onExitCommand { renaming = false }
                         } else {
-                            Text(item.relPath)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(Theme.textDim)
-                                .textSelection(.enabled)
-                            Spacer()
-                            Button {
-                                newName = (item.relPath as NSString).lastPathComponent
-                                renaming = true
-                            } label: {
-                                Image(systemName: "pencil")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Theme.textFaint)
-                            }.buttonStyle(.plain)
+                            Text(filename)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(Theme.text)
+                                .underline(filenameHovered)
+                                .onHover { hovering in
+                                    filenameHovered = hovering
+                                    if hovering { NSCursor.iBeam.push() } else { NSCursor.pop() }
+                                }
+                                .onTapGesture {
+                                    newName = filename
+                                    renaming = true
+                                    renameFocused = true
+                                }
                         }
                     }
                     HStack {
