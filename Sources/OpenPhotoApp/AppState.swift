@@ -245,13 +245,26 @@ final class AppState {
         } catch { NSLog("restore failed: \(error)"); return false }
     }
 
-    /// A reachable on-disk file with `hash` outside `driveID` — currently the Mac's local copy.
+    /// A reachable on-disk file with `hash` outside `driveID`: prefer the Mac's local copy, else
+    /// any currently-connected canonical drive that holds it. (restore re-verifies the bytes, so
+    /// even a drive copy that is itself rotten fails safely rather than spreading corruption.)
     private func goodCopyURL(forHash hash: String, excluding driveID: String) -> URL? {
-        guard let lib = library, let inst = (try? lib.catalog.instances(forHash: hash))?
-            .first(where: { $0.vaultID != driveID }),
-              let vault = lib.vault(id: inst.vaultID) else { return nil }
-        let url = vault.absoluteURL(forRelativePath: inst.relPath)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        guard let lib = library else { return nil }
+        // 1. A local Mac instance.
+        if let inst = (try? lib.catalog.instances(forHash: hash))?.first(where: { $0.vaultID != driveID }),
+           let vault = lib.vault(id: inst.vaultID) {
+            let url = vault.absoluteURL(forRelativePath: inst.relPath)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        // 2. Another connected canonical drive that holds the hash (look up its path in its manifest).
+        for vr in canonicalVaults where vr.id != driveID && driveIsPresent(vr) {
+            guard let drive = openVault(for: vr),
+                  let entry = (try? Manifest.read(from: drive.manifestURL))?
+                      .first(where: { $0.hash.stringValue == hash }) else { continue }
+            let url = drive.absoluteURL(forRelativePath: entry.path)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
     }
 
     var configuredRoots: [URL] {
