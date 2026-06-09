@@ -274,6 +274,12 @@ public final class LibraryService: Sendable {
 
     public func restore(_ entry: BinEntry) async throws {
         try binStores[entry.vaultID]?.restore(relPath: entry.item.path)
+        try catalog.dequeuePendingDeletion(hash: entry.item.hash)
+        // Mirror the dequeue onto a Live pair (favor not-deleting: a restored still
+        // should not leave its video queued to propagate alone).
+        if let pair = try catalog.assetLivePairHash(forHash: entry.item.hash) {
+            try catalog.dequeuePendingDeletion(hash: pair)
+        }
         try await rescan(vaultID: entry.vaultID)
     }
 

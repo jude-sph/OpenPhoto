@@ -208,3 +208,19 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     #expect(queued.map(\.hash) == [item.hash])
     #expect(queued.first?.relPath == "rome/IMG_1.jpg")
 }
+
+@Test func restoreDequeuesPendingDeletion() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    try makeJPEG(at: pics.appendingPathComponent("rome/IMG_1.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let item = try #require(try lib.catalog.timelineItems().first)
+    try await lib.delete(item)
+    let entry = try #require(try lib.binItems().first)
+
+    try await lib.restore(entry)
+
+    #expect(try lib.catalog.pendingDeletions().isEmpty)   // undeleting cancels the propagation
+}
