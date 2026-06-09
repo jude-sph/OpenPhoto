@@ -18,6 +18,7 @@ struct TimelineView: View {
     }
     /// Evict/move-to-bin only applies to local files; drive-only assets are view-only.
     private var evictableItems: [TimelineItem] { selectedItems.filter { $0.driveRelPath == nil } }
+    private var rehydratableItems: [TimelineItem] { state.rehydratableItems(selectedItems) }
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
 
     var body: some View {
@@ -137,6 +138,9 @@ struct TimelineView: View {
             onDelete: { if !evictableItems.isEmpty { showDelete = true } },
             onEvict: { if !evictableItems.isEmpty { showEvict = true } },
             onForceEvict: { if !evictableItems.isEmpty { showForceEvict = true } },
+            showRehydrate: !rehydratableItems.isEmpty,
+            onRehydrate: { let items = rehydratableItems
+                           Task { _ = await state.rehydrate(items); selection.clear(); selectMode = false } },
             onDeselect: { selection.clear() },
             onDone: { selection.clear(); selectMode = false })
     }

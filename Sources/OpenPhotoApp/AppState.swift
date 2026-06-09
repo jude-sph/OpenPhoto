@@ -570,6 +570,26 @@ final class AppState {
         return presence.onlyOnThisMac(hashes: items.map(\.hash)).count
     }
 
+    /// Items in `items` that are drive-only AND whose drive is currently connected (rehydratable).
+    func rehydratableItems(_ items: [TimelineItem]) -> [TimelineItem] {
+        items.filter { item in
+            item.driveRelPath != nil &&
+            canonicalVaults.contains { $0.id == item.vaultID && driveIsPresent($0) }
+        }
+    }
+
+    @discardableResult
+    func rehydrate(_ items: [TimelineItem]) async -> RehydrateOutcome {
+        guard let lib = library else { return RehydrateOutcome() }
+        let drives = canonicalVaults.filter { driveIsPresent($0) }.compactMap { openVault(for: $0) }
+        let outcome = await Task.detached(priority: .userInitiated) {
+            (try? await lib.rehydrate(items, connectedCanonical: drives)) ?? RehydrateOutcome()
+        }.value
+        for vr in canonicalVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
+        try? refreshQueries()
+        return outcome
+    }
+
     /// Evict a selection (verified by default) — release verified local originals to the Trash.
     /// Runs the re-hash + trash off the main thread; refreshes queries + presence afterward.
     @discardableResult

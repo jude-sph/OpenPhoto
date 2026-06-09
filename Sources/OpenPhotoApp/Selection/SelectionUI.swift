@@ -174,6 +174,8 @@ struct SelectionActionBar: View {
     let onDelete: () -> Void
     let onEvict: () -> Void
     var onForceEvict: () -> Void = {}
+    var showRehydrate: Bool = false
+    var onRehydrate: () -> Void = {}
     let onDeselect: () -> Void
     let onDone: () -> Void
     var body: some View {
@@ -198,6 +200,12 @@ struct SelectionActionBar: View {
             }
             .disabled(count == 0).controlSize(.small)
             .help("Free local space — keep the copy on the drive. Doesn’t delete anywhere.")
+            if showRehydrate {
+                Button(action: onRehydrate) {
+                    Label("Rehydrate", systemImage: "arrow.down.circle.dotted")
+                }.disabled(count == 0).controlSize(.small)
+                    .help("Copy the selected drive-only originals back to this Mac.")
+            }
             Menu {
                 Button(role: .destructive, action: onForceEvict) {
                     Label("Force Evict (skip verification)…", systemImage: "exclamationmark.triangle")

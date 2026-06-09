@@ -223,7 +223,7 @@ struct InspectorView: View {
     }
 
     /// Delete / Evict for the photo on screen. Hidden for drive-only assets (view-only —
-    /// there's no local copy to bin; deleting a drive-only photo arrives in Slice 4).
+    /// there’s no local copy to bin; deleting a drive-only photo arrives in Slice 4).
     @ViewBuilder private var deleteEvictActions: some View {
         if !state.isDriveOnly(item) {
             Divider().overlay(Theme.hairline)
@@ -238,6 +238,14 @@ struct InspectorView: View {
                 }
                 .controlSize(.small)
                 .help("Free local space — keep the copy on the drive. Doesn’t delete anywhere.")
+                Spacer()
+            }
+        } else if state.rehydratableItems([item]).count == 1 {
+            Divider().overlay(Theme.hairline)
+            HStack(spacing: 8) {
+                Button { Task { _ = await state.rehydrate([item]) } } label: {
+                    Label("Rehydrate", systemImage: "arrow.down.circle.dotted")
+                }.controlSize(.small)
                 Spacer()
             }
         }
