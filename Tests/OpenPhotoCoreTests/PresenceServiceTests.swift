@@ -46,7 +46,9 @@ import Foundation
     let imports = ImportRegistry(vault: v)
     let h = "sha256:" + String(repeating: "a", count: 64)
     try c.registerVault(id: "v-canon", role: "canonical", rootPath: "/Volumes/Canonical")
-    try c.replaceVaultPresence(vaultID: "v-canon", hashes: [h])
+    try c.replaceVaultPresence(vaultID: "v-canon", entries: [
+        VaultPresenceEntry(hash: h, relPath: "a.jpg", dirPath: "", size: 1, driveRelPath: "Pictures/a.jpg"),
+    ])
 
     let svc = PresenceService(catalog: c, imports: imports, sends: sends, devices: devices)
     let locs = svc.locations(forHash: h)

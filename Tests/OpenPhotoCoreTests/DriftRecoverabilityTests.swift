@@ -10,7 +10,9 @@ import Foundation
     let h = "sha256:" + String(repeating: "a", count: 64)
     // The hash also lives on another canonical drive (verified present there).
     try c.registerVault(id: "v-other", role: "canonical", rootPath: "/Volumes/Other")
-    try c.replaceVaultPresence(vaultID: "v-other", hashes: [h])
+    try c.replaceVaultPresence(vaultID: "v-other", entries: [
+        VaultPresenceEntry(hash: h, relPath: "a.jpg", dirPath: "", size: 1, driveRelPath: "Pictures/a.jpg"),
+    ])
     let presence = PresenceService(catalog: c, imports: imports, sends: sends, devices: devices)
 
     let r = DriftReconciler()
@@ -29,7 +31,9 @@ import Foundation
     // The hash is present ONLY on the drive we're repairing — it must NOT count as its own
     // recovery source (a corrupt-only-copy is lost, not "restorable from itself").
     try c.registerVault(id: "v-this", role: "canonical", rootPath: "/Volumes/This")
-    try c.replaceVaultPresence(vaultID: "v-this", hashes: [h])
+    try c.replaceVaultPresence(vaultID: "v-this", entries: [
+        VaultPresenceEntry(hash: h, relPath: "a.jpg", dirPath: "", size: 1, driveRelPath: "Pictures/a.jpg"),
+    ])
     let presence = PresenceService(catalog: c, imports: imports, sends: sends, devices: devices)
     #expect(DriftReconciler().recoverability(forHash: h, excludingVault: "v-this",
                                              presence: presence) == .lostNoCopy)

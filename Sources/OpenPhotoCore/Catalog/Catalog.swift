@@ -1,6 +1,20 @@
 import Foundation
 import GRDB
 
+/// A cached mirror of one entry in a drive's manifest, widened with path + size data.
+/// Stored in `vault_presence` (rebuildable cache; dropping on migration is safe).
+public struct VaultPresenceEntry: Sendable, Equatable {
+    public let hash: String
+    public let relPath: String      // Mac-aligned (for folder grouping/display)
+    public let dirPath: String      // Mac-aligned dirname
+    public let size: Int64
+    public let driveRelPath: String // raw path on the drive (for reading full-res)
+    public init(hash: String, relPath: String, dirPath: String, size: Int64, driveRelPath: String) {
+        self.hash = hash; self.relPath = relPath; self.dirPath = dirPath
+        self.size = size; self.driveRelPath = driveRelPath
+    }
+}
+
 public final class Catalog: Sendable {
     public let dbQueue: DatabaseQueue
 
@@ -56,6 +70,20 @@ public final class Catalog: Sendable {
                 t.primaryKey(["vaultID", "hash"])
             }
         }
+        migrator.registerMigration("v3") { db in
+            // vault_presence is a rebuildable cache — drop and recreate widened with
+            // path/size data so browse queries can show drive-only assets in folders.
+            try db.execute(sql: "DROP TABLE IF EXISTS vault_presence")
+            try db.create(table: "vault_presence") { t in
+                t.column("vaultID", .text).notNull()
+                t.column("hash", .text).notNull().indexed()
+                t.column("relPath", .text).notNull()
+                t.column("dirPath", .text).notNull().indexed()
+                t.column("size", .integer).notNull()
+                t.column("driveRelPath", .text).notNull()
+                t.primaryKey(["vaultID", "hash"])
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -76,13 +104,28 @@ public final class Catalog: Sendable {
         }
     }
 
-    /// Full swap of a vault's presence set (mirrors `replaceInstances`).
-    public func replaceVaultPresence(vaultID: String, hashes: [String]) throws {
+    /// Full swap of a vault's presence set — stores path/size data alongside the hash
+    /// so browse queries can surface drive-only assets in folder views.
+    public func replaceVaultPresence(vaultID: String, entries: [VaultPresenceEntry]) throws {
         try dbQueue.write { db in
             try db.execute(sql: "DELETE FROM vault_presence WHERE vaultID = ?", arguments: [vaultID])
-            for h in hashes {
-                try db.execute(sql: "INSERT OR IGNORE INTO vault_presence (vaultID, hash) VALUES (?, ?)",
-                               arguments: [vaultID, h])
+            for e in entries {
+                try db.execute(sql: """
+                    INSERT OR IGNORE INTO vault_presence (vaultID, hash, relPath, dirPath, size, driveRelPath)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """, arguments: [vaultID, e.hash, e.relPath, e.dirPath, e.size, e.driveRelPath])
+            }
+        }
+    }
+
+    /// Read all presence entries for a vault (for browse queries that need path data).
+    public func vaultPresenceRows(forVault vaultID: String) throws -> [VaultPresenceEntry] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT hash, relPath, dirPath, size, driveRelPath FROM vault_presence WHERE vaultID = ?
+                """, arguments: [vaultID]).map {
+                VaultPresenceEntry(hash: $0["hash"], relPath: $0["relPath"], dirPath: $0["dirPath"],
+                                   size: $0["size"], driveRelPath: $0["driveRelPath"])
             }
         }
     }

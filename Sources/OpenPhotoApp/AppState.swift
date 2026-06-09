@@ -166,12 +166,25 @@ final class AppState {
         alert.runModal()
     }
 
+    /// Build presence entries for a drive from its manifest, restricted to `hashes` when given.
+    private func presenceEntries(forDrive drive: Vault, limitedTo hashes: Set<String>?) -> [VaultPresenceEntry] {
+        let bases = (library?.vaults ?? []).map { $0.rootURL.lastPathComponent }
+        let entries = (try? Manifest.read(from: drive.manifestURL)) ?? []
+        return entries.compactMap { e in
+            if let hs = hashes, !hs.contains(e.hash.stringValue) { return nil }
+            let mac = DrivePathMap.driveToMacRelPath(e.path, sourceBasenames: bases)
+            return VaultPresenceEntry(hash: e.hash.stringValue, relPath: mac,
+                                      dirPath: (mac as NSString).deletingLastPathComponent,
+                                      size: e.size, driveRelPath: e.path)
+        }
+    }
+
     /// Re-read a drive's manifest into vault_presence, then rebuild the badge cache as the
     /// union across all canonical vaults (so refreshing one drive never wipes another's badges).
     func refreshCanonicalPresence(driveVault: Vault) throws {
         guard let lib = library else { return }
-        let hashes = (try? Manifest.read(from: driveVault.manifestURL))?.map { $0.hash.stringValue } ?? []
-        try lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID, hashes: hashes)
+        let entries = presenceEntries(forDrive: driveVault, limitedTo: nil)
+        try lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID, entries: entries)
         reloadCanonicalPresence()
     }
 
@@ -205,7 +218,8 @@ final class AppState {
             DriftReconciler().annotateRecoverability(&report, driveID: driveVault.descriptor.vaultID, presence: p)
         }
         try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
-                                              hashes: Array(report.presentHashes))
+                                              entries: presenceEntries(forDrive: driveVault,
+                                                                       limitedTo: report.presentHashes))
         reloadCanonicalPresence()
         driveDrift[driveVault.descriptor.vaultID] = report
         return report
@@ -223,7 +237,8 @@ final class AppState {
             DriftReconciler().annotateRecoverability(&enriched, driveID: driveVault.descriptor.vaultID, presence: p)
         }
         try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
-                                              hashes: Array(enriched.presentHashes))
+                                              entries: presenceEntries(forDrive: driveVault,
+                                                                       limitedTo: enriched.presentHashes))
         reloadCanonicalPresence()
         driveDrift[driveVault.descriptor.vaultID] = enriched
         return enriched
@@ -241,7 +256,9 @@ final class AppState {
             if let p = presenceService() {
                 DriftReconciler().annotateRecoverability(&report, driveID: vr.id, presence: p)
             }
-            try? library?.catalog.replaceVaultPresence(vaultID: vr.id, hashes: Array(report.presentHashes))
+            try? library?.catalog.replaceVaultPresence(vaultID: vr.id,
+                                                       entries: presenceEntries(forDrive: drive,
+                                                                                limitedTo: report.presentHashes))
             driveDrift[vr.id] = report
         }
         reloadCanonicalPresence()

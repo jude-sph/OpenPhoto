@@ -21,9 +21,14 @@ private func makeCatalog(_ t: TestDirs) throws -> Catalog {
     let c = try makeCatalog(t)
     let h1 = "sha256:" + String(repeating: "1", count: 64)
     let h2 = "sha256:" + String(repeating: "2", count: 64)
-    try c.replaceVaultPresence(vaultID: "v-canon", hashes: [h1, h2])
+    try c.replaceVaultPresence(vaultID: "v-canon", entries: [
+        VaultPresenceEntry(hash: h1, relPath: "a.jpg", dirPath: "", size: 1, driveRelPath: "Pictures/a.jpg"),
+        VaultPresenceEntry(hash: h2, relPath: "b.jpg", dirPath: "", size: 2, driveRelPath: "Pictures/b.jpg"),
+    ])
     #expect(try c.vaultPresenceHashes(forVault: "v-canon") == [h1, h2])
-    try c.replaceVaultPresence(vaultID: "v-canon", hashes: [h1])   // full swap, not append
+    try c.replaceVaultPresence(vaultID: "v-canon", entries: [
+        VaultPresenceEntry(hash: h1, relPath: "a.jpg", dirPath: "", size: 1, driveRelPath: "Pictures/a.jpg"),
+    ])   // full swap, not append
     #expect(try c.vaultPresenceHashes(forVault: "v-canon") == [h1])
     #expect(try c.vaultPresenceHashes(forVault: "absent").isEmpty)
 }
