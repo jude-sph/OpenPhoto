@@ -111,6 +111,10 @@ struct InspectorView: View {
                             locationRow(loc)
                         }
                     }
+                    // At-a-glance "not backed up": flag absence from the canonical drive.
+                    if !state.canonicalVaults.isEmpty && !state.isBackedUpOnCanonical(item) {
+                        notOnCanonicalRow()
+                    }
                 }
 
                 section("File") {
@@ -208,6 +212,16 @@ struct InspectorView: View {
             }
             Spacer()
             confidenceBadge(loc.confidence)
+        }
+    }
+
+    @ViewBuilder private func notOnCanonicalRow() -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "externaldrive.trianglebadge.exclamationmark")
+                .foregroundStyle(.orange).frame(width: 16)
+            Text("Not on the canonical drive")
+                .font(.system(size: 12.5)).foregroundStyle(.orange)
+            Spacer()
         }
     }
 
