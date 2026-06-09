@@ -142,14 +142,28 @@ final class AppState {
             // one of their own source roots). Adopting it would diverge catalog/disk role and
             // could make the engine try to sync a vault onto itself.
             guard vault.descriptor.role == .canonical else {
-                NSLog("addDrive: '\(url.lastPathComponent)' already holds a \(vault.descriptor.role.rawValue) vault — not adopting as canonical")
+                driveAlert("Can’t use this folder",
+                    "“\(url.lastPathComponent)” already contains a \(vault.descriptor.role.rawValue) library vault. Choose an empty folder or a drive dedicated to your canonical library.")
+                return
+            }
+            // Already adopted? Same vault_id means it's the same drive.
+            if canonicalVaults.contains(where: { $0.id == vault.descriptor.vaultID }) {
+                driveAlert("Already added",
+                    "“\(url.lastPathComponent)” is already one of your drives.")
                 return
             }
             try lib.catalog.registerVault(id: vault.descriptor.vaultID,
                                           role: vault.descriptor.role.rawValue, rootPath: url.path)
             reloadDrives()
             try refreshCanonicalPresence(driveVault: vault)
-        } catch { NSLog("addDrive failed: \(error)") }
+        } catch { driveAlert("Couldn’t add drive", error.localizedDescription) }
+    }
+
+    private func driveAlert(_ title: String, _ message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.runModal()
     }
 
     /// Re-read a drive's manifest into vault_presence, then rebuild the badge cache as the
