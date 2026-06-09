@@ -272,3 +272,23 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     // Evict releases the local copy but must NEVER propose deleting the drive copy.
     #expect(try lib.catalog.pendingDeletions().isEmpty)
 }
+
+@Test func batchDeleteEnqueuesAllAndReturnsCount() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    // Distinct EXIF dates → distinct bytes → distinct hashes (else they'd be one asset).
+    try makeJPEG(at: pics.appendingPathComponent("a/IMG_1.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    try makeJPEG(at: pics.appendingPathComponent("a/IMG_2.jpg").creatingParent(),
+                 dateTimeOriginal: "2023:01:02 09:00:00", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let items = try lib.catalog.timelineItems()
+    #expect(items.count == 2)
+
+    let n = try await lib.delete(items)
+
+    #expect(n == 2)
+    #expect(Set(try lib.catalog.pendingDeletions().map(\.relPath)) == ["a/IMG_1.jpg", "a/IMG_2.jpg"])
+    #expect(try lib.catalog.timelineItems().isEmpty)   // both binned, gone from the library
+}

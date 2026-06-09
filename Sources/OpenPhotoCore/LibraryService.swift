@@ -219,20 +219,43 @@ public final class LibraryService: Sendable {
     }
 
     public func delete(_ item: TimelineItem) async throws {
-        guard let bin = binStores[item.vaultID] else { return }
+        _ = try await delete([item])
+    }
+
+    /// Delete a selection: move each file (and its Live-pair video) into the local bin
+    /// (`origin: .user`) AND enqueue a pending deletion so the removal can later be reviewed
+    /// for propagation to a drive. Resilient: a file already gone is skipped, not fatal. One
+    /// rescan per vault touched. Returns the count actually binned. Unlike `evict`, this records
+    /// the intent to remove the photo everywhere; `evict` (which never enqueues) only frees the
+    /// local copy of something kept on a drive.
+    @discardableResult
+    public func delete(_ items: [TimelineItem]) async throws -> Int {
+        var byVault: [String: [TimelineItem]] = [:]
+        for it in items { byVault[it.vaultID, default: []].append(it) }
+        var deleted = 0
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        try bin.moveToBin(relPath: item.relPath,
-                          hash: ContentHash(stringValue: item.hash), origin: .user)
-        try catalog.enqueuePendingDeletion(hash: item.hash, relPath: item.relPath, deletedAtMs: nowMs)
-        // If this is a Live Photo, the paired video goes too — and is queued too.
-        if let pairHash = item.livePairHash,
-           let pairInstance = try catalog.instanceItem(hash: pairHash, vaultID: item.vaultID) {
-            try bin.moveToBin(relPath: pairInstance.relPath,
-                              hash: ContentHash(stringValue: pairHash), origin: .user)
-            try catalog.enqueuePendingDeletion(hash: pairHash, relPath: pairInstance.relPath,
-                                               deletedAtMs: nowMs)
+        for (vaultID, group) in byVault {
+            guard let bin = binStores[vaultID] else { continue }
+            var n = 0
+            for item in group {
+                do {
+                    try bin.moveToBin(relPath: item.relPath,
+                                      hash: ContentHash(stringValue: item.hash), origin: .user)
+                } catch { continue }   // primary already gone / unreadable — skip, not counted
+                try catalog.enqueuePendingDeletion(hash: item.hash, relPath: item.relPath, deletedAtMs: nowMs)
+                n += 1
+                // Best-effort: the Live pair's video is binned + queued alongside it.
+                if let pairHash = item.livePairHash,
+                   let pairInstance = try? catalog.instanceItem(hash: pairHash, vaultID: vaultID) {
+                    try? bin.moveToBin(relPath: pairInstance.relPath,
+                                       hash: ContentHash(stringValue: pairHash), origin: .user)
+                    try? catalog.enqueuePendingDeletion(hash: pairHash, relPath: pairInstance.relPath,
+                                                        deletedAtMs: nowMs)
+                }
+            }
+            if n > 0 { try await rescan(vaultID: vaultID); deleted += n }
         }
-        try await rescan(vaultID: item.vaultID)
+        return deleted
     }
 
     /// Evict a selection to the bin (vault-format §8). The still is the unit of
