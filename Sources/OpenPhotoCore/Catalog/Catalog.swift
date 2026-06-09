@@ -104,6 +104,15 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// Forget a vault: drop its registration + its presence rows. Files on disk are untouched;
+    /// the catalog is rebuildable, so any drive-only AssetRecords it left become harmless orphans.
+    public func unregisterVault(id: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM vaults WHERE id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM vault_presence WHERE vaultID = ?", arguments: [id])
+        }
+    }
+
     /// Full swap of a vault's presence set — stores path/size data alongside the hash
     /// so browse queries can surface drive-only assets in folder views.
     public func replaceVaultPresence(vaultID: String, entries: [VaultPresenceEntry]) throws {

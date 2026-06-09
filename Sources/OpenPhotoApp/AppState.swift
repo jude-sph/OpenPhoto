@@ -121,9 +121,47 @@ final class AppState {
 
     private(set) var canonicalPresence: Set<String> = []
 
-    func driveIsPresent(_ vr: VaultRecord) -> Bool {
+    static let ejectedDefaultsKey = "ejectedDrives"
+    /// Drives the user manually "ejected" — treated as not-present even though the folder is still
+    /// on disk (folder/network drives never physically unmount). Persisted across launches.
+    private(set) var ejectedDrives: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: AppState.ejectedDefaultsKey) ?? [])
+
+    func driveIsEjected(_ vr: VaultRecord) -> Bool { ejectedDrives.contains(vr.id) }
+
+    /// The drive's folder is reachable on disk right now (independent of the eject flag).
+    func driveFolderExists(_ vr: VaultRecord) -> Bool {
         var isDir: ObjCBool = false
         return FileManager.default.fileExists(atPath: vr.rootPath, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    /// "Connected": reachable AND not ejected. Ejected or missing folders read as not present.
+    func driveIsPresent(_ vr: VaultRecord) -> Bool {
+        !ejectedDrives.contains(vr.id) && driveFolderExists(vr)
+    }
+
+    func ejectDrive(_ vr: VaultRecord) {
+        ejectedDrives.insert(vr.id); persistEjected()
+    }
+
+    func reconnectDrive(_ vr: VaultRecord) {
+        ejectedDrives.remove(vr.id); persistEjected()
+        Task { await autoScanConnectedDrives() }   // re-scan the now-available drive
+    }
+
+    /// Forget a drive entirely: unregister it + drop its presence. The files on the drive are NOT
+    /// touched; you can add it again later. Photos that lived only on it stop showing.
+    func forgetDrive(_ vr: VaultRecord) {
+        try? library?.catalog.unregisterVault(id: vr.id)
+        ejectedDrives.remove(vr.id); persistEjected()
+        driveDrift[vr.id] = nil
+        reloadDrives()
+        reloadCanonicalPresence()
+        try? refreshQueries()
+    }
+
+    private func persistEjected() {
+        UserDefaults.standard.set(Array(ejectedDrives), forKey: Self.ejectedDefaultsKey)
     }
 
     func isBackedUpOnCanonical(_ item: TimelineItem) -> Bool { canonicalPresence.contains(item.hash) }

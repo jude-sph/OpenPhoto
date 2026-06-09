@@ -32,3 +32,15 @@ private func makeCatalog(_ t: TestDirs) throws -> Catalog {
     #expect(try c.vaultPresenceHashes(forVault: "v-canon") == [h1])
     #expect(try c.vaultPresenceHashes(forVault: "absent").isEmpty)
 }
+
+@Test func unregisterVaultRemovesItAndItsPresence() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let c = try makeCatalog(t)
+    let h = "sha256:" + String(repeating: "a", count: 64)
+    try c.registerVault(id: "v-canon", role: "canonical", rootPath: "/Volumes/Canonical")
+    try c.replaceVaultPresence(vaultID: "v-canon", entries: [
+        VaultPresenceEntry(hash: h, relPath: "a.jpg", dirPath: "", size: 1, driveRelPath: "Pictures/a.jpg")])
+    try c.unregisterVault(id: "v-canon")
+    #expect(try c.registeredVaults().contains { $0.id == "v-canon" } == false)
+    #expect(try c.vaultPresenceHashes(forVault: "v-canon").isEmpty)
+}
