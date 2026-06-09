@@ -52,4 +52,30 @@ public struct DriftReconciler: Sendable {
         report.changed.sort { $0.relPath < $1.relPath }
         return report
     }
+
+    /// Is `hash` restorable from somewhere other than `excludingVault`?
+    public func recoverability(forHash hash: String, excludingVault driveID: String,
+                               presence: PresenceService) -> Recoverability {
+        for loc in presence.locations(forHash: hash) where loc.confidence == .confirmed {
+            switch loc.place {
+            case .thisMac: return .recoverable(source: "This Mac")
+            case .device(let key, let name, _): if key != driveID { return .recoverable(source: name) }
+            }
+        }
+        return .lostNoCopy
+    }
+
+    /// Fill in `recoverability` on every missing/changed/corrupt finding in `report`.
+    public func annotateRecoverability(_ report: inout DriftReport, driveID: String,
+                                       presence: PresenceService) {
+        func annotate(_ list: inout [DriftFinding]) {
+            list = list.map { f in
+                guard let h = f.recordedHash else { return f }
+                var c = f
+                c.recoverability = recoverability(forHash: h, excludingVault: driveID, presence: presence)
+                return c
+            }
+        }
+        annotate(&report.missing); annotate(&report.changed); annotate(&report.corrupt)
+    }
 }
