@@ -4,6 +4,9 @@ import OpenPhotoCore
 struct DrivesView: View {
     @Bindable var state: AppState
     @State private var syncDrive: Vault?
+    @State private var driftDrive: Vault?
+    @State private var driftReport: DriftReport?
+    @State private var verifying = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,6 +29,9 @@ struct DrivesView: View {
         .sheet(item: $syncDrive) { drive in
             SyncPlanSheet(state: state, drive: drive)
         }
+        .sheet(item: $driftDrive) { drive in
+            DriftReviewSheet(state: state, drive: drive, report: driftReport ?? DriftReport())
+        }
     }
 
     @ViewBuilder private func row(_ vr: VaultRecord) -> some View {
@@ -41,6 +47,18 @@ struct DrivesView: View {
             Button("Sync…") {
                 syncDrive = state.openVault(for: vr)
             }.controlSize(.small).disabled(!present)
+            Button("Check") {
+                if let v = state.openVault(for: vr) { driftReport = state.driftScan(v); driftDrive = v }
+            }.controlSize(.small).disabled(!present)
+            Button("Verify Integrity") {
+                if let v = state.openVault(for: vr) {
+                    verifying = true
+                    Task {
+                        let r = await state.verifyIntegrity(v) { _ in }
+                        driftReport = r; driftDrive = v; verifying = false
+                    }
+                }
+            }.controlSize(.small).disabled(!present || verifying)
         }
         .padding(.vertical, 4)
     }
