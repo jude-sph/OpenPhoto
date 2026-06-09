@@ -128,6 +128,8 @@ Backfill estimate for current library on M4 Pro: hashing minutes; thumbnails ~1�
 
 **UI reference:** the authoritative visual design is the Claude Design handoff in `UI-Design/design_handoff_openphoto/` (interactive prototype: `OpenPhoto.html`; tokens/screens documented in its `README.md`). Recreate natively in SwiftUI — never embed the HTML. Deltas where this spec overrides the mockup: (a) bin holds items indefinitely until manually emptied — the mockup's "30 days" copy is wrong (auto-empty may become an opt-in setting later); (b) the "Albums" sidebar section is out of scope — folders, People, and Map are the organizational surfaces; (c) the sync screen's "Schedule for later" button is dropped.
 
+**Known UI issues (to polish, surfaced 2026-06-09):** the vertical divider between the left sidebar and the content area doesn't reach the top of the window — it stops below the title-bar / traffic-light region, leaving a short gap at the top edge of the divider.
+
 ## Changelog
 
 - **2026-06-07** — Initial approved design. Added UI reference section after Claude Design handoff landed in `UI-Design/`, with three mockup-vs-spec deltas resolved in the spec's favor.
@@ -171,6 +173,7 @@ Each phase is its own implementation plan and ends with a usable app:
 - **Video-only filter** — a quick filter in the timeline (and folder view) to show only videos. Small Browse-layer addition; complements the existing photo/video split already tracked per asset (`MediaKind`).
 - **macOS Finder tag interoperability** — make OpenPhoto's tags correspond to macOS Finder tags, not only the XMP tags it uses today. Two directions: **read** tags a user added in Finder, and **write** OpenPhoto tags so they're readable in Finder. *Technical note for whoever designs this:* OpenPhoto currently stores tags as XMP `dc:subject` in sidecars. Finder tags are a different mechanism — they live in the extended attribute `com.apple.metadata:_kMDItemUserTags` (surfaced via Spotlight's `kMDItemUserTags`), not in XMP. So this needs a design decision: bridge/sync the two, or treat Finder tags as a first-class source. Watch the sovereignty invariant — Finder tags are an OS-managed xattr, so syncing them to/from the XMP sidecars (which remain the portable record) is the likely approach.
 - **Tag search in timeline & folder views** — search/filter assets by tag in both browse surfaces. *Overlap note:* this is closely related to Phase 4's unified search (Intelligence) — a basic tag-only search could land in **Phase 4** alongside search rather than waiting for Phase 5; worth deciding when Phase 4 is planned.
+- **Map in the Library sidebar** — a **Map** entry in the left navbar's Library group (alongside Timeline / Folders / Drives / Bin) that plots geotagged photos. *Overlap note:* a Map view is already slated for **Phase 4 (Intelligence)** as part of the pipeline/search work — this records it as a concrete sidebar surface under Library; reconcile the two when Phase 4 is planned (it may simply be the Phase 4 Map, confirmed to live under Library).
 
 ## 11. Known risks & spikes
 
