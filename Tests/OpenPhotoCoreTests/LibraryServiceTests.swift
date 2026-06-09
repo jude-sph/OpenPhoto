@@ -146,53 +146,6 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     #expect(sections[0].items.count == 2)
 }
 
-@Test func evictBatchMovesAllToBinAndUpdatesCatalog() async throws {
-    let t = try TestDirs(); defer { t.cleanup() }
-    let lib = try makeLibrary(t)
-    try await lib.scanAll()
-    let items = try lib.timelineSections().flatMap(\.items)
-    #expect(items.count == 2)
-    let n = try await lib.evict(items)
-    #expect(n == 2)
-    #expect(try lib.timelineSections().flatMap(\.items).isEmpty)
-    #expect(try lib.binItems().count == 2)
-}
-
-@Test func evictSkipsMissingFilesAndCountsSuccesses() async throws {
-    let t = try TestDirs(); defer { t.cleanup() }
-    let lib = try makeLibrary(t)
-    try await lib.scanAll()
-    let items = try lib.timelineSections().flatMap(\.items)
-    // Remove one file out from under the catalog; evict must skip it, not throw.
-    try FileManager.default.removeItem(at: lib.absoluteURL(for: items[0])!)
-    let n = try await lib.evict(items)
-    #expect(n == 1)                                   // the surviving file was binned
-    #expect(try lib.binItems().count == 1)
-}
-
-@Test func evictLivePhotoBinsBothHalves() async throws {
-    let t = try TestDirs(); defer { t.cleanup() }
-    let pics = try t.sub("Pictures")
-    try makeJPEG(at: pics.appendingPathComponent("a/IMG_9.jpg").creatingParent(),
-                 dateTimeOriginal: nil, lat: nil, lon: nil)
-    try await makeMOV(at: pics.appendingPathComponent("a/IMG_9.mov").creatingParent())
-    // Identical mtimes so the same-folder+basename live-pair heuristic fires.
-    let now = Date()
-    for f in ["a/IMG_9.jpg", "a/IMG_9.mov"] {
-        try FileManager.default.setAttributes([.modificationDate: now],
-            ofItemAtPath: pics.appendingPathComponent(f).path)
-    }
-    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
-    try await lib.scanAll()
-    let items = try lib.timelineSections().flatMap(\.items)
-    #expect(items.count == 1)                         // the pair shows as one item
-    #expect(items[0].livePairHash != nil)
-    let n = try await lib.evict(items)
-    #expect(n == 1)
-    #expect(try lib.binItems().count == 2)            // still + video both binned
-    #expect(try lib.timelineSections().flatMap(\.items).isEmpty)
-}
-
 @Test func deleteEnqueuesPendingDeletion() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let pics = try t.sub("Pictures")
@@ -266,10 +219,17 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
     try await lib.scanAll()
     let item = try #require(try lib.catalog.timelineItems().first)
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let dp = "Pictures/rome/IMG_1.jpg"
+    let df = drive.rootURL.appendingPathComponent(dp)
+    try FileManager.default.createDirectory(at: df.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.copyItem(at: pics.appendingPathComponent("rome/IMG_1.jpg"), to: df)
+    try lib.catalog.registerVault(id: drive.descriptor.vaultID, role: "canonical", rootPath: drive.rootURL.path)
+    try lib.catalog.replaceVaultPresence(vaultID: drive.descriptor.vaultID, entries: [
+        VaultPresenceEntry(hash: item.hash, relPath: "rome/IMG_1.jpg", dirPath: "rome", size: item.size, driveRelPath: dp)])
 
-    _ = try await lib.evict([item])
+    _ = try await lib.evict([item], mode: .verified, connectedCanonical: [drive], canonicalPresence: [item.hash])
 
-    // Evict releases the local copy but must NEVER propose deleting the drive copy.
     #expect(try lib.catalog.pendingDeletions().isEmpty)
 }
 

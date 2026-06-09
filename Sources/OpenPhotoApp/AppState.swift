@@ -570,15 +570,29 @@ final class AppState {
         return presence.onlyOnThisMac(hashes: items.map(\.hash)).count
     }
 
-    /// Evict a selection to the bin, then refresh all queries.
-    func evict(_ items: [TimelineItem]) async {
-        guard let library else { return }
+    /// Evict a selection (verified by default) — release verified local originals to the Trash.
+    /// Runs the re-hash + trash off the main thread; refreshes queries + presence afterward.
+    @discardableResult
+    func evict(_ items: [TimelineItem], mode: EvictMode = .verified) async -> EvictOutcome {
+        guard let lib = library else { return EvictOutcome() }
+        let drives = canonicalVaults.filter { driveIsPresent($0) }.compactMap { openVault(for: $0) }
+        let presence = canonicalPresence
+        var outcome = EvictOutcome()
         do {
-            _ = try await library.evict(items)
-            try refreshQueries()
+            outcome = try await Task.detached(priority: .userInitiated) {
+                try await lib.evict(items, mode: mode, connectedCanonical: drives, canonicalPresence: presence)
+            }.value
         } catch {
-            NSAlert(error: error).runModal()
+            // Files may already be in the Trash but the bookkeeping rescan threw — reconcile each
+            // touched local vault so the catalog never shows a trashed file as still-local.
+            for vid in Set(items.filter { $0.driveRelPath == nil }.map(\.vaultID)) {
+                try? await lib.rescan(vaultID: vid)
+            }
         }
+        // driftScan re-derives canonical presence first; refreshQueries then reads the fresh state.
+        for vr in canonicalVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
+        try? refreshQueries()
+        return outcome
     }
 
     /// Delete a selection: move to the bin AND record the intent so it can be propagated to
