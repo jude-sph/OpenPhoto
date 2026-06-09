@@ -103,6 +103,9 @@ public struct TimelineItem: Codable, FetchableRecord, Sendable, Equatable {
     public var relPath: String
     public var dirPath: String
     public var size: Int64
+    /// Non-nil for drive-only assets: raw path on the drive (used to read full-res
+    /// when the drive is connected). Nil for local instances.
+    public var driveRelPath: String?
 
     /// Unique per physical instance (the same photo can exist in two folders →
     /// same `hash`, different path). Use this — not `hash` — as a ForEach id, or
