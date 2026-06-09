@@ -192,6 +192,35 @@ public final class Catalog: Sendable {
         }
     }
 
+    // MARK: Eligibility-support accessors (Slice 3 — Task 2)
+
+    /// Distinct hashes that have a LOCAL instance (drive presence lives in vault_presence,
+    /// never in `instances`). Used by deletion eligibility's "no local copy remains" rule.
+    public func instanceHashes() throws -> Set<String> {
+        try dbQueue.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT DISTINCT hash FROM instances"))
+        }
+    }
+
+    /// The paired-video hash for a Live Photo still (nil otherwise) — lets restore mirror
+    /// the dequeue onto the pair.
+    public func assetLivePairHash(forHash hash: String) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT livePairHash FROM assets WHERE hash = ?",
+                                arguments: [hash])
+        }
+    }
+
+    /// Drop specific hashes from one vault's presence mirror (after they're propagated off it).
+    public func removeVaultPresence(vaultID: String, hashes: [String]) throws {
+        guard !hashes.isEmpty else { return }
+        try dbQueue.write { db in
+            let marks = databaseQuestionMarks(count: hashes.count)
+            try db.execute(sql: "DELETE FROM vault_presence WHERE vaultID = ? AND hash IN (\(marks))",
+                           arguments: StatementArguments([vaultID] + hashes))
+        }
+    }
+
     public func upsert(assets: [AssetRecord]) throws {
         try dbQueue.write { db in for a in assets { try a.upsert(db) } }
     }
