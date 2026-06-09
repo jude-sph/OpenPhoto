@@ -136,6 +136,8 @@ Backfill estimate for current library on M4 Pro: hashing minutes; thumbnails ~1�
 
 - **2026-06-09** — Phase 3 (Drives) started on `phase3-drives`. **Slice 1 (sync spine)** implemented: a `DriveVolume` abstraction (one path-based `FileSystemVolume` covers folder, attached exFAT `.dmg`, and real volume — no security-scoped bookmarks, matching the app's path-based model); `SyncEngine` `plan`/`apply` for additive one-way Mac→canonical sync (atomic temp→fsync→rename, re-hash verify, resumable, **never overwrites** — collisions reported as conflicts); catalog `vault_presence` table (migration v2, isolated from `instances` so timeline browse never double-counts); drive vaults surface as `.confirmed` locations in `PresenceService`; Drives sidebar + Add-Drive adoption + Sync plan-preview sheet (free-space check) + "backed up on canonical" badge. Tested across the three-tier ladder (temp-dir scenarios + a real attached exFAT disk image — which caught an exFAT `volumeAvailableCapacityForImportantUsage == 0` free-space bug). Detailed plan: `docs/superpowers/plans/2026-06-09-phase3-slice1-sync-spine.md`. Remaining Phase 3 slices (drift/integrity, deletion propagation, evict/rehydrate + optional send-from-drive, clone/migration) each get their own spec → plan → build. Slice 1 introduces no new on-disk format.
 
+- **2026-06-09** — Phase 3 **Slice 2 (Drift & Integrity)** implemented: `DriftReconciler` fast scan (unknown/missing/changed via size+mtime) + **Verify Integrity** (full re-hash → corrupt/bit-rot); recoverability via `PresenceService` (restorable-from / lost-no-copy); non-destructive repairs (adopt/restore/acknowledge — `VerifiedCopy` extracted from `SyncEngine`); **honest presence** (badges follow verified reality); auto-scan on connect, per-drive status line, Verify progress, and bulk Adopt/Restore actions. Detailed spec/plan: `docs/superpowers/specs/2026-06-09-phase3-slice2-drift-integrity-design.md`, `docs/superpowers/plans/2026-06-09-phase3-slice2-drift-integrity.md`. Also recorded a **Phase 5 backlog** (§10) from usage feedback: video-only filter, Finder-tag interop, tag search.
+
 ## 8. Error-handling doctrine
 
 1. Originals never written; every mutation is a new file in a `.openphoto/` dir
@@ -163,6 +165,12 @@ Each phase is its own implementation plan and ends with a usable app:
 3. **Drives** ⬅ in progress — canonical sync (**Slice 1 ✅**: additive Mac→canonical sync spine), evict/rehydrate, clone/migrate, drift review, integrity verify, delete propagation, catalog snapshot. *Decomposed into slices; see the 2026-06-09 changelog entry and `docs/superpowers/specs/2026-06-09-phase3-drives-design.md`.*
 4. **Intelligence** — pipeline, People view, unified search, Map, OCR.
 5. **Extras** — LLM query parsing, perceptual near-duplicate detection, CLI tool, sidecar layout export.
+
+### Phase 5 backlog (added 2026-06-09, from usage feedback)
+
+- **Video-only filter** — a quick filter in the timeline (and folder view) to show only videos. Small Browse-layer addition; complements the existing photo/video split already tracked per asset (`MediaKind`).
+- **macOS Finder tag interoperability** — make OpenPhoto's tags correspond to macOS Finder tags, not only the XMP tags it uses today. Two directions: **read** tags a user added in Finder, and **write** OpenPhoto tags so they're readable in Finder. *Technical note for whoever designs this:* OpenPhoto currently stores tags as XMP `dc:subject` in sidecars. Finder tags are a different mechanism — they live in the extended attribute `com.apple.metadata:_kMDItemUserTags` (surfaced via Spotlight's `kMDItemUserTags`), not in XMP. So this needs a design decision: bridge/sync the two, or treat Finder tags as a first-class source. Watch the sovereignty invariant — Finder tags are an OS-managed xattr, so syncing them to/from the XMP sidecars (which remain the portable record) is the likely approach.
+- **Tag search in timeline & folder views** — search/filter assets by tag in both browse surfaces. *Overlap note:* this is closely related to Phase 4's unified search (Intelligence) — a basic tag-only search could land in **Phase 4** alongside search rather than waiting for Phase 5; worth deciding when Phase 4 is planned.
 
 ## 11. Known risks & spikes
 
