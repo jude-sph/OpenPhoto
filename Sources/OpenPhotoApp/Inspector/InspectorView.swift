@@ -188,10 +188,12 @@ struct InspectorView: View {
                             .foregroundStyle(Theme.textFaint)
                         Spacer()
                         Button("Reveal in Finder") {
-                            if let url = state.library?.absoluteURL(for: item) {
+                            if let url = state.fullResURL(for: item) {
                                 NSWorkspace.shared.activateFileViewerSelecting([url])
                             }
-                        }.controlSize(.small)
+                        }
+                        .controlSize(.small)
+                        .disabled(state.fullResURL(for: item) == nil)  // unreachable (drive ejected / missing)
                     }
                 }
             }

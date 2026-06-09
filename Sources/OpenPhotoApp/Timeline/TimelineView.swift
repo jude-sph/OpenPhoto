@@ -14,6 +14,8 @@ struct TimelineView: View {
     private var selectedItems: [TimelineItem] {
         state.flatItems.filter { selection.contains($0.instanceID) }
     }
+    /// Evict/move-to-bin only applies to local files; drive-only assets are view-only.
+    private var evictableItems: [TimelineItem] { selectedItems.filter { $0.driveRelPath == nil } }
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
 
     var body: some View {
@@ -22,18 +24,18 @@ struct TimelineView: View {
             Divider().overlay(Theme.hairline)
             grid
         }
-        .alert("Move \(selection.count) to Bin?", isPresented: $showEvict) {
+        .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
-                let items = selectedItems
+                let items = evictableItems
                 Task {
                     await state.evict(items)
                     selection.clear(); selectMode = false
                 }
             }
         } message: {
-            Text(evictAlertMessage(total: selection.count,
-                                   onlyCopy: state.onlyCopyCount(selectedItems)))
+            Text(evictAlertMessage(total: evictableItems.count,
+                                   onlyCopy: state.onlyCopyCount(evictableItems)))
         }
         .sheet(isPresented: $showSend) {
             if let target = state.connectedSendTarget() {
@@ -111,7 +113,7 @@ struct TimelineView: View {
             count: selection.count,
             sendTargetName: state.connectedSendTarget()?.name,
             onSend: { showSend = true },
-            onEvict: { showEvict = true },
+            onEvict: { if !evictableItems.isEmpty { showEvict = true } },
             onDeselect: { selection.clear() },
             onDone: { selection.clear(); selectMode = false })
     }

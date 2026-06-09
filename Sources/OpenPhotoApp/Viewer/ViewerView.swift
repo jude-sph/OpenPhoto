@@ -152,7 +152,8 @@ struct ViewerView: View {
     }
 
     private func deleteCurrent() {
-        guard let item = state.openedItem else { return }
+        // Drive-only assets are view-only — they have no local copy to move to a bin.
+        guard let item = state.openedItem, !state.isDriveOnly(item) else { return }
         step(1)
         if state.openedItem?.instanceID == item.instanceID { state.openedItem = nil }  // was last item
         Task {

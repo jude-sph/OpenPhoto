@@ -15,6 +15,8 @@ struct FolderGridView: View {
     private var selectedItems: [TimelineItem] {
         items.filter { selection.contains($0.instanceID) }
     }
+    /// Evict/move-to-bin only applies to local files; drive-only assets are view-only.
+    private var evictableItems: [TimelineItem] { selectedItems.filter { $0.driveRelPath == nil } }
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
 
     var body: some View {
@@ -28,18 +30,18 @@ struct FolderGridView: View {
             reload()
         }
         .task(id: state.refreshToken) { reload() }      // refresh after rescans (keep selection)
-        .alert("Move \(selection.count) to Bin?", isPresented: $showEvict) {
+        .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
-                let toEvict = selectedItems
+                let toEvict = evictableItems
                 Task {
                     await state.evict(toEvict)
                     selection.clear(); selectMode = false
                 }
             }
         } message: {
-            Text(evictAlertMessage(total: selection.count,
-                                   onlyCopy: state.onlyCopyCount(selectedItems)))
+            Text(evictAlertMessage(total: evictableItems.count,
+                                   onlyCopy: state.onlyCopyCount(evictableItems)))
         }
         .sheet(isPresented: $showSend) {
             if let target = state.connectedSendTarget() {
