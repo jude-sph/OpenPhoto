@@ -46,3 +46,78 @@ private func scannedLibrary(_ t: TestDirs, _ name: String = "Pictures") throws -
     let destSidecar = drive.rootURL.appendingPathComponent("Pictures/rome2022/.openphoto/IMG_1.jpg.xmp")
     #expect(FileManager.default.fileExists(atPath: destSidecar.path))
 }
+
+struct FakeVolume: DriveVolume {
+    let rootURL: URL
+    let free: Int64
+    var isMounted: Bool { true }
+    func freeSpaceBytes() throws -> Int64 { free }
+}
+
+@Test func applyVerifyMismatchIsCleanedAndFailed() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try scannedLibrary(t); try await lib.scanAll()
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let engine = SyncEngine(library: lib)
+    let vol = FileSystemVolume(rootURL: drive.rootURL)
+    var plan = try engine.plan(sources: lib.vaults, destinationVault: drive)
+    let bad = plan.copies[0]
+    plan.copies[0] = PlanItem(hash: "sha256:" + String(repeating: "f", count: 64),
+                              sourceURL: bad.sourceURL, destRelPath: bad.destRelPath, size: bad.size)
+    let result = await engine.apply(plan, destinationVault: drive, volume: vol)
+    #expect(result.failed.contains(plan.copies[0]))
+    #expect(!FileManager.default.fileExists(
+        atPath: drive.rootURL.appendingPathComponent(bad.destRelPath).path))
+}
+
+@Test func applyIsIdempotent() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try scannedLibrary(t); try await lib.scanAll()
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let engine = SyncEngine(library: lib)
+    let vol = FileSystemVolume(rootURL: drive.rootURL)
+    _ = await engine.apply(try engine.plan(sources: lib.vaults, destinationVault: drive),
+                           destinationVault: drive, volume: vol)
+    let again = await engine.apply(try engine.plan(sources: lib.vaults, destinationVault: drive),
+                                   destinationVault: drive, volume: vol)
+    #expect(again.copied == 0)
+    #expect(again.failed.isEmpty)
+}
+
+@Test func applyResumesWithMatchingPartialAndNeverOverwritesDifferent() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try scannedLibrary(t); try await lib.scanAll()
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let engine = SyncEngine(library: lib)
+    let vol = FileSystemVolume(rootURL: drive.rootURL)
+    let plan = try engine.plan(sources: lib.vaults, destinationVault: drive)
+    let good = plan.copies[0]
+    let goodDest = drive.rootURL.appendingPathComponent(good.destRelPath)
+    try FileManager.default.createDirectory(at: goodDest.deletingLastPathComponent(),
+                                            withIntermediateDirectories: true)
+    try FileManager.default.copyItem(at: good.sourceURL, to: goodDest)
+    let other = plan.copies[1]
+    let otherDest = drive.rootURL.appendingPathComponent(other.destRelPath)
+    try FileManager.default.createDirectory(at: otherDest.deletingLastPathComponent(),
+                                            withIntermediateDirectories: true)
+    try Data("different".utf8).write(to: otherDest)
+
+    let result = await engine.apply(plan, destinationVault: drive, volume: vol)
+    #expect(result.skipped == 1)
+    #expect(result.failed.contains(other))
+    #expect(try Data(contentsOf: otherDest) == Data("different".utf8))
+}
+
+@Test func applyBlocksOnInsufficientSpace() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try scannedLibrary(t); try await lib.scanAll()
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let engine = SyncEngine(library: lib)
+    let plan = try engine.plan(sources: lib.vaults, destinationVault: drive)
+    let tiny = FakeVolume(rootURL: drive.rootURL, free: 1)
+    let result = await engine.apply(plan, destinationVault: drive, volume: tiny)
+    #expect(result.copied == 0)
+    #expect(result.failed.count == plan.copies.count)
+    #expect(!FileManager.default.fileExists(
+        atPath: drive.rootURL.appendingPathComponent(plan.copies[0].destRelPath).path))
+}
