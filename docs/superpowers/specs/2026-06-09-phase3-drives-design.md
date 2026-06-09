@@ -16,7 +16,7 @@ The phase delivers, in dependency order: one-way sync (Mac → canonical), drift
 
 1. Originals are never modified or moved without explicit user action. On a drive, "new content = new file"; existing media files are never overwritten.
 2. Human-authored metadata → XMP sidecars; machine-derived data → rebuildable catalog.
-3. Nothing hard-deletes. On a drive, deletion moves files into `.openphoto-trash/` at the volume root (format §8 spirit).
+3. Nothing hard-deletes. On a drive, deletion moves files into the drive vault's `.openphoto/bin/` (format §8).
 4. **All writes atomic (temp → fsync → rename); all copies hash-verified.** A copy is "done" only after its bytes re-hash to the source hash on the destination.
 5. **Sync is strictly one-way; drives are passive; there is no merge logic.** Human gates exist in exactly three places: import selection, delete propagation, drift review.
 
@@ -50,7 +50,7 @@ Each slice ends with working, testable software. Nothing destructive ships until
 
 1. **Sync spine — Mac → canonical, additive only** *(detailed in §7)*. Adopt a drive, reconcile, preview a plan, apply (copy new originals + sidecar updates, hash-verified, resumable, logged). Begins recording per-drive presence → backup badges. Builds the drive abstraction + exFAT-dmg harness everything else reuses.
 2. **Drift & integrity.** Fast reconcile on connect surfaces outside changes to a drive as a **drift review** (repair options, never auto-resolution). On-demand **Verify Integrity** re-hashes a vault against its manifest (bit-rot).
-3. **Deletion propagation.** A review screen lists deletions in the catalog since last sync; on confirmation, drive copies move to the drive's `.openphoto-trash/`. `origin:"propagated"` per format §8.
+3. **Deletion propagation.** A review screen lists deletions in the catalog since last sync; on confirmation, drive copies move into the drive vault's `.openphoto/bin/`, `origin:"propagated"` per format §8.
 4. **Evict / rehydrate.** Per-folder evict releases local originals (to macOS Trash) only after every item is hash-verified on canonical; rehydrate copies a folder back, verified the same way. **Optional companion — send-from-drive** (§6): send an evicted photo straight from the drive to a phone (drive → phone) without rehydrating, and rehydrate (drive → Mac).
 5. **Clone & migration.** Clone canonical → backup with both plugged in (manifest-driven, hash-verified; any number of backups). Migration = clone + flag-flip to designate a new canonical. Adopt-on-fresh-Mac imports the drive's catalog snapshot as the starting live catalog, then verifies against the manifest. This slice introduces **writing the catalog snapshot** at sync end (format §7).
 
