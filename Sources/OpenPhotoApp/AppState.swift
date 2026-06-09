@@ -133,17 +133,37 @@ final class AppState {
         guard panel.runModal() == .OK, let url = panel.url, let lib = library else { return }
         do {
             let vault = try Vault.openOrCreate(at: url, role: .canonical)
+            // Refuse a folder that already holds a non-canonical vault (e.g. the user picked
+            // one of their own source roots). Adopting it would diverge catalog/disk role and
+            // could make the engine try to sync a vault onto itself.
+            guard vault.descriptor.role == .canonical else {
+                NSLog("addDrive: '\(url.lastPathComponent)' already holds a \(vault.descriptor.role.rawValue) vault — not adopting as canonical")
+                return
+            }
             try lib.catalog.registerVault(id: vault.descriptor.vaultID,
                                           role: vault.descriptor.role.rawValue, rootPath: url.path)
             try refreshCanonicalPresence(driveVault: vault)
         } catch { NSLog("addDrive failed: \(error)") }
     }
 
+    /// Re-read a drive's manifest into vault_presence, then rebuild the badge cache as the
+    /// union across all canonical vaults (so refreshing one drive never wipes another's badges).
     func refreshCanonicalPresence(driveVault: Vault) throws {
         guard let lib = library else { return }
         let hashes = (try? Manifest.read(from: driveVault.manifestURL))?.map { $0.hash.stringValue } ?? []
         try lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID, hashes: hashes)
-        canonicalPresence = Set(hashes)
+        reloadCanonicalPresence()
+    }
+
+    /// Rebuild `canonicalPresence` from the persisted catalog — union of every canonical
+    /// vault's presence set. Cheap; safe to call at library-open and after any sync.
+    func reloadCanonicalPresence() {
+        guard let lib = library else { return }
+        var union = Set<String>()
+        for vr in canonicalVaults {
+            if let hs = try? lib.catalog.vaultPresenceHashes(forVault: vr.id) { union.formUnion(hs) }
+        }
+        canonicalPresence = union
     }
 
     func openVault(for vr: VaultRecord) -> Vault? {
@@ -168,9 +188,8 @@ final class AppState {
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
             }
             Task { await rescan() }
-            if let canon = canonicalVaults.first, let v = openVault(for: canon), driveIsPresent(canon) {
-                try? refreshCanonicalPresence(driveVault: v)
-            }
+            // Load badge presence from the persisted catalog (union across all canonical drives).
+            reloadCanonicalPresence()
         } catch {
             NSAlert(error: error).runModal()
         }
