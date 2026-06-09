@@ -104,18 +104,9 @@ public struct SyncEngine: Sendable {
                         result.failed.append(item); result.conflicts += 1; continue // never overwrite
                     }
                 }
-                try fm.createDirectory(at: destURL.deletingLastPathComponent(),
-                                       withIntermediateDirectories: true)
-                let tmp = destURL.deletingLastPathComponent()
-                    .appendingPathComponent(".tmp-" + UUID().uuidString)
-                defer { try? fm.removeItem(at: tmp) }  // no-op once moved into place
-                try fm.copyItem(at: item.sourceURL, to: tmp)
-                if let fh = try? FileHandle(forUpdating: tmp) {
-                    _ = try? fh.synchronize(); try? fh.close()
+                guard VerifiedCopy.copy(from: item.sourceURL, to: destURL, expectedHash: item.hash) else {
+                    result.failed.append(item); continue
                 }
-                let writtenHash = try ContentHash.ofFile(at: tmp).stringValue
-                guard writtenHash == item.hash else { result.failed.append(item); continue }
-                try fm.moveItem(at: tmp, to: destURL)  // atomic rename; dest is guaranteed absent here
                 verified[item.destRelPath] = try Self.manifestEntry(for: item, at: destURL)
                 result.copied += 1
             } catch {
