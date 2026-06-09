@@ -203,6 +203,18 @@ final class AppState {
         try? Vault.openOrCreate(at: URL(fileURLWithPath: vr.rootPath), role: .canonical)
     }
 
+    /// Full-res URL for an item: local file, or the drive file when the drive is connected.
+    func fullResURL(for item: TimelineItem) -> URL? {
+        if item.driveRelPath == nil { return library?.absoluteURL(for: item) }
+        guard let vr = canonicalVaults.first(where: { $0.id == item.vaultID }),
+              driveIsPresent(vr),
+              let drive = openVault(for: vr) else { return nil }
+        let url = drive.absoluteURL(forRelativePath: item.driveRelPath!)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    func isDriveOnly(_ item: TimelineItem) -> Bool { item.driveRelPath != nil }
+
     // MARK: — Drift scan / verify / repairs
 
     /// Last drift report per drive (vaultID → report) — drives the row status line. Populated by

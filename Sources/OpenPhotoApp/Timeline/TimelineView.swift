@@ -73,7 +73,8 @@ struct TimelineView: View {
             .aspectRatio(1, contentMode: .fit)
             .overlay { PhotoCellView(item: item, library: state.library!,
                                      targetPixel: thumbPixels,
-                                     backedUp: state.isBackedUpOnCanonical(item)) }
+                                     backedUp: state.isBackedUpOnCanonical(item),
+                                     driveOnly: item.driveRelPath != nil) }
             .clipped()
             .selectionChrome(selected: selection.contains(item.instanceID), show: selectMode)
             .cellFrame(item.instanceID, in: "timelinegrid", active: selectMode)

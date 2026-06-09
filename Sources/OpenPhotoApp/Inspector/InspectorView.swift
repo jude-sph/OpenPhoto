@@ -23,12 +23,23 @@ struct InspectorView: View {
                     .formatted(date: .complete, time: .shortened))
                     .font(.system(size: 13, weight: .semibold))
 
+                if state.isDriveOnly(item) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "externaldrive.fill")
+                            .font(.system(size: 11))
+                        Text("On drive — view only")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundStyle(Theme.textFaint)
+                }
+
                 section("Caption") {
                     TextField("Add a caption…", text: $caption, axis: .vertical)
                         .textFieldStyle(.plain).font(.system(size: 13))
                         .padding(8).background(Theme.elevated, in: RoundedRectangle(cornerRadius: 8))
                         .onSubmit { save() }
                 }
+                .disabled(state.isDriveOnly(item))
 
                 section("Rating") {
                     HStack(spacing: 4) {
@@ -50,6 +61,7 @@ struct InspectorView: View {
                         }.buttonStyle(.plain)
                     }
                 }
+                .disabled(state.isDriveOnly(item))
 
                 section("Tags") {
                     FlowLayoutLite(spacing: 6) {
@@ -75,6 +87,7 @@ struct InspectorView: View {
                             }
                     }
                 }
+                .disabled(state.isDriveOnly(item))
 
                 Divider().overlay(Theme.hairline)
 
@@ -154,13 +167,14 @@ struct InspectorView: View {
                             Text(filename)
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(Theme.text)
-                                .underline(filenameHovered)
+                                .underline(filenameHovered && !state.isDriveOnly(item))
                                 .onHover { filenameHovered = $0 }
                                 // System-managed cursor — auto-balanced, so it can
                                 // never get stuck (the manual NSCursor.push/pop did
                                 // when the label was swapped for the editor mid-hover).
-                                .pointerStyle(.horizontalText)
+                                .pointerStyle(state.isDriveOnly(item) ? .default : .horizontalText)
                                 .onTapGesture {
+                                    guard !state.isDriveOnly(item) else { return }
                                     newName = filename
                                     renaming = true
                                     renameFocused = true
