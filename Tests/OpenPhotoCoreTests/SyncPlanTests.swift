@@ -26,8 +26,16 @@ private func scannedLibrary(_ t: TestDirs, _ name: String = "Pictures") throws -
 }
 
 @Test func planAfterApplySkipsAll() async throws {
-    // TODO(Task 4): real apply — stub apply is a no-op so this is a placeholder
-    #expect(Bool(true))
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try scannedLibrary(t); try await lib.scanAll()
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let engine = SyncEngine(library: lib)
+    let vol = FileSystemVolume(rootURL: drive.rootURL)
+    _ = await engine.apply(try engine.plan(sources: lib.vaults, destinationVault: drive),
+                           destinationVault: drive, volume: vol)
+    let plan2 = try engine.plan(sources: lib.vaults, destinationVault: drive)
+    #expect(plan2.copies.isEmpty)
+    #expect(plan2.conflicts.isEmpty)
 }
 
 @Test func planFlagsConflictOnDifferentBytesAtSamePath() async throws {

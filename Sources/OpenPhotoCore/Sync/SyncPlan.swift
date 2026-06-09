@@ -28,3 +28,14 @@ public struct SyncResult: Sendable, Equatable {
 }
 
 public enum SyncError: Error, Equatable { case insufficientSpace(needed: Int64, free: Int64) }
+
+public struct SyncProgress: Sendable {
+    public enum Stage: String, Sendable { case copying, verifying, finishing }
+    public let stage: Stage
+    public let done: Int
+    public let total: Int
+    public let currentName: String
+    public init(stage: Stage, done: Int, total: Int, currentName: String) {
+        self.stage = stage; self.done = done; self.total = total; self.currentName = currentName
+    }
+}
