@@ -319,6 +319,36 @@ final class AppState {
         drivePendingDeletions = out
     }
 
+    /// Move the selected drive copies into the drive's bin (off the main thread), then refresh
+    /// presence/badges/queue/UI. Returns the propagation result so the caller can report how many
+    /// moved vs. were left queued (a failed move stays queued for retry).
+    @discardableResult
+    func propagateDeletions(drive driveVault: Vault, selected: [PendingDeletion]) async -> DeletionPropagator.Result {
+        guard let lib = library, !selected.isEmpty else { return DeletionPropagator.Result() }
+        let macID = lib.vaults.first?.descriptor.vaultID ?? ""
+        let catalog = lib.catalog
+        let result = await Task.detached(priority: .userInitiated) {
+            (try? DeletionPropagator().propagate(drive: driveVault, entries: selected,
+                                                 macVaultID: macID, catalog: catalog))
+                ?? DeletionPropagator.Result()
+        }.value
+        _ = driftScan(driveVault)        // re-derives presence + badges + drift from the updated manifest
+        try? refreshQueries()            // also calls refreshPendingDeletions()
+        return result
+    }
+
+    /// Undo one pending deletion: un-bin the photo locally (which dequeues it + its Live pair).
+    func restorePending(_ e: PendingDeletion) async {
+        guard let lib = library else { return }
+        if let entry = (try? lib.binItems())?.first(where: { $0.item.hash == e.hash }) {
+            try? await lib.restore(entry)
+        } else {
+            // File already restored/gone from the bin — just drop the intent.
+            try? lib.catalog.dequeuePendingDeletion(hash: e.hash)
+        }
+        try? refreshQueries()
+    }
+
     /// Run a fast drift scan, set this drive's presence to verified reality, refresh badges + status.
     @discardableResult
     func driftScan(_ driveVault: Vault) -> DriftReport {
