@@ -144,10 +144,14 @@ final class AppState {
     private(set) var driveKinds: [String: String] =
         (UserDefaults.standard.dictionary(forKey: "driveKinds") as? [String: String]) ?? [:]
 
-    /// The drive's kind — classified live when reachable, else the last-known cached value.
+    /// The drive's kind for display. Prefers the cache (kept fresh by add/scan/reconnect) so the
+    /// render path stays a pure lookup — a live classify here would do synchronous filesystem I/O
+    /// every render, which could hang on a slow/offline network share. Falls back to a one-time
+    /// live classify only when the cache is cold.
     func driveKind(_ vr: VaultRecord) -> DriveKind {
+        if let cached = DriveKind(rawValue: driveKinds[vr.id] ?? "") { return cached }
         if driveFolderExists(vr) { return DriveKind.of(path: vr.rootPath) }
-        return DriveKind(rawValue: driveKinds[vr.id] ?? "") ?? .unknown
+        return .unknown
     }
 
     /// Remember a reachable drive's kind so its label stays accurate after it's unplugged.
