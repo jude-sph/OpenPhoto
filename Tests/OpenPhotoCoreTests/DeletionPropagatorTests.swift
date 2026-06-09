@@ -211,3 +211,43 @@ private func presence(_ hash: String, _ drivePath: String) -> VaultPresenceEntry
     #expect(presenceAfter.contains(hashKeep))
     #expect(queueAfter.contains(hashKeep))
 }
+
+@Test func deleteDriveOnlyMovesToDriveBinAndClearsPresence() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.registerVault(id: drive.descriptor.vaultID, role: "canonical", rootPath: drive.rootURL.path)
+    // Two files on the drive; we delete one, the other is a bystander.
+    let goneHash = "sha256:" + String(repeating: "a", count: 64)
+    let keepHash = "sha256:" + String(repeating: "b", count: 64)
+    for (rel, h) in [("Pictures/a/x.jpg", goneHash), ("Pictures/a/y.jpg", keepHash)] {
+        let u = drive.rootURL.appendingPathComponent(rel)
+        try FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(rel.utf8).write(to: u)
+        _ = h
+    }
+    try Manifest.write([
+        ManifestEntry(hash: ContentHash(stringValue: goneHash), path: "Pictures/a/x.jpg", size: 1, mtime: "2022-10-07T00:00:00.000Z"),
+        ManifestEntry(hash: ContentHash(stringValue: keepHash), path: "Pictures/a/y.jpg", size: 1, mtime: "2022-10-07T00:00:00.000Z"),
+    ], to: drive.manifestURL)
+    try cat.replaceVaultPresence(vaultID: drive.descriptor.vaultID, entries: [
+        VaultPresenceEntry(hash: goneHash, relPath: "a/x.jpg", dirPath: "a", size: 1, driveRelPath: "Pictures/a/x.jpg"),
+        VaultPresenceEntry(hash: keepHash, relPath: "a/y.jpg", dirPath: "a", size: 1, driveRelPath: "Pictures/a/y.jpg"),
+    ])
+
+    let n = try DeletionPropagator().deleteDriveOnly(
+        drive: drive, entries: [(hash: goneHash, driveRelPath: "Pictures/a/x.jpg")],
+        macVaultID: "mac-1", catalog: cat)
+
+    #expect(n == 1)
+    #expect(!FileManager.default.fileExists(atPath: drive.rootURL.appendingPathComponent("Pictures/a/x.jpg").path))
+    let binned = drive.rootURL.appendingPathComponent(".openphoto/bin/Pictures/a/x.jpg")
+    #expect(FileManager.default.fileExists(atPath: binned.path))
+    #expect(try BinStore(vault: drive).list().first?.origin == .user)               // direct UI deletion
+    #expect(try cat.vaultPresenceHashes(forVault: drive.descriptor.vaultID) == [keepHash])  // bystander kept
+    let paths = try Manifest.read(from: drive.manifestURL).map(\.path)
+    #expect(paths == ["Pictures/a/y.jpg"])                                          // gone path removed
+    #expect(try cat.pendingDeletions().isEmpty)                                     // no queue involved
+    let log = String(data: try Data(contentsOf: drive.syncLogURL), encoding: .utf8) ?? ""
+    #expect(log.contains("\"delete\""))
+}

@@ -85,4 +85,40 @@ public struct DeletionPropagator: Sendable {
         }
         return Result(propagated: moved, skipped: skipped, failed: failed)
     }
+
+    /// Delete photos that exist ONLY on the drive (no local copy, no pending queue): move each
+    /// drive file into the drive's bin (`origin: .user` — deleted directly in this vault's UI),
+    /// then one atomic manifest rewrite + presence removal + a "delete" sync-log event. Mirrors
+    /// `propagate` minus the queue. Returns the count actually binned.
+    @discardableResult
+    public func deleteDriveOnly(drive: Vault, entries: [(hash: String, driveRelPath: String)],
+                                macVaultID: String, catalog: Catalog) throws -> Int {
+        guard !entries.isEmpty else { return 0 }
+        let bin = BinStore(vault: drive)
+        let fm = FileManager.default
+        var clearedHashes: [String] = []
+        var clearedDrivePaths = Set<String>()
+        var moved = 0
+        for e in entries {
+            let src = drive.absoluteURL(forRelativePath: e.driveRelPath)
+            if !fm.fileExists(atPath: src.path) {
+                clearedHashes.append(e.hash); clearedDrivePaths.insert(e.driveRelPath); continue
+            }
+            do {
+                try bin.moveToBin(relPath: e.driveRelPath,
+                                  hash: ContentHash(stringValue: e.hash), origin: .user)
+                moved += 1
+                clearedHashes.append(e.hash); clearedDrivePaths.insert(e.driveRelPath)
+            } catch { /* leave it; not cleared */ }
+        }
+        let remaining = try Manifest.read(from: drive.manifestURL)
+            .filter { !clearedDrivePaths.contains($0.path) }
+        try Manifest.write(remaining, to: drive.manifestURL)
+        try catalog.removeVaultPresence(vaultID: drive.descriptor.vaultID, hashes: clearedHashes)
+        if moved > 0 {
+            SyncLog.append(event: "delete", summary: "\(moved) deleted from drive",
+                           counterparty: macVaultID, to: drive.syncLogURL)
+        }
+        return moved
+    }
 }
