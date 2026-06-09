@@ -190,6 +190,70 @@ final class AppState {
         try? Vault.openOrCreate(at: URL(fileURLWithPath: vr.rootPath), role: .canonical)
     }
 
+    // MARK: — Drift scan / verify / repairs
+
+    /// Run a fast drift scan, set this drive's presence to verified reality, refresh badges.
+    @discardableResult
+    func driftScan(_ driveVault: Vault) -> DriftReport {
+        guard let lib = library else { return DriftReport() }
+        var report = (try? DriftReconciler().scan(drive: driveVault)) ?? DriftReport()
+        if let p = presenceService() {
+            DriftReconciler().annotateRecoverability(&report, driveID: driveVault.descriptor.vaultID, presence: p)
+        }
+        try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
+                                              hashes: Array(report.presentHashes))
+        reloadCanonicalPresence()
+        return report
+    }
+
+    /// Full integrity check (slow); same presence/badge refresh as driftScan.
+    func verifyIntegrity(_ driveVault: Vault,
+                         progress: @escaping @Sendable (DriftProgress) -> Void) async -> DriftReport {
+        guard let lib = library else { return DriftReport() }
+        let report = await Task.detached(priority: .userInitiated) {
+            (try? DriftReconciler().verify(drive: driveVault) { p in progress(p) }) ?? DriftReport()
+        }.value
+        var enriched = report
+        if let p = presenceService() {
+            DriftReconciler().annotateRecoverability(&enriched, driveID: driveVault.descriptor.vaultID, presence: p)
+        }
+        try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
+                                              hashes: Array(report.presentHashes))
+        reloadCanonicalPresence()
+        return enriched
+    }
+
+    func adoptDriftFile(relPath: String, on driveVault: Vault) {
+        try? DriftReconciler().adopt(relPath: relPath, on: driveVault)
+        driftScan(driveVault)
+    }
+
+    func acknowledgeGone(relPath: String, on driveVault: Vault) {
+        try? DriftReconciler().acknowledgeGone(relPath: relPath, on: driveVault)
+        driftScan(driveVault)
+    }
+
+    /// Restore a missing file from its best available good copy; returns true on success.
+    @discardableResult
+    func restoreDriftFile(_ finding: DriftFinding, on driveVault: Vault) -> Bool {
+        guard let hash = finding.recordedHash,
+              let source = goodCopyURL(forHash: hash, excluding: driveVault.descriptor.vaultID) else { return false }
+        do {
+            try DriftReconciler().restore(relPath: finding.relPath, expectedHash: hash,
+                                          from: source, on: driveVault)
+            driftScan(driveVault); return true
+        } catch { NSLog("restore failed: \(error)"); return false }
+    }
+
+    /// A reachable on-disk file with `hash` outside `driveID` — currently the Mac's local copy.
+    private func goodCopyURL(forHash hash: String, excluding driveID: String) -> URL? {
+        guard let lib = library, let inst = (try? lib.catalog.instances(forHash: hash))?
+            .first(where: { $0.vaultID != driveID }),
+              let vault = lib.vault(id: inst.vaultID) else { return nil }
+        let url = vault.absoluteURL(forRelativePath: inst.relPath)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     var configuredRoots: [URL] {
         (UserDefaults.standard.stringArray(forKey: Self.rootsDefaultsKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
