@@ -192,7 +192,11 @@ final class AppState {
 
     // MARK: — Drift scan / verify / repairs
 
-    /// Run a fast drift scan, set this drive's presence to verified reality, refresh badges.
+    /// Last drift report per drive (vaultID → report) — drives the row status line. Populated by
+    /// auto-scan on connect and by every scan/verify/repair.
+    private(set) var driveDrift: [String: DriftReport] = [:]
+
+    /// Run a fast drift scan, set this drive's presence to verified reality, refresh badges + status.
     @discardableResult
     func driftScan(_ driveVault: Vault) -> DriftReport {
         guard let lib = library else { return DriftReport() }
@@ -203,10 +207,11 @@ final class AppState {
         try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
                                               hashes: Array(report.presentHashes))
         reloadCanonicalPresence()
+        driveDrift[driveVault.descriptor.vaultID] = report
         return report
     }
 
-    /// Full integrity check (slow); same presence/badge refresh as driftScan.
+    /// Full integrity check (slow); same presence/badge/status refresh as driftScan.
     func verifyIntegrity(_ driveVault: Vault,
                          progress: @escaping @Sendable (DriftProgress) -> Void) async -> DriftReport {
         guard let lib = library else { return DriftReport() }
@@ -220,29 +225,68 @@ final class AppState {
         try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
                                               hashes: Array(enriched.presentHashes))
         reloadCanonicalPresence()
+        driveDrift[driveVault.descriptor.vaultID] = enriched
         return enriched
     }
 
-    func adoptDriftFile(relPath: String, on driveVault: Vault) {
-        _ = try? DriftReconciler().adopt(relPath: relPath, on: driveVault)
-        driftScan(driveVault)
+    /// Background fast-scan of every connected canonical drive — keeps badges + the status line
+    /// honest automatically (at library-open and whenever a volume mounts), no manual Check needed.
+    func autoScanConnectedDrives() async {
+        for vr in canonicalVaults where driveIsPresent(vr) {
+            guard let drive = openVault(for: vr) else { continue }
+            let scanned = await Task.detached(priority: .utility) {
+                (try? DriftReconciler().scan(drive: drive)) ?? DriftReport()
+            }.value
+            var report = scanned
+            if let p = presenceService() {
+                DriftReconciler().annotateRecoverability(&report, driveID: vr.id, presence: p)
+            }
+            try? library?.catalog.replaceVaultPresence(vaultID: vr.id, hashes: Array(report.presentHashes))
+            driveDrift[vr.id] = report
+        }
+        reloadCanonicalPresence()
     }
 
-    func acknowledgeGone(relPath: String, on driveVault: Vault) {
-        try? DriftReconciler().acknowledgeGone(relPath: relPath, on: driveVault)
-        driftScan(driveVault)
-    }
-
-    /// Restore a missing file from its best available good copy; returns true on success.
     @discardableResult
-    func restoreDriftFile(_ finding: DriftFinding, on driveVault: Vault) -> Bool {
+    func adoptDriftFile(relPath: String, on driveVault: Vault) -> DriftReport {
+        _ = try? DriftReconciler().adopt(relPath: relPath, on: driveVault)
+        return driftScan(driveVault)
+    }
+
+    @discardableResult
+    func acknowledgeGone(relPath: String, on driveVault: Vault) -> DriftReport {
+        try? DriftReconciler().acknowledgeGone(relPath: relPath, on: driveVault)
+        return driftScan(driveVault)
+    }
+
+    /// Restore a missing file from its best available good copy; returns the refreshed report.
+    @discardableResult
+    func restoreDriftFile(_ finding: DriftFinding, on driveVault: Vault) -> DriftReport {
+        restoreOne(finding, on: driveVault)
+        return driftScan(driveVault)
+    }
+
+    /// Adopt every unknown file in one pass, then a single re-scan.
+    @discardableResult
+    func adoptAll(_ relPaths: [String], on driveVault: Vault) -> DriftReport {
+        for p in relPaths { _ = try? DriftReconciler().adopt(relPath: p, on: driveVault) }
+        return driftScan(driveVault)
+    }
+
+    /// Restore every recoverable missing file in one pass, then a single re-scan.
+    @discardableResult
+    func restoreAllRecoverable(_ findings: [DriftFinding], on driveVault: Vault) -> DriftReport {
+        for f in findings { restoreOne(f, on: driveVault) }
+        return driftScan(driveVault)
+    }
+
+    private func restoreOne(_ finding: DriftFinding, on driveVault: Vault) {
         guard let hash = finding.recordedHash,
-              let source = goodCopyURL(forHash: hash, excluding: driveVault.descriptor.vaultID) else { return false }
+              let source = goodCopyURL(forHash: hash, excluding: driveVault.descriptor.vaultID) else { return }
         do {
             try DriftReconciler().restore(relPath: finding.relPath, expectedHash: hash,
                                           from: source, on: driveVault)
-            driftScan(driveVault); return true
-        } catch { NSLog("restore failed: \(error)"); return false }
+        } catch { NSLog("restore failed: \(error)") }
     }
 
     /// A reachable on-disk file with `hash` outside `driveID`: prefer the Mac's local copy, else
@@ -285,9 +329,19 @@ final class AppState {
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
             }
             Task { await rescan() }
-            // Load drives + badge presence from the persisted catalog.
+            // Load drives + badge presence from the persisted catalog, then auto-scan connected
+            // drives so badges + status reflect reality without a manual Check. Re-scan on any
+            // volume mount/unmount too.
             reloadDrives()
             reloadCanonicalPresence()
+            deviceWatcher.onVolumesChanged = { [weak self] in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.reloadDrives()
+                    await self.autoScanConnectedDrives()
+                }
+            }
+            Task { await autoScanConnectedDrives() }
         } catch {
             NSAlert(error: error).runModal()
         }
