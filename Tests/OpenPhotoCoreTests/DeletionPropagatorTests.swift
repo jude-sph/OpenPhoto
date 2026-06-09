@@ -101,3 +101,113 @@ private func presence(_ hash: String, _ drivePath: String) -> VaultPresenceEntry
     #expect(result == .init(propagated: 0, skipped: 1, failed: 0))     // counted gone, not fatal
     #expect(try cat.pendingDeletions().isEmpty)                        // still cleared (goal state reached)
 }
+
+@Test func propagatePartialFailureKeepsFailedEntriesQueuedAndPreservesUnrelatedManifest() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    let driveID = drive.descriptor.vaultID
+    try cat.registerVault(id: driveID, role: "canonical", rootPath: drive.rootURL.path)
+
+    let fm = FileManager.default
+
+    // Hash constants — 64-char hex strings (no "sha256:" prefix in the repeating part).
+    let hashMoved    = "sha256:" + String(repeating: "a", count: 64)
+    let hashGone     = "sha256:" + String(repeating: "b", count: 64)
+    let hashWillFail = "sha256:" + String(repeating: "c", count: 64)
+    let hashKeep     = "sha256:" + String(repeating: "d", count: 64)
+
+    // Drive-relative paths.
+    let drivePathMoved    = "Pictures/m/moved.jpg"
+    let drivePathGone     = "Pictures/g/gone.jpg"
+    let drivePathWillFail = "Pictures/f/fail.jpg"
+    let drivePathKeep     = "Pictures/k/keep.jpg"
+
+    // --- Set up drive files ---
+
+    // moved: real file on drive
+    let movedURL = drive.rootURL.appendingPathComponent(drivePathMoved)
+    try fm.createDirectory(at: movedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("moved-photo".utf8).write(to: movedURL)
+
+    // gone: NO file on disk (intentionally absent)
+
+    // willFail: real file on drive
+    let willFailURL = drive.rootURL.appendingPathComponent(drivePathWillFail)
+    try fm.createDirectory(at: willFailURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("fail-photo".utf8).write(to: willFailURL)
+
+    // willFail bin collision: pre-create the destination so moveToBin throws
+    let binDest = drive.rootURL
+        .appendingPathComponent(".openphoto/bin")
+        .appendingPathComponent(drivePathWillFail)
+    try fm.createDirectory(at: binDest.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("collision".utf8).write(to: binDest)
+
+    // keep: bystander — no file setup needed (not in batch)
+
+    // --- Manifest: all four entries ---
+    let mtime = "2024-01-01T00:00:00.000Z"
+    try Manifest.write([
+        ManifestEntry(hash: ContentHash(stringValue: hashMoved),    path: drivePathMoved,    size: 11, mtime: mtime),
+        ManifestEntry(hash: ContentHash(stringValue: hashGone),     path: drivePathGone,     size: 5,  mtime: mtime),
+        ManifestEntry(hash: ContentHash(stringValue: hashWillFail), path: drivePathWillFail, size: 10, mtime: mtime),
+        ManifestEntry(hash: ContentHash(stringValue: hashKeep),     path: drivePathKeep,     size: 7,  mtime: mtime),
+    ], to: drive.manifestURL)
+
+    // --- Presence: all four ---
+    try cat.replaceVaultPresence(vaultID: driveID, entries: [
+        VaultPresenceEntry(hash: hashMoved,    relPath: "m/moved.jpg",  dirPath: "m", size: 11, driveRelPath: drivePathMoved),
+        VaultPresenceEntry(hash: hashGone,     relPath: "g/gone.jpg",   dirPath: "g", size: 5,  driveRelPath: drivePathGone),
+        VaultPresenceEntry(hash: hashWillFail, relPath: "f/fail.jpg",   dirPath: "f", size: 10, driveRelPath: drivePathWillFail),
+        VaultPresenceEntry(hash: hashKeep,     relPath: "k/keep.jpg",   dirPath: "k", size: 7,  driveRelPath: drivePathKeep),
+    ])
+
+    // --- Queue: all four ---
+    try cat.enqueuePendingDeletion(hash: hashMoved,    relPath: "m/moved.jpg",  deletedAtMs: 1)
+    try cat.enqueuePendingDeletion(hash: hashGone,     relPath: "g/gone.jpg",   deletedAtMs: 2)
+    try cat.enqueuePendingDeletion(hash: hashWillFail, relPath: "f/fail.jpg",   deletedAtMs: 3)
+    try cat.enqueuePendingDeletion(hash: hashKeep,     relPath: "k/keep.jpg",   deletedAtMs: 4)
+
+    // --- Build the three-entry batch (keep is intentionally excluded) ---
+    let entryMoved    = PendingDeletion(hash: hashMoved,    relPath: "m/moved.jpg",  driveRelPath: drivePathMoved,    size: 11, deletedAtMs: 1)
+    let entryGone     = PendingDeletion(hash: hashGone,     relPath: "g/gone.jpg",   driveRelPath: drivePathGone,     size: 5,  deletedAtMs: 2)
+    let entryWillFail = PendingDeletion(hash: hashWillFail, relPath: "f/fail.jpg",   driveRelPath: drivePathWillFail, size: 10, deletedAtMs: 3)
+
+    // --- Propagate ---
+    let result = try DeletionPropagator().propagate(
+        drive: drive,
+        entries: [entryMoved, entryGone, entryWillFail],
+        macVaultID: "mac-1",
+        catalog: cat)
+
+    // 1. Result counts
+    #expect(result == DeletionPropagator.Result(propagated: 1, skipped: 1, failed: 1))
+
+    // 2. moved: file gone from original path; binned; cleared from presence + queue + manifest
+    #expect(!fm.fileExists(atPath: movedURL.path))
+    let binnedMoved = drive.rootURL.appendingPathComponent(".openphoto/bin").appendingPathComponent(drivePathMoved)
+    #expect(fm.fileExists(atPath: binnedMoved.path))
+    let presenceAfter = try cat.vaultPresenceHashes(forVault: driveID)
+    #expect(!presenceAfter.contains(hashMoved))
+    let queueAfter = try cat.pendingDeletions().map(\.hash)
+    #expect(!queueAfter.contains(hashMoved))
+    let manifestAfter = try Manifest.read(from: drive.manifestURL).map(\.path)
+    #expect(!manifestAfter.contains(drivePathMoved))
+
+    // 3. willFail (SAFETY CONTRACT): original file still on disk; still in presence + queue + manifest
+    #expect(fm.fileExists(atPath: willFailURL.path))
+    #expect(presenceAfter.contains(hashWillFail))
+    #expect(queueAfter.contains(hashWillFail))
+    #expect(manifestAfter.contains(drivePathWillFail))
+
+    // 4. gone: cleared from presence + queue + manifest (goal state reached even though no file)
+    #expect(!presenceAfter.contains(hashGone))
+    #expect(!queueAfter.contains(hashGone))
+    #expect(!manifestAfter.contains(drivePathGone))
+
+    // 5. keep (bystander): manifest line, presence, and queue entry all survive untouched
+    #expect(manifestAfter.contains(drivePathKeep))
+    #expect(presenceAfter.contains(hashKeep))
+    #expect(queueAfter.contains(hashKeep))
+}
