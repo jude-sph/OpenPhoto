@@ -38,6 +38,7 @@ Rules:
 - A directory named `.openphoto` is never media content. Scanners must skip it when enumerating photos.
 - The vault-root `.openphoto/` holds vault state. Folder-level `.openphoto/` directories hold **only** XMP sidecars for that folder's files.
 - A Mac library typically consists of two vaults (`~/Pictures`, `~/Movies`). A drive carries **one** vault whose top-level directories mirror the source vault roots by name (`Pictures/`, `Movies/`).
+- When OpenPhoto syncs a Mac library onto a canonical drive it acts as a third-party writer per §10: each source vault maps to a top-level directory named by that root's basename, originals are added but never overwritten (a name collision with differing bytes is reported, not replaced), and `manifest.jsonl` is rewritten atomically after each sync. No fields beyond those specified in this document are used.
 
 ## 2. Asset identity
 
