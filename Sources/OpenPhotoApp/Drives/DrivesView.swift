@@ -50,7 +50,7 @@ struct DrivesView: View {
         let present = state.driveIsPresent(vr)
         let ejected = state.driveIsEjected(vr)
         HStack(spacing: 12) {
-            Image(systemName: ejected ? "eject" : "externaldrive")
+            Image(systemName: ejected ? "eject" : state.driveKind(vr).symbol)
                 .font(.system(size: 22)).foregroundStyle(Theme.textDim)
             VStack(alignment: .leading, spacing: 2) {
                 Text((vr.rootPath as NSString).lastPathComponent).font(.system(size: 13.5, weight: .semibold))
@@ -72,12 +72,13 @@ struct DrivesView: View {
     }
 
     @ViewBuilder private func statusText(_ vr: VaultRecord) -> some View {
+        let kind = state.driveKind(vr).label
         if state.driveIsEjected(vr) {
-            Text("Ejected").font(.system(size: 11)).foregroundStyle(Theme.textFaint)
+            Text("\(kind) · Ejected").font(.system(size: 11)).foregroundStyle(Theme.textFaint)
         } else if state.driveFolderExists(vr) {
-            Text("Connected · \(vr.rootPath)").font(.system(size: 11)).foregroundStyle(Theme.textDim)
+            Text("\(kind) · Connected · \(vr.rootPath)").font(.system(size: 11)).foregroundStyle(Theme.textDim)
         } else {
-            Text("Not connected").font(.system(size: 11)).foregroundStyle(Theme.textFaint)
+            Text("\(kind) · Not connected").font(.system(size: 11)).foregroundStyle(Theme.textFaint)
         }
     }
 
@@ -112,6 +113,25 @@ struct DrivesView: View {
                         .font(.system(size: 11)).foregroundStyle(.orange)
                 }.buttonStyle(.plain)
             }
+        }
+    }
+}
+
+private extension DriveKind {
+    var label: String {
+        switch self {
+        case .removable: "External Drive"
+        case .network: "Network"
+        case .folder: "Folder"
+        case .unknown: "Drive"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .removable: "externaldrive"
+        case .network: "network"
+        case .folder: "folder"
+        case .unknown: "externaldrive"
         }
     }
 }

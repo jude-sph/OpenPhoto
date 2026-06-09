@@ -140,12 +140,46 @@ final class AppState {
         !ejectedDrives.contains(vr.id) && driveFolderExists(vr)
     }
 
+    /// Last-known kind per drive (for accurate labels while unplugged). Refreshed when present.
+    private(set) var driveKinds: [String: String] =
+        (UserDefaults.standard.dictionary(forKey: "driveKinds") as? [String: String]) ?? [:]
+
+    /// The drive's kind — classified live when reachable, else the last-known cached value.
+    func driveKind(_ vr: VaultRecord) -> DriveKind {
+        if driveFolderExists(vr) { return DriveKind.of(path: vr.rootPath) }
+        return DriveKind(rawValue: driveKinds[vr.id] ?? "") ?? .unknown
+    }
+
+    /// Remember a reachable drive's kind so its label stays accurate after it's unplugged.
+    func cacheDriveKind(_ vr: VaultRecord) {
+        guard driveFolderExists(vr) else { return }
+        let raw = DriveKind.of(path: vr.rootPath).rawValue
+        if driveKinds[vr.id] != raw {
+            driveKinds[vr.id] = raw
+            UserDefaults.standard.set(driveKinds, forKey: "driveKinds")
+        }
+    }
+
+    /// Eject a drive. A real removable/network volume is *physically* unmounted (safe to unplug);
+    /// a plain folder is ejected logically (it never unmounts on its own).
     func ejectDrive(_ vr: VaultRecord) {
-        ejectedDrives.insert(vr.id); persistEjected()
+        guard driveKind(vr).isRealVolume else {
+            ejectedDrives.insert(vr.id); persistEjected(); return   // folder: logical eject
+        }
+        let url = URL(fileURLWithPath: vr.rootPath)
+        let volume = (try? url.resourceValues(forKeys: [.volumeURLKey]).volume) ?? url
+        do {
+            try NSWorkspace.shared.unmountAndEjectDevice(at: volume)   // safe to unplug now
+            driveDrift[vr.id] = nil                                    // its folder vanishes → not-present
+        } catch {
+            driveAlert("Couldn’t eject \((vr.rootPath as NSString).lastPathComponent)",
+                       error.localizedDescription)
+        }
     }
 
     func reconnectDrive(_ vr: VaultRecord) {
         ejectedDrives.remove(vr.id); persistEjected()
+        cacheDriveKind(vr)
         if let drive = openVault(for: vr) { driftScan(drive) }   // re-scan just this drive
     }
 
@@ -196,6 +230,7 @@ final class AppState {
             try lib.catalog.registerVault(id: vault.descriptor.vaultID,
                                           role: vault.descriptor.role.rawValue, rootPath: url.path)
             reloadDrives()
+            if let vr = canonicalVaults.first(where: { $0.id == vault.descriptor.vaultID }) { cacheDriveKind(vr) }
             try refreshCanonicalPresence(driveVault: vault)
         } catch { driveAlert("Couldn’t add drive", error.localizedDescription) }
     }
@@ -301,6 +336,7 @@ final class AppState {
     /// honest automatically (at library-open and whenever a volume mounts), no manual Check needed.
     func autoScanConnectedDrives() async {
         for vr in canonicalVaults where driveIsPresent(vr) {
+            cacheDriveKind(vr)
             guard let drive = openVault(for: vr) else { continue }
             let scanned = await Task.detached(priority: .utility) {
                 (try? DriftReconciler().scan(drive: drive)) ?? DriftReport()
