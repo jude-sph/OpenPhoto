@@ -4,11 +4,12 @@ import OpenPhotoCore
 typealias Scanner = OpenPhotoCore.Scanner   // Foundation.Scanner collision
 
 enum SidebarItem: String, Hashable, CaseIterable {
-    case timeline, folders, bin
+    case timeline, folders, drives, bin
     var label: String {
         switch self {
         case .timeline: "Timeline"
         case .folders: "Folders"
+        case .drives: "Drives"
         case .bin: "Bin"
         }
     }
@@ -16,6 +17,7 @@ enum SidebarItem: String, Hashable, CaseIterable {
         switch self {   // SF Symbol map from the UI-Design README
         case .timeline: "photo.on.rectangle.angled"
         case .folders: "folder"
+        case .drives: "externaldrive"
         case .bin: "trash"
         }
     }
@@ -108,6 +110,46 @@ final class AppState {
         }
     }
 
+    var canonicalVaults: [VaultRecord] {
+        (try? library?.catalog.registeredVaults().filter { $0.role == "canonical" }) ?? []
+    }
+
+    private(set) var canonicalPresence: Set<String> = []
+
+    func driveIsPresent(_ vr: VaultRecord) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: vr.rootPath, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    func isBackedUpOnCanonical(_ item: TimelineItem) -> Bool { canonicalPresence.contains(item.hash) }
+
+    func addDriveViaPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use as Canonical Drive"
+        panel.message = "Choose a drive or folder to hold your canonical library."
+        guard panel.runModal() == .OK, let url = panel.url, let lib = library else { return }
+        do {
+            let vault = try Vault.openOrCreate(at: url, role: .canonical)
+            try lib.catalog.registerVault(id: vault.descriptor.vaultID,
+                                          role: vault.descriptor.role.rawValue, rootPath: url.path)
+            try refreshCanonicalPresence(driveVault: vault)
+        } catch { NSLog("addDrive failed: \(error)") }
+    }
+
+    func refreshCanonicalPresence(driveVault: Vault) throws {
+        guard let lib = library else { return }
+        let hashes = (try? Manifest.read(from: driveVault.manifestURL))?.map { $0.hash.stringValue } ?? []
+        try lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID, hashes: hashes)
+        canonicalPresence = Set(hashes)
+    }
+
+    func openVault(for vr: VaultRecord) -> Vault? {
+        try? Vault.openOrCreate(at: URL(fileURLWithPath: vr.rootPath), role: .canonical)
+    }
+
     var configuredRoots: [URL] {
         (UserDefaults.standard.stringArray(forKey: Self.rootsDefaultsKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
@@ -126,6 +168,9 @@ final class AppState {
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
             }
             Task { await rescan() }
+            if let canon = canonicalVaults.first, let v = openVault(for: canon), driveIsPresent(canon) {
+                try? refreshCanonicalPresence(driveVault: v)
+            }
         } catch {
             NSAlert(error: error).runModal()
         }
