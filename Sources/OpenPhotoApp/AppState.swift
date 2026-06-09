@@ -110,8 +110,13 @@ final class AppState {
         }
     }
 
-    var canonicalVaults: [VaultRecord] {
-        (try? library?.catalog.registeredVaults().filter { $0.role == "canonical" }) ?? []
+    private(set) var canonicalVaults: [VaultRecord] = []
+
+    /// Refresh the observable drive list from the catalog. A computed property that queries the
+    /// DB doesn't trigger @Observable invalidation, so the Drives view wouldn't react when a drive
+    /// is adopted — this stored property does. Call after adopting a drive and at library-open.
+    func reloadDrives() {
+        canonicalVaults = (try? library?.catalog.registeredVaults().filter { $0.role == "canonical" }) ?? []
     }
 
     private(set) var canonicalPresence: Set<String> = []
@@ -142,6 +147,7 @@ final class AppState {
             }
             try lib.catalog.registerVault(id: vault.descriptor.vaultID,
                                           role: vault.descriptor.role.rawValue, rootPath: url.path)
+            reloadDrives()
             try refreshCanonicalPresence(driveVault: vault)
         } catch { NSLog("addDrive failed: \(error)") }
     }
@@ -188,7 +194,8 @@ final class AppState {
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
             }
             Task { await rescan() }
-            // Load badge presence from the persisted catalog (union across all canonical drives).
+            // Load drives + badge presence from the persisted catalog.
+            reloadDrives()
             reloadCanonicalPresence()
         } catch {
             NSAlert(error: error).runModal()
