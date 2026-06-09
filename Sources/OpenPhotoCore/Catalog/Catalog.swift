@@ -84,6 +84,14 @@ public final class Catalog: Sendable {
                 t.primaryKey(["vaultID", "hash"])
             }
         }
+        migrator.registerMigration("v4") { db in
+            // Delete-only propagation queue (rebuildable cache). Evict never writes here.
+            try db.create(table: "pending_deletions") { t in
+                t.primaryKey("hash", .text)
+                t.column("relPath", .text).notNull()
+                t.column("deletedAtMs", .integer).notNull()
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -143,6 +151,44 @@ public final class Catalog: Sendable {
         try dbQueue.read { db in
             Set(try String.fetchAll(db,
                 sql: "SELECT hash FROM vault_presence WHERE vaultID = ?", arguments: [vaultID]))
+        }
+    }
+
+    // MARK: Pending deletions (Slice 3 — Delete-only queue)
+
+    public func enqueuePendingDeletion(hash: String, relPath: String, deletedAtMs: Int64) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO pending_deletions (hash, relPath, deletedAtMs) VALUES (?, ?, ?)
+                ON CONFLICT(hash) DO UPDATE SET relPath = excluded.relPath,
+                                                deletedAtMs = excluded.deletedAtMs
+                """, arguments: [hash, relPath, deletedAtMs])
+        }
+    }
+
+    public func dequeuePendingDeletion(hash: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM pending_deletions WHERE hash = ?", arguments: [hash])
+        }
+    }
+
+    public func clearPendingDeletions(hashes: [String]) throws {
+        guard !hashes.isEmpty else { return }
+        try dbQueue.write { db in
+            let marks = databaseQuestionMarks(count: hashes.count)
+            try db.execute(sql: "DELETE FROM pending_deletions WHERE hash IN (\(marks))",
+                           arguments: StatementArguments(hashes))
+        }
+    }
+
+    public func pendingDeletions() throws -> [PendingDeletionRecord] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT hash, relPath, deletedAtMs FROM pending_deletions ORDER BY deletedAtMs DESC
+                """).map {
+                PendingDeletionRecord(hash: $0["hash"], relPath: $0["relPath"],
+                                      deletedAtMs: $0["deletedAtMs"])
+            }
         }
     }
 
