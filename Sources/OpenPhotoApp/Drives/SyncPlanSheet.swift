@@ -108,6 +108,7 @@ struct SyncPlanSheet: View {
             Task { @MainActor in progress = p }
         }
         try? state.refreshCanonicalPresence(driveVault: drive)
+        state.refreshPendingDeletions()   // a sync can newly satisfy on-drive eligibility
         let pending = state.drivePendingDeletions[drive.descriptor.vaultID] ?? []
         let chosen = pending.filter { deletionSelection.contains($0.hash) }
         if !chosen.isEmpty { _ = await state.propagateDeletions(drive: drive, selected: chosen) }
