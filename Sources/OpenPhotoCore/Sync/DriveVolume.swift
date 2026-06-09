@@ -31,7 +31,12 @@ public struct FileSystemVolume: DriveVolume {
     public func freeSpaceBytes() throws -> Int64 {
         let values = try rootURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey,
                                                           .volumeAvailableCapacityKey])
-        if let important = values.volumeAvailableCapacityForImportantUsage { return Int64(important) }
+        // `volumeAvailableCapacityForImportantUsage` returns 0 on some filesystems (e.g. exFAT)
+        // to signal "metric unsupported" rather than "disk full". Treat 0 as unsupported and fall
+        // through to the plain capacity, which those volumes do report correctly.
+        if let important = values.volumeAvailableCapacityForImportantUsage, important > 0 {
+            return Int64(important)
+        }
         if let plain = values.volumeAvailableCapacity { return Int64(plain) }
         throw DriveVolumeError.capacityUnavailable
     }
