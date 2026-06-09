@@ -78,4 +78,41 @@ public struct DriftReconciler: Sendable {
         }
         annotate(&report.missing); annotate(&report.changed); annotate(&report.corrupt)
     }
+
+    /// Add an on-disk file to the manifest (its content is recorded as authoritative). Returns the hash.
+    @discardableResult
+    public func adopt(relPath: String, on drive: Vault) throws -> String {
+        let url = drive.absoluteURL(forRelativePath: relPath)
+        guard FileManager.default.fileExists(atPath: url.path) else { throw DriftError.notOnDisk }
+        let hash = try ContentHash.ofFile(at: url).stringValue
+        try writeManifestEntry(hash: hash, relPath: relPath, fileURL: url, on: drive)
+        return hash
+    }
+
+    /// Copy a verified-good copy back into a missing slot, then record it. Never overwrites.
+    public func restore(relPath: String, expectedHash: String, from source: URL, on drive: Vault) throws {
+        let dest = drive.absoluteURL(forRelativePath: relPath)
+        guard VerifiedCopy.copy(from: source, to: dest, expectedHash: expectedHash) else {
+            throw DriftError.restoreFailed
+        }
+        try writeManifestEntry(hash: expectedHash, relPath: relPath, fileURL: dest, on: drive)
+    }
+
+    /// Drop an already-absent file from the manifest (records reality; deletes nothing).
+    public func acknowledgeGone(relPath: String, on drive: Vault) throws {
+        var entries = try Manifest.read(from: drive.manifestURL)
+        entries.removeAll { $0.path == relPath }
+        try Manifest.write(entries, to: drive.manifestURL)
+    }
+
+    private func writeManifestEntry(hash: String, relPath: String, fileURL: URL, on drive: Vault) throws {
+        let a = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let entry = ManifestEntry(hash: ContentHash(stringValue: hash), path: relPath,
+            size: (a[.size] as? Int64) ?? 0,
+            mtime: ISO8601Millis.string(from: (a[.modificationDate] as? Date) ?? Date()))
+        var entries = try Manifest.read(from: drive.manifestURL)
+        entries.removeAll { $0.path == relPath }   // replace any stale line for this path
+        entries.append(entry)
+        try Manifest.write(entries, to: drive.manifestURL)
+    }
 }
