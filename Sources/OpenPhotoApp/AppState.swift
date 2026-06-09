@@ -302,8 +302,9 @@ final class AppState {
     private(set) var driveDrift: [String: DriftReport] = [:]
 
     /// Eligible pending deletions per connected drive (vaultID → entries). Drives the row
-    /// indicator + both review surfaces. Recomputed on connect, after any delete/restore/evict
-    /// (via refreshQueries), after sync, and after propagation.
+    /// indicator + both review surfaces. Recomputed whenever an eligibility input changes:
+    /// on connect/auto-scan, after any delete/restore/evict (via refreshQueries), after sync,
+    /// after propagation, and after any drift scan/repair/verify (which rewrites vault_presence).
     private(set) var drivePendingDeletions: [String: [PendingDeletion]] = [:]
 
     func refreshPendingDeletions() {
@@ -362,6 +363,7 @@ final class AppState {
                                                                        limitedTo: report.presentHashes))
         reloadCanonicalPresence()
         driveDrift[driveVault.descriptor.vaultID] = report
+        refreshPendingDeletions()   // vault_presence just changed → recompute eligibility (reconnect + drift-repair paths)
         return report
     }
 
@@ -381,6 +383,7 @@ final class AppState {
                                                                        limitedTo: enriched.presentHashes))
         reloadCanonicalPresence()
         driveDrift[driveVault.descriptor.vaultID] = enriched
+        refreshPendingDeletions()   // presence just changed → keep the deletions indicator honest after Verify
         return enriched
     }
 
