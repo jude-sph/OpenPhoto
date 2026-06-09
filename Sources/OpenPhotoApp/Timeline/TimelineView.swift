@@ -71,7 +71,9 @@ struct TimelineView: View {
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
-            .overlay { PhotoCellView(item: item, library: state.library!, targetPixel: thumbPixels) }
+            .overlay { PhotoCellView(item: item, library: state.library!,
+                                     targetPixel: thumbPixels,
+                                     backedUp: state.isBackedUpOnCanonical(item)) }
             .clipped()
             .selectionChrome(selected: selection.contains(item.instanceID), show: selectMode)
             .cellFrame(item.instanceID, in: "timelinegrid", active: selectMode)
