@@ -105,6 +105,46 @@ public struct DriftReconciler: Sendable {
         try Manifest.write(entries, to: drive.manifestURL)
     }
 
+    /// Full integrity check — re-hash every file vs the manifest. Catches bit-rot (corrupt) on
+    /// top of the fast findings. Slow; reports progress.
+    public func verify(drive: Vault, progress: (DriftProgress) -> Void = { _ in }) throws -> DriftReport {
+        let manifest = try Manifest.read(from: drive.manifestURL)
+        let onDisk = Self.walk(drive)
+        let manifestPaths = Set(manifest.map(\.path))
+
+        var report = DriftReport()
+        report.verified = true
+        let total = manifest.count
+        for (i, e) in manifest.enumerated() {
+            progress(DriftProgress(done: i, total: total,
+                                   currentName: (e.path as NSString).lastPathComponent))
+            guard onDisk[e.path] != nil else {
+                report.missing.append(DriftFinding(kind: .missing, relPath: e.path,
+                    recordedHash: e.hash.stringValue, recordedSize: e.size)); continue
+            }
+            let url = drive.absoluteURL(forRelativePath: e.path)
+            let actual = (try? ContentHash.ofFile(at: url).stringValue) ?? ""
+            if actual == e.hash.stringValue {
+                report.presentHashes.insert(e.hash.stringValue)
+            } else {
+                let d = onDisk[e.path]!
+                let sameSizeAndTime = (d.size == e.size) && (d.mtime == e.mtime)
+                let kind: DriftFinding.Kind = sameSizeAndTime ? .corrupt : .changed
+                let finding = DriftFinding(kind: kind, relPath: e.path, recordedHash: e.hash.stringValue,
+                    onDiskHash: actual.isEmpty ? nil : actual, recordedSize: e.size, onDiskSize: d.size)
+                if kind == .corrupt { report.corrupt.append(finding) } else { report.changed.append(finding) }
+            }
+        }
+        for (rel, d) in onDisk where !manifestPaths.contains(rel) {
+            report.unknown.append(DriftFinding(kind: .unknown, relPath: rel, onDiskSize: d.size))
+        }
+        report.missing.sort { $0.relPath < $1.relPath }
+        report.unknown.sort { $0.relPath < $1.relPath }
+        report.changed.sort { $0.relPath < $1.relPath }
+        report.corrupt.sort { $0.relPath < $1.relPath }
+        return report
+    }
+
     private func writeManifestEntry(hash: String, relPath: String, fileURL: URL, on drive: Vault) throws {
         let a = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let entry = ManifestEntry(hash: ContentHash(stringValue: hash), path: relPath,
