@@ -3,7 +3,6 @@ import OpenPhotoCore
 
 struct DrivesView: View {
     @Bindable var state: AppState
-    @State private var showSync = false
     @State private var syncDrive: Vault?
 
     var body: some View {
@@ -24,8 +23,8 @@ struct DrivesView: View {
                 List(state.canonicalVaults, id: \.id) { vr in row(vr) }.listStyle(.inset)
             }
         }
-        .sheet(isPresented: $showSync) {
-            if let drive = syncDrive { SyncPlanSheet(state: state, drive: drive) }
+        .sheet(item: $syncDrive) { drive in
+            SyncPlanSheet(state: state, drive: drive)
         }
     }
 
@@ -40,7 +39,7 @@ struct DrivesView: View {
             }
             Spacer()
             Button("Sync…") {
-                if let v = state.openVault(for: vr) { syncDrive = v; showSync = true }
+                syncDrive = state.openVault(for: vr)
             }.controlSize(.small).disabled(!present)
         }
         .padding(.vertical, 4)

@@ -1,9 +1,12 @@
 import Foundation
 
 /// A self-describing library location — vault-format-v1 §1.
-public struct Vault: Sendable {
+public struct Vault: Sendable, Identifiable {
     public let rootURL: URL
     public let descriptor: VaultDescriptor
+
+    /// Stable identity (the vault's UUID) — lets SwiftUI present it via `.sheet(item:)`.
+    public var id: String { descriptor.vaultID }
 
     public static let stateDirName = ".openphoto"
 
