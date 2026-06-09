@@ -257,3 +257,18 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     #expect(try lib.catalog.pendingDeletions().isEmpty,
             "Expected pending deletions to be empty after restore, but some remain")
 }
+
+@Test func evictDoesNotEnqueuePendingDeletion() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    try makeJPEG(at: pics.appendingPathComponent("rome/IMG_1.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let item = try #require(try lib.catalog.timelineItems().first)
+
+    _ = try await lib.evict([item])
+
+    // Evict releases the local copy but must NEVER propose deleting the drive copy.
+    #expect(try lib.catalog.pendingDeletions().isEmpty)
+}
