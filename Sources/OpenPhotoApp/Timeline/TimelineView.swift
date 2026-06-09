@@ -6,6 +6,7 @@ struct TimelineView: View {
     @State private var selectMode = false
     @State private var selection = SelectionModel()
     @State private var showEvict = false
+    @State private var showDelete = false
     @State private var showSend = false
 
     private var orderedSelectable: [SelectableItem] {
@@ -36,6 +37,19 @@ struct TimelineView: View {
         } message: {
             Text(evictAlertMessage(total: evictableItems.count,
                                    onlyCopy: state.onlyCopyCount(evictableItems)))
+        }
+        .alert("Delete \(evictableItems.count) photo\(evictableItems.count == 1 ? "" : "s")?",
+               isPresented: $showDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                let items = evictableItems
+                Task {
+                    await state.delete(items)
+                    selection.clear(); selectMode = false
+                }
+            }
+        } message: {
+            Text("They move to the bin (restore anytime). On connected drives, their copies are then queued for removal — review under the drive before anything is deleted there.")
         }
         .sheet(isPresented: $showSend) {
             if let target = state.connectedSendTarget() {
@@ -113,6 +127,7 @@ struct TimelineView: View {
             count: selection.count,
             sendTargetName: state.connectedSendTarget()?.name,
             onSend: { showSend = true },
+            onDelete: { if !evictableItems.isEmpty { showDelete = true } },
             onEvict: { if !evictableItems.isEmpty { showEvict = true } },
             onDeselect: { selection.clear() },
             onDone: { selection.clear(); selectMode = false })

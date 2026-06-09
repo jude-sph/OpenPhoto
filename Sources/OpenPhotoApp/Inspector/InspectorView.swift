@@ -14,6 +14,8 @@ struct InspectorView: View {
     @State private var renaming = false
     @State private var newName = ""
     @State private var filenameHovered = false
+    @State private var showDelete = false
+    @State private var showEvict = false
     @FocusState private var renameFocused: Bool
 
     var body: some View {
@@ -196,11 +198,49 @@ struct InspectorView: View {
                         .disabled(state.fullResURL(for: item) == nil)  // unreachable (drive ejected / missing)
                     }
                 }
+                deleteEvictActions
             }
             .padding(16)
         }
         .background(Theme.bg2)
         .task(id: item.hash) { load() }
+        .alert("Delete this photo?", isPresented: $showDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                Task { await state.delete([item]); state.openedItem = nil }
+            }
+        } message: {
+            Text("It moves to the bin (restore anytime). On connected drives, its copy is then queued for removal — review under the drive before anything is deleted there.")
+        }
+        .alert("Evict this photo?", isPresented: $showEvict) {
+            Button("Cancel", role: .cancel) {}
+            Button("Evict", role: .destructive) {
+                Task { await state.evict([item]); state.openedItem = nil }
+            }
+        } message: {
+            Text(evictAlertMessage(total: 1, onlyCopy: state.onlyCopyCount([item])))
+        }
+    }
+
+    /// Delete / Evict for the photo on screen. Hidden for drive-only assets (view-only —
+    /// there's no local copy to bin; deleting a drive-only photo arrives in Slice 4).
+    @ViewBuilder private var deleteEvictActions: some View {
+        if !state.isDriveOnly(item) {
+            Divider().overlay(Theme.hairline)
+            HStack(spacing: 8) {
+                Button(role: .destructive) { showDelete = true } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .controlSize(.small)
+                .help("Move to the bin and queue removal from drives (review before it propagates).")
+                Button { showEvict = true } label: {
+                    Label("Evict", systemImage: "arrow.down.circle")
+                }
+                .controlSize(.small)
+                .help("Free local space — keep the copy on the drive. Doesn’t delete anywhere.")
+                Spacer()
+            }
+        }
     }
 
     private var exifGrid: some View {

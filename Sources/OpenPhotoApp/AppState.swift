@@ -581,6 +581,19 @@ final class AppState {
         }
     }
 
+    /// Delete a selection: move to the bin AND record the intent so it can be propagated to
+    /// drives (via Review Deletions). Refreshes all queries — including the pending-deletions
+    /// indicator. Unlike evict, this is how a removal reaches the canonical drive.
+    func delete(_ items: [TimelineItem]) async {
+        guard let library else { return }
+        do {
+            _ = try await library.delete(items)
+            try refreshQueries()
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
     /// The connected device we can currently send to, if any. Cameras (AirDrop)
     /// are listed first by DeviceWatcher, so a connected iPhone is preferred.
     func connectedSendTarget() -> ConnectedDevice? {

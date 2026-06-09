@@ -171,6 +171,7 @@ struct SelectionActionBar: View {
     let count: Int
     var sendTargetName: String? = nil       // non-nil → show "Send to <name>"
     var onSend: () -> Void = {}
+    let onDelete: () -> Void
     let onEvict: () -> Void
     let onDeselect: () -> Void
     let onDone: () -> Void
@@ -186,10 +187,16 @@ struct SelectionActionBar: View {
                     Label("Send to \(name)", systemImage: "paperplane")
                 }.disabled(count == 0).controlSize(.small)
             }
-            Button(role: .destructive, action: onEvict) {
-                Label("Evict…", systemImage: "trash")
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete…", systemImage: "trash")
             }
             .disabled(count == 0).controlSize(.small)
+            .help("Move to the bin and queue removal from drives (review before it propagates).")
+            Button(action: onEvict) {
+                Label("Evict…", systemImage: "arrow.down.circle")
+            }
+            .disabled(count == 0).controlSize(.small)
+            .help("Free local space — keep the copy on the drive. Doesn’t delete anywhere.")
             Button("Done", action: onDone).controlSize(.small)
         }
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
