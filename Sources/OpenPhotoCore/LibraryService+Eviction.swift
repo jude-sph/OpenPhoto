@@ -68,6 +68,63 @@ extension LibraryService {
         return outcome
     }
 
+    /// Copy evicted (drive-only) originals back from a connected canonical drive, hash-verified.
+    /// Maps each drive path back to the right local vault (the inverse of the basename-strip).
+    /// Live pairs rehydrate together (best-effort). One rescan per touched local vault.
+    @discardableResult
+    public func rehydrate(_ items: [TimelineItem], connectedCanonical: [Vault]) async throws -> RehydrateOutcome {
+        var outcome = RehydrateOutcome()
+        var restoredPerVault: [String: Int] = [:]   // vaultID → count restored (sync-log + rescan)
+        for item in items where item.driveRelPath != nil {
+            guard let drive = connectedCanonical.first(where: { $0.descriptor.vaultID == item.vaultID })
+            else { outcome.failed += 1; continue }
+            var halves: [(hash: String, driveRelPath: String, relPath: String)] =
+                [(item.hash, item.driveRelPath!, item.relPath)]
+            if let pairHash = item.livePairHash,
+               let row = (try? catalog.vaultPresenceRows(forVault: drive.descriptor.vaultID))?
+                    .first(where: { $0.hash == pairHash }) {
+                halves.append((pairHash, row.driveRelPath, row.relPath))
+            }
+            var stillVaultID: String?
+            for h in halves {
+                guard let (local, localRel) = localTarget(forDriveRelPath: h.driveRelPath, macRelPath: h.relPath)
+                else { continue }
+                let dest = local.absoluteURL(forRelativePath: localRel)
+                // Already local (a prior rehydrate / restored another way) → that half is done;
+                // otherwise copy it back hash-verified.
+                let restored = FileManager.default.fileExists(atPath: dest.path)
+                    || VerifiedCopy.copy(from: drive.absoluteURL(forRelativePath: h.driveRelPath),
+                                         to: dest, expectedHash: h.hash)
+                if restored, h.hash == item.hash { stillVaultID = local.descriptor.vaultID }
+            }
+            if let vid = stillVaultID {
+                outcome.rehydrated += 1; restoredPerVault[vid, default: 0] += 1
+            } else {
+                outcome.failed += 1
+            }
+        }
+        for (vid, n) in restoredPerVault {
+            if let v = vault(id: vid) {
+                appendSyncLog(vault: v, event: "rehydrate", summary: "\(n) restored", counterpartyKey: "")
+            }
+            try await rescan(vaultID: vid)
+        }
+        return outcome
+    }
+
+    /// Map a drive path back to (local vault, mac-relative path): match the drive path's first
+    /// component to a local vault's root basename; otherwise fall back to the primary local vault.
+    func localTarget(forDriveRelPath driveRelPath: String, macRelPath: String) -> (Vault, String)? {
+        let first = driveRelPath.split(separator: "/").first.map(String.init)
+        if let first, let v = vaults.first(where: { $0.rootURL.lastPathComponent == first }) {
+            return (v, macRelPath)
+        }
+        // No basename match: only fall back to the sole vault when it's unambiguous; with several
+        // local vaults, refuse rather than risk restoring into the wrong one (caller counts failed).
+        guard vaults.count == 1 else { return nil }
+        return vaults.first.map { ($0, macRelPath) }
+    }
+
     /// Whether `hash`'s copy on a canonical drive can be trusted right now under `mode`.
     func verifyOnCanonical(hash: String, mode: EvictMode,
                            connectedCanonical: [Vault], canonicalPresence: Set<String>) -> Bool {

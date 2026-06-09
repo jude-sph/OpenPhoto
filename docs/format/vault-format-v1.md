@@ -138,7 +138,7 @@ A *vault's* propagated deletions therefore land in that vault's own `.openphoto/
 
 ## 9. `sync-log.jsonl` (informative)
 
-Append-only journal of import/sync/clone/evict sessions, one JSON object per line with at minimum `{"event", "at", "counterparty_vault_id", "summary"}`. Event names include `"import"`, `"device-delete"`, `"send"`, `"sync"`, `"clone"`, `"evict"`, `"delete"` (a reviewed deletion propagated to this vault's bin). Diagnostic and forensic value; readers MUST NOT require it. For purely local events that have no other party (e.g. `"evict"`), `counterparty_vault_id` is the empty string `""`.
+Append-only journal of import/sync/clone/evict sessions, one JSON object per line with at minimum `{"event", "at", "counterparty_vault_id", "summary"}`. Event names include `"import"`, `"device-delete"`, `"send"`, `"sync"`, `"clone"`, `"evict"`, `"rehydrate"` (an evicted original copied back from a drive), `"delete"` (a reviewed deletion propagated to this vault's bin). Diagnostic and forensic value; readers MUST NOT require it. For purely local events that have no other party (e.g. `"evict"`), `counterparty_vault_id` is the empty string `""`.
 
 ## 10. Rules for third-party writers
 
