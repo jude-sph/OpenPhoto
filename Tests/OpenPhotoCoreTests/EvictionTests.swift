@@ -107,6 +107,25 @@ private func evictFixture(_ t: TestDirs) async throws
     #expect(FileManager.default.fileExists(atPath: local2.rootURL.appendingPathComponent("a/IMG_9.mov").path))
 }
 
+@Test func forcedEvictReleasesEvenWithDriveAbsent() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, local, _, item) = try await evictFixture(t)
+    // No connected drive at all, but presence says the hash is on canonical → forced releases it.
+    let outcome = try await lib.evict([item], mode: .forced,
+                                      connectedCanonical: [], canonicalPresence: [item.hash])
+    #expect(outcome == EvictOutcome(evicted: 1, refused: 0))
+    #expect(!FileManager.default.fileExists(atPath: local.rootURL.appendingPathComponent("rome/IMG_1.jpg").path))
+}
+
+@Test func forcedEvictStillRefusesWhenNotInPresence() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, local, _, item) = try await evictFixture(t)
+    let outcome = try await lib.evict([item], mode: .forced,
+                                      connectedCanonical: [], canonicalPresence: [])  // not on any canonical
+    #expect(outcome == EvictOutcome(evicted: 0, refused: 1))
+    #expect(FileManager.default.fileExists(atPath: local.rootURL.appendingPathComponent("rome/IMG_1.jpg").path))
+}
+
 /// Live pair where only the STILL is on the drive (video missing) → evict must refuse both.
 private func evictFixtureLivePartial(_ t: TestDirs) async throws -> (LibraryService, Vault, Vault, TimelineItem) {
     let pics = try t.sub("Pictures")
