@@ -224,3 +224,36 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
 
     #expect(try lib.catalog.pendingDeletions().isEmpty)   // undeleting cancels the propagation
 }
+
+@Test func deleteAndRestoreLivePhotoRoundTripsPendingQueue() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    try makeJPEG(at: pics.appendingPathComponent("a/IMG_9.jpg").creatingParent(),
+                 dateTimeOriginal: nil, lat: nil, lon: nil)
+    try await makeMOV(at: pics.appendingPathComponent("a/IMG_9.mov").creatingParent())
+    // Identical mtimes so the same-folder+basename live-pair heuristic fires.
+    let now = Date()
+    for f in ["a/IMG_9.jpg", "a/IMG_9.mov"] {
+        try FileManager.default.setAttributes([.modificationDate: now],
+            ofItemAtPath: pics.appendingPathComponent(f).path)
+    }
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let items = try lib.timelineSections().flatMap(\.items)
+    // Verify the pair was formed; if not, the heuristic didn't fire and setup is wrong.
+    #expect(items.count == 1, "Expected exactly one timeline item for the Live pair, got \(items.count)")
+    let pairHash = try #require(items[0].livePairHash, "Expected livePairHash to be set — heuristic did not fire")
+    let still = items[0]
+
+    // Delete the still — both the still and its Live-pair video must be enqueued.
+    try await lib.delete(still)
+    let queued = try lib.catalog.pendingDeletions()
+    #expect(Set(queued.map(\.hash)) == Set([still.hash, pairHash]),
+            "Expected both the still and the video to be enqueued for deletion, got \(queued.map(\.hash))")
+
+    // Restore the still — both halves must be dequeued (conservative: don't propagate video alone).
+    let entry = try #require(try lib.binItems().first(where: { $0.item.hash == still.hash }))
+    try await lib.restore(entry)
+    #expect(try lib.catalog.pendingDeletions().isEmpty,
+            "Expected pending deletions to be empty after restore, but some remain")
+}
