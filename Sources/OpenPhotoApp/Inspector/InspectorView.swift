@@ -207,7 +207,7 @@ struct InspectorView: View {
         .alert("Delete this photo?", isPresented: $showDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                Task { await state.delete([item]); state.openedItem = nil }
+                state.removeOpenedItem { await state.delete($0) }   // advance to next, like the keyboard
             }
         } message: {
             Text("It moves to the bin (restore anytime). On connected drives, its copy is then queued for removal — review under the drive before anything is deleted there.")
@@ -215,7 +215,7 @@ struct InspectorView: View {
         .alert("Evict this photo?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Evict", role: .destructive) {
-                Task { await state.evict([item]); state.openedItem = nil }
+                state.removeOpenedItem { await state.evict($0) }     // advance to next, then evict
             }
         } message: {
             Text(evictAlertMessage(total: 1, onlyCopy: state.onlyCopyCount([item])))

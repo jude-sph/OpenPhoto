@@ -594,6 +594,21 @@ final class AppState {
         }
     }
 
+    /// Remove the open photo, then advance the viewer to the next one (or close it if it was the
+    /// last). Shared by the viewer's keyboard delete and the inspector's Delete/Evict so they
+    /// behave identically — keep culling without leaving the viewer. `removal` performs the actual
+    /// bin operation (delete or evict) on the previously-open item in the background.
+    func removeOpenedItem(using removal: @escaping ([TimelineItem]) async -> Void) {
+        guard let item = openedItem else { return }
+        if let i = flatItems.firstIndex(where: { $0.instanceID == item.instanceID }),
+           flatItems.indices.contains(i + 1) {
+            openedItem = flatItems[i + 1]      // advance to the next photo (current list, pre-removal)
+        } else {
+            openedItem = nil                    // was the last (or not found) → close the viewer
+        }
+        Task { await removal([item]) }
+    }
+
     /// The connected device we can currently send to, if any. Cameras (AirDrop)
     /// are listed first by DeviceWatcher, so a connected iPhone is preferred.
     func connectedSendTarget() -> ConnectedDevice? {
