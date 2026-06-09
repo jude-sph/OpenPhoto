@@ -218,13 +218,13 @@ final class AppState {
             DriftReconciler().annotateRecoverability(&enriched, driveID: driveVault.descriptor.vaultID, presence: p)
         }
         try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
-                                              hashes: Array(report.presentHashes))
+                                              hashes: Array(enriched.presentHashes))
         reloadCanonicalPresence()
         return enriched
     }
 
     func adoptDriftFile(relPath: String, on driveVault: Vault) {
-        try? DriftReconciler().adopt(relPath: relPath, on: driveVault)
+        _ = try? DriftReconciler().adopt(relPath: relPath, on: driveVault)
         driftScan(driveVault)
     }
 
