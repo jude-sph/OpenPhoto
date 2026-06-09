@@ -57,6 +57,20 @@ public final class ThumbnailStore: Sendable {
         return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
     }
 
+    /// Serve a downscaled thumbnail strictly from the on-disk cache (no source needed).
+    /// Returns nil if not yet cached. Lets drive-only assets render while the drive is unplugged.
+    public func cachedDisplayImage(for hash: ContentHash, maxPixel: Int) async -> CGImage? {
+        let url = cacheURL(for: hash)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: min(max(maxPixel, 1), Self.maxPixel),
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+    }
+
     private func generate(from url: URL, kind: MediaKind) async throws -> CGImage? {
         switch kind {
         case .photo:

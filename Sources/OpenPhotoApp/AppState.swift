@@ -267,6 +267,7 @@ final class AppState {
     @discardableResult
     func adoptDriftFile(relPath: String, on driveVault: Vault) -> DriftReport {
         _ = try? DriftReconciler().adopt(relPath: relPath, on: driveVault)
+        Task { await ingestAdopted([relPath], on: driveVault) }
         return driftScan(driveVault)
     }
 
@@ -287,7 +288,16 @@ final class AppState {
     @discardableResult
     func adoptAll(_ relPaths: [String], on driveVault: Vault) -> DriftReport {
         for p in relPaths { _ = try? DriftReconciler().adopt(relPath: p, on: driveVault) }
+        Task { await ingestAdopted(relPaths, on: driveVault) }
         return driftScan(driveVault)
+    }
+
+    private func ingestAdopted(_ relPaths: [String], on driveVault: Vault) async {
+        guard let lib = library else { return }
+        let ingest = CatalogIngest(catalog: lib.catalog, thumbnails: lib.thumbnails)
+        let bases = lib.vaults.map { $0.rootURL.lastPathComponent }
+        for p in relPaths { try? await ingest.ingestDriveFile(relPath: p, on: driveVault, sourceBasenames: bases) }
+        try? refreshQueries()    // bring the new drive-only item into the timeline/folders
     }
 
     /// Restore every recoverable missing file in one pass, then a single re-scan.
