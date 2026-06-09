@@ -11,6 +11,7 @@ struct SyncPlanSheet: View {
     @State private var progress: SyncProgress?
     @State private var result: SyncResult?
     @State private var running = false
+    @State private var deletionSelection: Set<String> = []
 
     private var volume: FileSystemVolume { FileSystemVolume(rootURL: drive.rootURL) }
 
@@ -55,12 +56,24 @@ struct SyncPlanSheet: View {
             }
             Text("Free space: \(byteString(freeBytes))")
                 .font(.system(size: 12)).foregroundStyle(enough ? Theme.textDim : .red)
+            let pending = state.drivePendingDeletions[drive.descriptor.vaultID] ?? []
+            if !pending.isEmpty {
+                Divider().overlay(Theme.hairline)
+                Text("Deletions to review (\(pending.count))")
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(.orange)
+                Text("Deleted on this Mac, still on the drive. Tick to move the drive's copies into its bin.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textDim)
+                DeletionListView(state: state, entries: pending,
+                                 selected: $deletionSelection, onRestore: restore)
+                    .frame(maxHeight: 160)
+            }
             Spacer()
             HStack {
                 Spacer()
                 Button("Sync") { Task { await runApply() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!enough || (plan.copies.isEmpty && plan.sidecarUpdates.isEmpty))
+                    .disabled(!enough || (plan.copies.isEmpty && plan.sidecarUpdates.isEmpty
+                                          && deletionSelection.isEmpty))
             }
         }.padding(24)
     }
@@ -95,8 +108,15 @@ struct SyncPlanSheet: View {
             Task { @MainActor in progress = p }
         }
         try? state.refreshCanonicalPresence(driveVault: drive)
+        let pending = state.drivePendingDeletions[drive.descriptor.vaultID] ?? []
+        let chosen = pending.filter { deletionSelection.contains($0.hash) }
+        if !chosen.isEmpty { _ = await state.propagateDeletions(drive: drive, selected: chosen) }
         result = r
         running = false
+    }
+
+    private func restore(_ e: PendingDeletion) {
+        Task { await state.restorePending(e) }
     }
 
     private func byteString(_ n: Int64) -> String {
