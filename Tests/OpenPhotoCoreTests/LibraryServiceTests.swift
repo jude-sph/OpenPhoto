@@ -192,3 +192,19 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     #expect(try lib.binItems().count == 2)            // still + video both binned
     #expect(try lib.timelineSections().flatMap(\.items).isEmpty)
 }
+
+@Test func deleteEnqueuesPendingDeletion() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    try makeJPEG(at: pics.appendingPathComponent("rome/IMG_1.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let item = try #require(try lib.catalog.timelineItems().first)
+
+    try await lib.delete(item)
+
+    let queued = try lib.catalog.pendingDeletions()
+    #expect(queued.map(\.hash) == [item.hash])
+    #expect(queued.first?.relPath == "rome/IMG_1.jpg")
+}

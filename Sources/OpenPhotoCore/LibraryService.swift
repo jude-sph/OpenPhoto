@@ -220,13 +220,17 @@ public final class LibraryService: Sendable {
 
     public func delete(_ item: TimelineItem) async throws {
         guard let bin = binStores[item.vaultID] else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         try bin.moveToBin(relPath: item.relPath,
                           hash: ContentHash(stringValue: item.hash), origin: .user)
-        // If this is a Live Photo, the paired video goes too.
+        try catalog.enqueuePendingDeletion(hash: item.hash, relPath: item.relPath, deletedAtMs: nowMs)
+        // If this is a Live Photo, the paired video goes too — and is queued too.
         if let pairHash = item.livePairHash,
            let pairInstance = try catalog.instanceItem(hash: pairHash, vaultID: item.vaultID) {
             try bin.moveToBin(relPath: pairInstance.relPath,
                               hash: ContentHash(stringValue: pairHash), origin: .user)
+            try catalog.enqueuePendingDeletion(hash: pairHash, relPath: pairInstance.relPath,
+                                               deletedAtMs: nowMs)
         }
         try await rescan(vaultID: item.vaultID)
     }
