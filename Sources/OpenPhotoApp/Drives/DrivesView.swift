@@ -14,6 +14,7 @@ struct DrivesView: View {
     @State private var syncDrive: Vault?
     @State private var drift: DriftPresentation?
     @State private var forgetTarget: VaultRecord?
+    @State private var deletionDrive: Vault?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -35,6 +36,7 @@ struct DrivesView: View {
         }
         .sheet(item: $syncDrive) { drive in SyncPlanSheet(state: state, drive: drive) }
         .sheet(item: $drift) { d in DriftReviewSheet(state: state, drive: d.drive, verify: d.verify) }
+        .sheet(item: $deletionDrive) { d in DeletionReviewSheet(state: state, drive: d) }
         .alert("Forget “\(forgetTarget.map { ($0.rootPath as NSString).lastPathComponent } ?? "")”?",
                isPresented: Binding(get: { forgetTarget != nil },
                                     set: { if !$0 { forgetTarget = nil } }),
@@ -56,6 +58,7 @@ struct DrivesView: View {
                 Text((vr.rootPath as NSString).lastPathComponent).font(.system(size: 13.5, weight: .semibold))
                 statusText(vr)
                 statusLine(vr)
+                pendingDeletionsLine(vr)
             }
             Spacer()
             Button("Sync…") { syncDrive = state.openVault(for: vr) }
@@ -96,6 +99,20 @@ struct DrivesView: View {
             Image(systemName: "ellipsis.circle").font(.system(size: 14))
         }
         .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
+    }
+
+    /// Pending-deletions indicator — opens the standalone review sheet. Honest count from the
+    /// eligibility cache (refreshed on connect + after any delete/restore/sync/propagate).
+    @ViewBuilder private func pendingDeletionsLine(_ vr: VaultRecord) -> some View {
+        if state.driveIsPresent(vr), let pend = state.drivePendingDeletions[vr.id], !pend.isEmpty {
+            Button {
+                if let v = state.openVault(for: vr) { deletionDrive = v }
+            } label: {
+                Label("\(pend.count) deletion\(pend.count == 1 ? "" : "s") pending · Review",
+                      systemImage: "trash")
+                    .font(.system(size: 11)).foregroundStyle(.orange)
+            }.buttonStyle(.plain)
+        }
     }
 
     /// Passive drift status from the auto-scan cache (refreshed on connect + after any scan).
