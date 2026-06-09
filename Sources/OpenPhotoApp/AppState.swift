@@ -301,6 +301,24 @@ final class AppState {
     /// auto-scan on connect and by every scan/verify/repair.
     private(set) var driveDrift: [String: DriftReport] = [:]
 
+    /// Eligible pending deletions per connected drive (vaultID → entries). Drives the row
+    /// indicator + both review surfaces. Recomputed on connect, after any delete/restore/evict
+    /// (via refreshQueries), after sync, and after propagation.
+    private(set) var drivePendingDeletions: [String: [PendingDeletion]] = [:]
+
+    func refreshPendingDeletions() {
+        guard let lib = library else { drivePendingDeletions = [:]; return }
+        let queue = (try? lib.catalog.pendingDeletions()) ?? []
+        let local = (try? lib.catalog.instanceHashes()) ?? []
+        var out: [String: [PendingDeletion]] = [:]
+        for vr in canonicalVaults where driveIsPresent(vr) {
+            let presence = (try? lib.catalog.vaultPresenceRows(forVault: vr.id)) ?? []
+            let eligible = DeletionPropagator().eligible(queue: queue, localHashes: local, presence: presence)
+            if !eligible.isEmpty { out[vr.id] = eligible }
+        }
+        drivePendingDeletions = out
+    }
+
     /// Run a fast drift scan, set this drive's presence to verified reality, refresh badges + status.
     @discardableResult
     func driftScan(_ driveVault: Vault) -> DriftReport {
@@ -355,6 +373,7 @@ final class AppState {
             driveDrift[vr.id] = report
         }
         reloadCanonicalPresence()
+        refreshPendingDeletions()
     }
 
     @discardableResult
@@ -495,6 +514,7 @@ final class AppState {
             expandedFolders = paths
         }
         binEntries = try library.binItems()
+        refreshPendingDeletions()
         refreshToken += 1
     }
 
