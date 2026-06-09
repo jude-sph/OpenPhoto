@@ -1,0 +1,29 @@
+import Testing
+import Foundation
+@testable import OpenPhotoCore
+
+private func makeCatalog(_ t: TestDirs) throws -> Catalog {
+    try Catalog(at: try t.sub("as").appendingPathComponent("catalog.sqlite"))
+}
+
+@Test func registerAndListVaults() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let c = try makeCatalog(t)
+    try c.registerVault(id: "v-local", role: "local", rootPath: "/tmp/pics")
+    try c.registerVault(id: "v-canon", role: "canonical", rootPath: "/Volumes/Canonical")
+    let all = try c.registeredVaults()
+    #expect(Set(all.map(\.id)) == ["v-local", "v-canon"])
+    #expect(all.first { $0.id == "v-canon" }?.role == "canonical")
+}
+
+@Test func replaceAndReadVaultPresence() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let c = try makeCatalog(t)
+    let h1 = "sha256:" + String(repeating: "1", count: 64)
+    let h2 = "sha256:" + String(repeating: "2", count: 64)
+    try c.replaceVaultPresence(vaultID: "v-canon", hashes: [h1, h2])
+    #expect(try c.vaultPresenceHashes(forVault: "v-canon") == [h1, h2])
+    try c.replaceVaultPresence(vaultID: "v-canon", hashes: [h1])   // full swap, not append
+    #expect(try c.vaultPresenceHashes(forVault: "v-canon") == [h1])
+    #expect(try c.vaultPresenceHashes(forVault: "absent").isEmpty)
+}

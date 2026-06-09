@@ -47,6 +47,15 @@ public final class Catalog: Sendable {
                 t.primaryKey(["vaultID", "relPath"])
             }
         }
+        migrator.registerMigration("v2") { db in
+            // Presence of an asset hash in a NON-local vault (a drive), derived from
+            // that vault's manifest. Local-vault presence already lives in `instances`.
+            try db.create(table: "vault_presence") { t in
+                t.column("vaultID", .text).notNull()
+                t.column("hash", .text).notNull().indexed()
+                t.primaryKey(["vaultID", "hash"])
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -54,6 +63,34 @@ public final class Catalog: Sendable {
         try dbQueue.write { db in
             try VaultRecord(id: id, role: role, rootPath: rootPath,
                             lastSeenMs: Int64(Date().timeIntervalSince1970 * 1000)).save(db)
+        }
+    }
+
+    public func registeredVaults() throws -> [VaultRecord] {
+        try dbQueue.read { db in try VaultRecord.fetchAll(db) }
+    }
+
+    public func setVaultLastSeen(id: String, ms: Int64) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE vaults SET lastSeenMs = ? WHERE id = ?", arguments: [ms, id])
+        }
+    }
+
+    /// Full swap of a vault's presence set (mirrors `replaceInstances`).
+    public func replaceVaultPresence(vaultID: String, hashes: [String]) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM vault_presence WHERE vaultID = ?", arguments: [vaultID])
+            for h in hashes {
+                try db.execute(sql: "INSERT OR IGNORE INTO vault_presence (vaultID, hash) VALUES (?, ?)",
+                               arguments: [vaultID, h])
+            }
+        }
+    }
+
+    public func vaultPresenceHashes(forVault vaultID: String) throws -> Set<String> {
+        try dbQueue.read { db in
+            Set(try String.fetchAll(db,
+                sql: "SELECT hash FROM vault_presence WHERE vaultID = ?", arguments: [vaultID]))
         }
     }
 
