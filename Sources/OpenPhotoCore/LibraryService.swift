@@ -306,14 +306,7 @@ public final class LibraryService: Sendable {
     /// Append an event to the vault's sync-log.jsonl (format §9, informative).
     public func appendSyncLog(vault: Vault, event: String, summary: String,
                               counterpartyKey: String) {
-        let line: [String: Any] = ["event": event,
-                                   "at": ISO8601Millis.string(from: Date()),
-                                   "counterparty_vault_id": counterpartyKey,
-                                   "summary": summary]
-        guard let data = try? JSONSerialization.data(withJSONObject: line,
-                                                     options: [.sortedKeys]) else { return }
-        var existing = (try? Data(contentsOf: vault.syncLogURL)) ?? Data()
-        existing.append(data); existing.append(0x0A)
-        try? AtomicFile.write(existing, to: vault.syncLogURL)
+        SyncLog.append(event: event, summary: summary,
+                       counterparty: counterpartyKey, to: vault.syncLogURL)
     }
 }
