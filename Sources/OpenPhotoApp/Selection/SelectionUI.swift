@@ -173,6 +173,7 @@ struct SelectionActionBar: View {
     var onSend: () -> Void = {}
     let onDelete: () -> Void
     let onEvict: () -> Void
+    var onForceEvict: () -> Void = {}
     let onDeselect: () -> Void
     let onDone: () -> Void
     var body: some View {
@@ -197,9 +198,44 @@ struct SelectionActionBar: View {
             }
             .disabled(count == 0).controlSize(.small)
             .help("Free local space — keep the copy on the drive. Doesn’t delete anywhere.")
+            Menu {
+                Button(role: .destructive, action: onForceEvict) {
+                    Label("Force Evict (skip verification)…", systemImage: "exclamationmark.triangle")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle").font(.system(size: 14))
+            }
+            .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
+            .disabled(count == 0)
             Button("Done", action: onDone).controlSize(.small)
         }
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
+    }
+}
+
+/// The deliberate, ack-gated confirmation for Force Evict (skip verification).
+struct ForceEvictSheet: View {
+    let count: Int
+    let onConfirm: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var acknowledged = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Force Evict \(count) photo\(count == 1 ? "" : "s")", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(.orange)
+            Text("This releases the local originals without re-checking the drive. If the drive copy is missing or damaged, these originals will be lost when you empty the Trash.")
+                .font(.system(size: 12)).foregroundStyle(Theme.textDim).fixedSize(horizontal: false, vertical: true)
+            Toggle("I understand these originals may be unrecoverable.", isOn: $acknowledged)
+                .font(.system(size: 12)).toggleStyle(.checkbox)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Force Evict") { onConfirm(); dismiss() }
+                    .keyboardShortcut(.defaultAction).disabled(!acknowledged)
+            }
+        }
+        .padding(20).frame(width: 420)
     }
 }
 

@@ -7,6 +7,7 @@ struct FolderGridView: View {
     @State private var selectMode = false
     @State private var selection = SelectionModel()
     @State private var showEvict = false
+    @State private var showForceEvict = false
     @State private var showDelete = false
     @State private var showSend = false
 
@@ -62,6 +63,12 @@ struct FolderGridView: View {
                 SendSheet(state: state, items: selectedItems, device: target) {
                     selection.clear(); selectMode = false
                 }
+            }
+        }
+        .sheet(isPresented: $showForceEvict) {
+            ForceEvictSheet(count: evictableItems.count) {
+                let toEvict = evictableItems
+                Task { _ = await state.evict(toEvict, mode: .forced); selection.clear(); selectMode = false }
             }
         }
     }
@@ -123,6 +130,7 @@ struct FolderGridView: View {
             onSend: { showSend = true },
             onDelete: { if !evictableItems.isEmpty { showDelete = true } },
             onEvict: { if !evictableItems.isEmpty { showEvict = true } },
+            onForceEvict: { if !evictableItems.isEmpty { showForceEvict = true } },
             onDeselect: { selection.clear() },
             onDone: { selection.clear(); selectMode = false })
     }
