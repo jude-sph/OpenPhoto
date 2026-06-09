@@ -146,7 +146,7 @@ final class AppState {
 
     func reconnectDrive(_ vr: VaultRecord) {
         ejectedDrives.remove(vr.id); persistEjected()
-        Task { await autoScanConnectedDrives() }   // re-scan the now-available drive
+        if let drive = openVault(for: vr) { driftScan(drive) }   // re-scan just this drive
     }
 
     /// Forget a drive entirely: unregister it + drop its presence. The files on the drive are NOT
@@ -155,6 +155,9 @@ final class AppState {
         try? library?.catalog.unregisterVault(id: vr.id)
         ejectedDrives.remove(vr.id); persistEjected()
         driveDrift[vr.id] = nil
+        // If the viewer is showing a photo that lived only on this drive, close it (it's now gone
+        // from browse — leaving it open would strand the viewer's navigation).
+        if let opened = openedItem, opened.vaultID == vr.id { openedItem = nil }
         reloadDrives()
         reloadCanonicalPresence()
         try? refreshQueries()

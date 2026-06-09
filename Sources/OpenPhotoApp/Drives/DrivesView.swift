@@ -84,7 +84,7 @@ struct DrivesView: View {
     @ViewBuilder private func driveMenu(_ vr: VaultRecord) -> some View {
         Menu {
             if state.driveIsEjected(vr) {
-                Button { state.reconnectDrive(vr) } label: { Label("Reconnect", systemImage: "eject.fill") }
+                Button { state.reconnectDrive(vr) } label: { Label("Reconnect", systemImage: "externaldrive.fill") }
             } else if state.driveFolderExists(vr) {
                 Button { state.ejectDrive(vr) } label: { Label("Eject", systemImage: "eject") }
             }
