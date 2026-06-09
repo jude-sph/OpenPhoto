@@ -38,4 +38,51 @@ public struct DeletionPropagator: Sendable {
                                    size: p.size, deletedAtMs: rec.deletedAtMs)
         }
     }
+
+    /// Destructive: move each drive copy into the drive's bin (origin: propagated), then one
+    /// atomic manifest rewrite, then update presence + queue + sync-log. A copy already gone is
+    /// counted `skipped` but still cleared (goal state reached); a genuine move failure is left
+    /// queued for retry. Files move first (each recoverable in the bin), so an interruption before
+    /// the manifest rewrite self-heals as a recoverable `missing` drift on the next scan.
+    @discardableResult
+    public func propagate(drive: Vault, entries: [PendingDeletion],
+                          macVaultID: String, catalog: Catalog) throws -> Result {
+        guard !entries.isEmpty else { return Result() }
+        let bin = BinStore(vault: drive)
+        let fm = FileManager.default
+        var clearedHashes: [String] = []          // removed from drive (moved OR already gone)
+        var clearedDrivePaths = Set<String>()
+        var moved = 0, skipped = 0, failed = 0
+
+        for e in entries {
+            let src = drive.absoluteURL(forRelativePath: e.driveRelPath)
+            if !fm.fileExists(atPath: src.path) {
+                skipped += 1
+                clearedHashes.append(e.hash); clearedDrivePaths.insert(e.driveRelPath)
+                continue
+            }
+            do {
+                try bin.moveToBin(relPath: e.driveRelPath,
+                                  hash: ContentHash(stringValue: e.hash), origin: .propagated)
+                moved += 1
+                clearedHashes.append(e.hash); clearedDrivePaths.insert(e.driveRelPath)
+            } catch {
+                failed += 1   // leave queued; do not clear
+            }
+        }
+
+        // One atomic manifest rewrite dropping every cleared path.
+        let remaining = try Manifest.read(from: drive.manifestURL)
+            .filter { !clearedDrivePaths.contains($0.path) }
+        try Manifest.write(remaining, to: drive.manifestURL)
+
+        try catalog.removeVaultPresence(vaultID: drive.descriptor.vaultID, hashes: clearedHashes)
+        try catalog.clearPendingDeletions(hashes: clearedHashes)
+
+        if moved > 0 {
+            SyncLog.append(event: "delete", summary: "\(moved) propagated to drive bin",
+                           counterparty: macVaultID, to: drive.syncLogURL)
+        }
+        return Result(propagated: moved, skipped: skipped, failed: failed)
+    }
 }

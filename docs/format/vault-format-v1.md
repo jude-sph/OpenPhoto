@@ -134,9 +134,11 @@ Conforming software never hard-deletes. Deletion = move the file (and its sideca
 
 `origin` is `"user"` (deleted directly in this vault's UI) or `"propagated"` (a reviewed deletion synced from the user's catalog). Restore = the reverse move + manifest line re-added.
 
+A *vault's* propagated deletions therefore land in that vault's own `.openphoto/bin/` (the same mechanism as a local deletion), tagged `origin:"propagated"`. The volume-root `.openphoto-trash/` directory of §12 is used **only** for deletions on removable *non-vault* volumes (e.g. an SD card during import), which have no `.openphoto/` vault to host a bin.
+
 ## 9. `sync-log.jsonl` (informative)
 
-Append-only journal of import/sync/clone/evict sessions, one JSON object per line with at minimum `{"event", "at", "counterparty_vault_id", "summary"}`. Event names include `"import"`, `"device-delete"`, `"send"`, `"sync"`, `"clone"`, `"evict"`. Diagnostic and forensic value; readers MUST NOT require it. For purely local events that have no other party (e.g. `"evict"`), `counterparty_vault_id` is the empty string `""`.
+Append-only journal of import/sync/clone/evict sessions, one JSON object per line with at minimum `{"event", "at", "counterparty_vault_id", "summary"}`. Event names include `"import"`, `"device-delete"`, `"send"`, `"sync"`, `"clone"`, `"evict"`, `"delete"` (a reviewed deletion propagated to this vault's bin). Diagnostic and forensic value; readers MUST NOT require it. For purely local events that have no other party (e.g. `"evict"`), `counterparty_vault_id` is the empty string `""`.
 
 ## 10. Rules for third-party writers
 
