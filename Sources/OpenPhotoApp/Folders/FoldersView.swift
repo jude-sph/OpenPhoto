@@ -9,6 +9,7 @@ struct FoldersView: View {
             FolderTreeView(state: state)
                 .frame(width: Theme.folderTreeWidth)
             Divider().overlay(Theme.hairline)
+                .ignoresSafeArea(.container, edges: .top)
             FolderGridView(state: state)
         }
     }
