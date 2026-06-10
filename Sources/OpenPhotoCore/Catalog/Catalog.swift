@@ -92,6 +92,22 @@ public final class Catalog: Sendable {
                 t.column("deletedAtMs", .integer).notNull()
             }
         }
+        migrator.registerMigration("v5") { db in
+            // Per-asset per-stage derivation completion (rebuildable cache; resumable, retry-capped).
+            try db.create(table: "derivation_jobs") { t in
+                t.column("hash", .text).notNull()
+                t.column("stage", .text).notNull()
+                t.column("status", .text).notNull()        // "done" | "failed"
+                t.column("attempts", .integer).notNull().defaults(to: 0)
+                t.column("updatedAtMs", .integer).notNull()
+                t.primaryKey(["hash", "stage"])
+            }
+            // Full-text index over recognized text (rebuildable cache).
+            try db.create(virtualTable: "ocr", using: FTS5()) { t in
+                t.column("hash").notIndexed()
+                t.column("text")
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 
