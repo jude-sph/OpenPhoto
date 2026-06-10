@@ -47,6 +47,8 @@ final class AppState {
     var binEntries: [LibraryService.BinEntry] = []
     var deviceWatcher = DeviceWatcher()
     var openedDevice: ConnectedDevice?      // non-nil → ImportView is shown
+    /// Non-nil while a Quick View peek is open. Ephemeral — its tempDir is deleted on teardown.
+    var peekContext: PeekContext?
     var scanProgress: Scanner.Progress?
     var scanning = false
     var refreshToken = 0
@@ -108,6 +110,31 @@ final class AppState {
         if let dev = deviceWatcher.devices.first(where: { $0.id == "manual-" + url.path }) {
             openedDevice = dev
         }
+    }
+
+    /// Start an ephemeral, trace-free peek of `root` (a drive or any folder). Loads off-main into a
+    /// throwaway temp dir; nothing is written to `root` or persisted on the Mac.
+    func startQuickView(root: URL) async {
+        endQuickView()   // tear down any prior peek first (single peekContext)
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenPhotoPeek-" + UUID().uuidString)
+        let ctx = await Task.detached(priority: .userInitiated) {
+            try? PeekSource.load(root: root, tempDir: tmp)
+        }.value
+        if let ctx {
+            peekContext = ctx
+        } else {
+            try? FileManager.default.removeItem(at: tmp)
+            driveAlert("Couldn\u{2019}t open Quick View",
+                       "\u{201c}\(root.lastPathComponent)\u{201d} couldn\u{2019}t be read.")
+        }
+    }
+
+    /// End the current peek and delete its temp dir (idempotent).
+    func endQuickView() {
+        guard let ctx = peekContext else { return }
+        peekContext = nil
+        try? FileManager.default.removeItem(at: ctx.tempDir)
     }
 
     // All drives that hold the library durably (canonical + its backups). Used for presence,
@@ -708,6 +735,12 @@ final class AppState {
                 Task { @MainActor in
                     guard let self else { return }
                     self.reloadDrives()
+                    // A peeked drive that vanished (ejected/unplugged) → close the peek. Nothing was
+                    // persisted, so this just discards the throwaway temp dir.
+                    if let ctx = self.peekContext,
+                       !FileManager.default.fileExists(atPath: ctx.root.path) {
+                        self.endQuickView()
+                    }
                     await self.autoScanConnectedDrives()
                 }
             }
