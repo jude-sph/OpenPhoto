@@ -52,6 +52,13 @@ struct ConsensusRepairSheet: View {
                         .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if results.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("No connected drives", systemImage: "externaldrive")
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.textDim)
+                Text("Connect a canonical or backup drive to verify it.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textDim)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(24)
         } else if results.allSatisfy({ $0.report.isClean }) {
             VStack(alignment: .leading, spacing: 6) {
                 Label("All drives verified", systemImage: "checkmark.seal")
