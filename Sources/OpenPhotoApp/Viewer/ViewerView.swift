@@ -30,7 +30,12 @@ struct ViewerView: View {
         .focusEffectDisabled()   // keep keyboard focus for arrow-keys, hide the blue focus ring
         .focused($stageFocused)
         .onAppear { stageFocused = true }
-        .onChange(of: state.openedItem?.instanceID) { stageFocused = true }
+        .onChange(of: state.openedItem?.instanceID) {
+            // Re-assert focus (toggle off→on): leaving a video can drift the first responder, and
+            // setting `true` when it's already `true` won't reclaim it — so arrow-key nav would die.
+            stageFocused = false
+            DispatchQueue.main.async { stageFocused = true }
+        }
         .background(Color.black.opacity(0.96))
         .onKeyPress(.escape) { state.openedItem = nil; return .handled }
         .onKeyPress(.leftArrow) { step(-1); return .handled }
@@ -57,9 +62,17 @@ struct ViewerView: View {
                 // immersive full-window look of a zoomed photo (the gallery is the only overlay).
                 // Back: Esc; toggle inspector: i.
                 ZStack {
-                    VStack(spacing: 0) { topBar; Spacer() }       // bar underneath (covered)
-                    PlayerView(player: player)                     // full-window video
-                    VStack(spacing: 0) { Spacer(); galleryBar }    // gallery overlays the bottom
+                    PlayerView(player: player)
+                        .ignoresSafeArea(.container, edges: .top)   // fill to the very top edge
+                    VStack(spacing: 0) {
+                        // Float the bar over the video (back + inspector stay reachable); a subtle
+                        // gradient keeps the white controls legible over bright frames.
+                        topBar.background(
+                            LinearGradient(colors: [.black.opacity(0.5), .clear],
+                                           startPoint: .top, endPoint: .bottom))
+                        Spacer()
+                        galleryBar
+                    }
                 }
             } else {
                 VStack(spacing: 0) {
