@@ -118,11 +118,43 @@ Notes:
 
 A Live Photo is one logical asset made of two files (e.g. `IMG_4123.heic` + `IMG_4123.mov`), each with its own hash and manifest line. Pairing is determined by Apple's content identifier (`com.apple.quicktime.content.identifier` in the MOV; the corresponding Maker Apple key in the HEIC). Fallback heuristic when stripped: same basename in the same folder with capture timestamps within 2 seconds. Sidecar metadata attaches to the still image's sidecar; the video carries none.
 
-## 7. `catalog-snapshot/` (optional, non-normative)
+## 7. `catalog-snapshot/` (optional)
 
-A copy of the OpenPhoto catalog (SQLite) and thumbnail cache, refreshed by the Mac at the end of each sync. It exists so a fresh machine gets search/faces/thumbnails without re-running ML.
+A copy of the OpenPhoto catalog (SQLite) and thumbnail cache, written by the Mac at the end of each sync or clone. It exists so a fresh machine — or server-side reader — gets search metadata and thumbnails without re-running ML or re-scanning the drive.
 
-Third parties: **treat it as a disposable accelerator.** The authoritative data is always files + sidecars + manifest. You may read it (schema documented in `catalog-schema.md` once stable), but MUST NOT treat it as a source of truth and MUST NOT write to it. OpenPhoto regenerates it wholesale.
+### 7.1 Layout
+
+```
+<drive-root>/.openphoto/catalog-snapshot/
+  catalog.sqlite          ← clean VACUUM INTO copy of the Mac's catalog (schema: catalog-schema.md)
+  thumbs/<hh>/<hash>.jpg  ← content-addressed thumbnails, ONLY this drive's manifest hashes
+  snapshot.json           ← {"format_version":1,"catalog_schema_version":<N>,
+                              "source_vault_id":"…","written_at":"ISO-8601","asset_count":N}
+```
+
+`catalog_schema_version` is the catalog's current migration version (the value at the time of writing is **4**; it tracks the schema in `catalog-schema.md` and increases as the catalog evolves). `format_version` is the snapshot-envelope version, currently `1`.
+
+### 7.2 Write protocol
+
+The snapshot is assembled in a sibling directory `catalog-snapshot.tmp/` (at the same level inside `.openphoto/`) and renamed into place atomically only after all files have been written and fsynced. The directory that was previously at `catalog-snapshot/` (if any) is removed only after the rename succeeds. A reader that finds `catalog-snapshot.tmp/` but no `catalog-snapshot/` MUST treat the snapshot as absent.
+
+### 7.3 Reader obligations
+
+The snapshot is **disposable and non-normative**. It is a cache/accelerator; OpenPhoto regenerates it wholesale after every sync and clone.
+
+A reader MUST treat the snapshot as an accelerator only:
+
+- If `catalog-snapshot/` is absent, unreadable, or carries a `snapshot.json` `format_version` newer than the reader understands, the reader MUST fall back to a full re-scan of the drive's originals, sidecars, and `manifest.jsonl`.
+- The `manifest.jsonl` (§4) is **always authoritative** for what files are on the drive. On any disagreement between the snapshot and the manifest, the manifest wins.
+- A reader MUST NOT write to `catalog-snapshot/`. OpenPhoto owns and rebuilds it.
+
+### 7.4 Thumbnails
+
+`thumbs/` uses the same content-addressed layout as the Mac's live thumbnail cache: files are placed at `thumbs/<first-two-hex-chars-of-hash>/<full-hash>.jpg`. Only hashes that appear in this drive's `manifest.jsonl` are stored here; thumbnails for assets evicted or never synced to this drive are absent.
+
+### 7.5 Catalog schema
+
+The schema of `catalog.sqlite` is documented in `docs/format/catalog-schema.md`. A snapshot reader uses only the `assets` table (hash-keyed machine metadata) and the `vault_presence` rows whose `vaultID` matches this drive's own vault id. All other tables and rows are internal to the source Mac and MUST be ignored by external readers (see the Portability key in `catalog-schema.md`).
 
 ## 8. Deletion (`bin/`, `bin.jsonl`)
 
