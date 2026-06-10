@@ -127,7 +127,7 @@ struct InspectorView: View {
                         }
                     }
                     // At-a-glance "not backed up": flag absence from the canonical drive.
-                    if !state.canonicalVaults.isEmpty && !state.isBackedUpOnCanonical(item) {
+                    if !state.durableVaults.isEmpty && !state.isBackedUpOnCanonical(item) {
                         notOnCanonicalRow()
                     }
                 }

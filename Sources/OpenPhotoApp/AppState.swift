@@ -110,13 +110,26 @@ final class AppState {
         }
     }
 
-    private(set) var canonicalVaults: [VaultRecord] = []
+    // All drives that hold the library durably (canonical + its backups). Used for presence,
+    // browse, drift, deletion, and as candidate read/verify sources.
+    private(set) var durableVaults: [VaultRecord] = []
+    // The authoritative canonical (source of truth / preferred read source / migration anchor).
+    var canonicalVault: VaultRecord? { durableVaults.first { $0.role == "canonical" } }
+
+    /// Connected durable drives as open Vaults, canonical first — so reads/verifies (rehydrate,
+    /// evict, send) prefer the canonical source of truth and fall back to a backup.
+    func connectedDrivesCanonicalFirst() -> [Vault] {
+        durableVaults.filter { driveIsPresent($0) }
+            .sorted { ($0.role == "canonical" ? 0 : 1) < ($1.role == "canonical" ? 0 : 1) }
+            .compactMap { openVault(for: $0) }
+    }
 
     /// Refresh the observable drive list from the catalog. A computed property that queries the
     /// DB doesn't trigger @Observable invalidation, so the Drives view wouldn't react when a drive
     /// is adopted — this stored property does. Call after adopting a drive and at library-open.
     func reloadDrives() {
-        canonicalVaults = (try? library?.catalog.registeredVaults().filter { $0.role == "canonical" }) ?? []
+        durableVaults = (try? library?.catalog.registeredVaults()
+            .filter { $0.role == "canonical" || $0.role == "backup" }) ?? []
     }
 
     private(set) var canonicalPresence: Set<String> = []
@@ -226,7 +239,7 @@ final class AppState {
                 return
             }
             // Already adopted? Same vault_id means it's the same drive.
-            if canonicalVaults.contains(where: { $0.id == vault.descriptor.vaultID }) {
+            if durableVaults.contains(where: { $0.id == vault.descriptor.vaultID }) {
                 driveAlert("Already added",
                     "“\(url.lastPathComponent)” is already one of your drives.")
                 return
@@ -234,7 +247,7 @@ final class AppState {
             try lib.catalog.registerVault(id: vault.descriptor.vaultID,
                                           role: vault.descriptor.role.rawValue, rootPath: url.path)
             reloadDrives()
-            if let vr = canonicalVaults.first(where: { $0.id == vault.descriptor.vaultID }) { cacheDriveKind(vr) }
+            if let vr = durableVaults.first(where: { $0.id == vault.descriptor.vaultID }) { cacheDriveKind(vr) }
             try refreshCanonicalPresence(driveVault: vault)
         } catch { driveAlert("Couldn’t add drive", error.localizedDescription) }
     }
@@ -260,7 +273,8 @@ final class AppState {
     }
 
     /// Re-read a drive's manifest into vault_presence, then rebuild the badge cache as the
-    /// union across all canonical vaults (so refreshing one drive never wipes another's badges).
+    /// union across all durable vaults (canonical + backups), so refreshing one drive never
+    /// wipes another's badges.
     func refreshCanonicalPresence(driveVault: Vault) throws {
         guard let lib = library else { return }
         let entries = presenceEntries(forDrive: driveVault, limitedTo: nil)
@@ -268,12 +282,12 @@ final class AppState {
         reloadCanonicalPresence()
     }
 
-    /// Rebuild `canonicalPresence` from the persisted catalog — union of every canonical
-    /// vault's presence set. Cheap; safe to call at library-open and after any sync.
+    /// Rebuild `canonicalPresence` from the persisted catalog — union of every durable vault's
+    /// (canonical + backup) presence set. Cheap; safe to call at library-open and after any sync.
     func reloadCanonicalPresence() {
         guard let lib = library else { return }
         var union = Set<String>()
-        for vr in canonicalVaults {
+        for vr in durableVaults {
             if let hs = try? lib.catalog.vaultPresenceHashes(forVault: vr.id) { union.formUnion(hs) }
         }
         canonicalPresence = union
@@ -286,7 +300,7 @@ final class AppState {
     /// Full-res URL for an item: local file, or the drive file when the drive is connected.
     func fullResURL(for item: TimelineItem) -> URL? {
         if item.driveRelPath == nil { return library?.absoluteURL(for: item) }
-        guard let vr = canonicalVaults.first(where: { $0.id == item.vaultID }),
+        guard let vr = durableVaults.first(where: { $0.id == item.vaultID }),
               driveIsPresent(vr),
               let drive = openVault(for: vr) else { return nil }
         let url = drive.absoluteURL(forRelativePath: item.driveRelPath!)
@@ -312,7 +326,7 @@ final class AppState {
         let queue = (try? lib.catalog.pendingDeletions()) ?? []
         let local = (try? lib.catalog.instanceHashes()) ?? []
         var out: [String: [PendingDeletion]] = [:]
-        for vr in canonicalVaults where driveIsPresent(vr) {
+        for vr in durableVaults where driveIsPresent(vr) {
             let presence = (try? lib.catalog.vaultPresenceRows(forVault: vr.id)) ?? []
             let eligible = DeletionPropagator().eligible(queue: queue, localHashes: local, presence: presence)
             if !eligible.isEmpty { out[vr.id] = eligible }
@@ -387,10 +401,10 @@ final class AppState {
         return enriched
     }
 
-    /// Background fast-scan of every connected canonical drive — keeps badges + the status line
-    /// honest automatically (at library-open and whenever a volume mounts), no manual Check needed.
+    /// Background fast-scan of every connected durable drive (canonical + backups) — keeps badges +
+    /// the status line honest automatically (at library-open and whenever a volume mounts), no manual Check.
     func autoScanConnectedDrives() async {
-        for vr in canonicalVaults where driveIsPresent(vr) {
+        for vr in durableVaults where driveIsPresent(vr) {
             cacheDriveKind(vr)
             guard let drive = openVault(for: vr) else { continue }
             let scanned = await Task.detached(priority: .utility) {
@@ -462,7 +476,7 @@ final class AppState {
     }
 
     /// A reachable on-disk file with `hash` outside `driveID`: prefer the Mac's local copy, else
-    /// any currently-connected canonical drive that holds it. (restore re-verifies the bytes, so
+    /// any currently-connected durable drive (canonical or backup) that holds it. (restore re-verifies the bytes, so
     /// even a drive copy that is itself rotten fails safely rather than spreading corruption.)
     private func goodCopyURL(forHash hash: String, excluding driveID: String) -> URL? {
         guard let lib = library else { return nil }
@@ -472,8 +486,8 @@ final class AppState {
             let url = vault.absoluteURL(forRelativePath: inst.relPath)
             if FileManager.default.fileExists(atPath: url.path) { return url }
         }
-        // 2. Another connected canonical drive that holds the hash (look up its path in its manifest).
-        for vr in canonicalVaults where vr.id != driveID && driveIsPresent(vr) {
+        // 2. Another connected durable drive that holds the hash (look up its path in its manifest).
+        for vr in durableVaults where vr.id != driveID && driveIsPresent(vr) {
             guard let drive = openVault(for: vr),
                   let entry = (try? Manifest.read(from: drive.manifestURL))?
                       .first(where: { $0.hash.stringValue == hash }) else { continue }
@@ -574,18 +588,18 @@ final class AppState {
     func rehydratableItems(_ items: [TimelineItem]) -> [TimelineItem] {
         items.filter { item in
             item.driveRelPath != nil &&
-            canonicalVaults.contains { $0.id == item.vaultID && driveIsPresent($0) }
+            durableVaults.contains { $0.id == item.vaultID && driveIsPresent($0) }
         }
     }
 
     @discardableResult
     func rehydrate(_ items: [TimelineItem]) async -> RehydrateOutcome {
         guard let lib = library else { return RehydrateOutcome() }
-        let drives = canonicalVaults.filter { driveIsPresent($0) }.compactMap { openVault(for: $0) }
+        let drives = connectedDrivesCanonicalFirst()
         let outcome = await Task.detached(priority: .userInitiated) {
             (try? await lib.rehydrate(items, connectedCanonical: drives)) ?? RehydrateOutcome()
         }.value
-        for vr in canonicalVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
+        for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
         try? refreshQueries()
         return outcome
     }
@@ -595,7 +609,7 @@ final class AppState {
     @discardableResult
     func evict(_ items: [TimelineItem], mode: EvictMode = .verified) async -> EvictOutcome {
         guard let lib = library else { return EvictOutcome() }
-        let drives = canonicalVaults.filter { driveIsPresent($0) }.compactMap { openVault(for: $0) }
+        let drives = connectedDrivesCanonicalFirst()
         let presence = canonicalPresence
         var outcome = EvictOutcome()
         do {
@@ -610,7 +624,7 @@ final class AppState {
             }
         }
         // driftScan re-derives canonical presence first; refreshQueries then reads the fresh state.
-        for vr in canonicalVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
+        for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
         try? refreshQueries()
         return outcome
     }
@@ -665,8 +679,8 @@ final class AppState {
     /// can't (drive-only items whose drive is unplugged), so the send sheet can warn before sending.
     func sendPlan(for items: [TimelineItem]) -> SendSourcePlan {
         guard let library else { return SendSourcePlan(sendable: [], unreachable: []) }
-        let connectedDrives = canonicalVaults.filter { driveIsPresent($0) }.compactMap { openVault(for: $0) }
-        let driveNames = Dictionary(canonicalVaults.map { ($0.id, ($0.rootPath as NSString).lastPathComponent) },
+        let connectedDrives = connectedDrivesCanonicalFirst()
+        let driveNames = Dictionary(durableVaults.map { ($0.id, ($0.rootPath as NSString).lastPathComponent) },
                                     uniquingKeysWith: { first, _ in first })
         return library.resolveSendSources(items, connectedDrives: connectedDrives, driveNames: driveNames)
     }

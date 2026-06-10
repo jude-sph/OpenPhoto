@@ -26,12 +26,12 @@ struct DrivesView: View {
             .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
             Divider().overlay(Theme.hairline)
 
-            if state.canonicalVaults.isEmpty {
+            if state.durableVaults.isEmpty {
                 ContentUnavailableView("No canonical drive yet",
                     systemImage: "externaldrive.badge.plus",
                     description: Text("Add a drive or folder to hold your canonical library."))
             } else {
-                List(state.canonicalVaults, id: \.id) { vr in row(vr) }.listStyle(.inset)
+                List(state.durableVaults, id: \.id) { vr in row(vr) }.listStyle(.inset)
             }
         }
         .sheet(item: $syncDrive) { drive in SyncPlanSheet(state: state, drive: drive) }
