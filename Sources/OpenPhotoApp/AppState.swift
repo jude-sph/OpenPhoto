@@ -160,6 +160,10 @@ final class AppState {
         try? refreshCanonicalPresence(driveVault: target)
         reloadDrives()
         try? refreshQueries()
+        let cat = lib.catalog, thumbs = lib.thumbnails
+        await Task.detached(priority: .utility) {
+            try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: target)
+        }.value
         return result
     }
 
@@ -334,6 +338,40 @@ final class AppState {
 
     func openVault(for vr: VaultRecord) -> Vault? {
         try? Vault.openOrCreate(at: URL(fileURLWithPath: vr.rootPath), role: .canonical)
+    }
+
+    /// A connected drive that carries a catalog-snapshot whose contents this Mac doesn't yet know
+    /// (no vault_presence) — a candidate to adopt. nil if none.
+    var adoptableDrive: VaultRecord? {
+        guard let lib = library else { return nil }
+        return durableVaults.first { vr in
+            driveIsPresent(vr)
+            && FileManager.default.fileExists(atPath:
+                URL(fileURLWithPath: vr.rootPath).appendingPathComponent(".openphoto/catalog-snapshot/catalog.sqlite").path)
+            && ((try? lib.catalog.vaultPresenceHashes(forVault: vr.id))?.isEmpty ?? true)
+        }
+    }
+
+    /// Photos a candidate drive's snapshot says it holds (snapshot.json asset_count) — for the prompt.
+    func adoptablePhotoCount(_ vr: VaultRecord) -> Int {
+        let url = URL(fileURLWithPath: vr.rootPath).appendingPathComponent(".openphoto/catalog-snapshot/snapshot.json")
+        guard let data = try? Data(contentsOf: url),
+              let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return 0 }
+        return meta["asset_count"] as? Int ?? 0
+    }
+
+    /// Adopt a drive: import its snapshot for instant browse, then verify against the manifest.
+    func adoptDrive(_ vr: VaultRecord) async {
+        guard let lib = library, let drive = openVault(for: vr) else { return }
+        let cat = lib.catalog, thumbs = lib.thumbnails
+        let bases = lib.vaults.map { $0.rootURL.lastPathComponent }
+        await Task.detached(priority: .userInitiated) {
+            _ = try? CatalogSnapshot.import(from: drive, into: cat, thumbnails: thumbs)
+            try? CatalogSnapshot.verifyAdoption(drive: drive, into: cat, sourceBasenames: bases)
+        }.value
+        reloadCanonicalPresence()
+        reloadDrives()
+        try? refreshQueries()
     }
 
     /// Full-res URL for an item: local file, or the drive file when the drive is connected.

@@ -112,6 +112,10 @@ struct SyncPlanSheet: View {
         let pending = state.drivePendingDeletions[drive.descriptor.vaultID] ?? []
         let chosen = pending.filter { deletionSelection.contains($0.hash) }
         if !chosen.isEmpty { _ = await state.propagateDeletions(drive: drive, selected: chosen) }
+        let cat = lib.catalog, thumbs = lib.thumbnails, syncedDrive = drive
+        await Task.detached(priority: .utility) {
+            try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: syncedDrive)
+        }.value
         result = r
         running = false
     }
