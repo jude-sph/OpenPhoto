@@ -102,3 +102,43 @@ private func snapshotFixture(_ t: TestDirs) throws
     #expect(fav == true)
     #expect(try live.vaultPresenceRows(forVault: "other-vault").isEmpty)
 }
+
+@Test func verifyAdoptionMakesManifestWin() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let inManifest = "sha256:" + String(repeating: "a", count: 64)
+    let staleInPresence = "sha256:" + String(repeating: "b", count: 64)   // not in the manifest
+    try Manifest.write([ManifestEntry(hash: ContentHash(stringValue: inManifest),
+        path: "Pictures/rome/IMG_1.jpg", size: 3, mtime: "2022-10-07T14:23:01.000Z")],
+        to: drive.manifestURL)
+
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.replaceVaultPresence(vaultID: drive.descriptor.vaultID, entries: [
+        VaultPresenceEntry(hash: staleInPresence, relPath: "old.jpg", dirPath: "", size: 1, driveRelPath: "Pictures/old.jpg")])
+
+    try CatalogSnapshot.verifyAdoption(drive: drive, into: cat, sourceBasenames: ["Pictures"])
+
+    let rows = try cat.vaultPresenceRows(forVault: drive.descriptor.vaultID)
+    #expect(rows.map(\.hash) == [inManifest])
+    #expect(rows.first?.relPath == "rome/IMG_1.jpg")
+    let kind = try cat.dbQueue.read { db in
+        try String.fetchOne(db, sql: "SELECT kind FROM assets WHERE hash = ?", arguments: [inManifest]) }
+    #expect(kind == "photo")
+}
+
+@Test func adoptionRoundTripMatchesManifest() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (catalog, thumbs, drive, driveHash, _) = try snapshotFixture(t)
+    try catalog.replaceVaultPresence(vaultID: drive.descriptor.vaultID, entries: [
+        VaultPresenceEntry(hash: driveHash, relPath: "rome/IMG_1.jpg", dirPath: "rome",
+                           size: 3, driveRelPath: "Pictures/rome/IMG_1.jpg")])
+    try CatalogSnapshot.write(catalog: catalog, thumbnails: thumbs, drive: drive)
+
+    let fresh = try Catalog(at: t.root.appendingPathComponent("fresh.sqlite"))
+    _ = try CatalogSnapshot.import(from: drive, into: fresh, thumbnails: ThumbnailStore(cacheDir: try t.sub("ft")))
+    try CatalogSnapshot.verifyAdoption(drive: drive, into: fresh, sourceBasenames: ["Pictures"])
+
+    let manifestHashes = Set(try Manifest.read(from: drive.manifestURL).map { $0.hash.stringValue })
+    let browseHashes = Set(try fresh.timelineItems().filter { $0.driveRelPath != nil }.map(\.hash))
+    #expect(browseHashes == manifestHashes)
+}

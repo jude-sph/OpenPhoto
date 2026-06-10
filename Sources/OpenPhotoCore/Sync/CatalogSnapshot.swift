@@ -102,3 +102,33 @@ extension CatalogSnapshot {
         return AdoptionImport(assets: assets.count, present: presence.count)
     }
 }
+
+extension CatalogSnapshot {
+    /// Reconcile an adopted drive's presence against its authoritative manifest (the snapshot may be
+    /// stale). No re-hash, no file reads beyond the manifest: drop presence whose hash isn't in the
+    /// manifest; add presence (and a minimal asset) for every manifest hash that's missing.
+    public static func verifyAdoption(drive: Vault, into catalog: Catalog,
+                                      sourceBasenames: [String]) throws {
+        let manifest = try Manifest.read(from: drive.manifestURL)
+        let manifestHashes = Set(manifest.map { $0.hash.stringValue })
+        let current = try catalog.vaultPresenceRows(forVault: drive.descriptor.vaultID)
+        let currentByHash = Dictionary(current.map { ($0.hash, $0) }, uniquingKeysWith: { a, _ in a })
+
+        var merged: [VaultPresenceEntry] = current.filter { manifestHashes.contains($0.hash) }
+        var minimalAssets: [AssetRecord] = []
+        for e in manifest where currentByHash[e.hash.stringValue] == nil {
+            let hash = e.hash.stringValue
+            let mac = DrivePathMap.driveToMacRelPath(e.path, sourceBasenames: sourceBasenames)
+            merged.append(VaultPresenceEntry(hash: hash, relPath: mac,
+                dirPath: (mac as NSString).deletingLastPathComponent, size: e.size, driveRelPath: e.path))
+            let kind = MediaKind.of(filename: e.path)?.rawValue ?? MediaKind.photo.rawValue
+            let takenMs = ISO8601Millis.dateLenient(from: e.mtime).map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+            minimalAssets.append(AssetRecord(hash: hash, kind: kind, takenAtMs: takenMs,
+                pixelWidth: nil, pixelHeight: nil, latitude: nil, longitude: nil, cameraModel: nil,
+                lensModel: nil, durationSeconds: nil, livePairHash: nil, isLivePairedVideo: false,
+                favorite: false, rating: 0, caption: nil, tagsJSON: "[]"))
+        }
+        try catalog.insertAssetsIfAbsent(minimalAssets)
+        try catalog.replaceVaultPresence(vaultID: drive.descriptor.vaultID, entries: merged)
+    }
+}
