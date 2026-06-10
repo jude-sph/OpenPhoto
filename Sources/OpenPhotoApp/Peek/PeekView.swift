@@ -2,58 +2,6 @@ import SwiftUI
 import AVKit
 import OpenPhotoCore
 
-/// Thread-safe box so CGImage (a CF type) can live in NSCache<NSString, AnyObject>.
-private final class PeekImageBox {
-    let image: CGImage
-    init(_ image: CGImage) { self.image = image }
-}
-
-nonisolated(unsafe) private let peekMemoryCache: NSCache<NSString, PeekImageBox> = {
-    let c = NSCache<NSString, PeekImageBox>()
-    c.countLimit = 2000
-    return c
-}()
-
-/// One peek thumbnail. Mirrors ThumbView: synchronous cache read for instant recycled-cell display,
-/// async refresh off a detached task. A snapshot item's real hash hits the imported cache; a raw
-/// item's synthetic hash misses → generated from the file once.
-struct PeekGridCell: View {
-    let item: PeekItem
-    let thumbnails: ThumbnailStore
-    var targetPixel: Int = ThumbnailStore.maxPixel
-    @State private var asyncImage: CGImage?
-
-    private var cacheKey: NSString { "\(item.id)@\(targetPixel)" as NSString }
-
-    var body: some View {
-        let cached = peekMemoryCache.object(forKey: cacheKey)?.image ?? asyncImage
-        ZStack {
-            Theme.tile
-            if let cached {
-                Image(decorative: cached, scale: 1).resizable().aspectRatio(contentMode: .fill)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .task(id: cacheKey) {
-            let key = cacheKey
-            if let hit = peekMemoryCache.object(forKey: key)?.image { asyncImage = hit; return }
-            let store = thumbnails, it = item, px = targetPixel
-            let result: CGImage? = await Task.detached(priority: .userInitiated) {
-                if let img = try? await store.displayImage(
-                    for: it.thumbHash, sourceURL: it.sourceURL, kind: it.kind, maxPixel: px) {
-                    return img
-                }
-                return await store.cachedDisplayImage(for: it.thumbHash, maxPixel: px)
-            }.value
-            if let img = result {
-                peekMemoryCache.setObject(PeekImageBox(img), forKey: key)
-                asyncImage = img
-            }
-        }
-    }
-}
-
 /// The main-window-takeover peek surface: a labeled banner + a grid + an in-place full-screen viewer.
 struct PeekView: View {
     let context: PeekContext
@@ -83,16 +31,19 @@ struct PeekView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: Theme.gridGap) {
                             ForEach(context.items) { item in
-                                // Same technique as TimelineView.cell: a uniform clear square
-                                // (sized by the column) with the thumbnail as a clipped overlay,
-                                // so every cell is an identical cropped square regardless of the
-                                // image's aspect ratio.
-                                Color.clear
-                                    .aspectRatio(1, contentMode: .fit)
-                                    .overlay { PeekGridCell(item: item, thumbnails: context.thumbnails) }
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { openedPeek = item }
+                                MediaTile(
+                                    id: item.id,
+                                    thumbnail: ThumbnailImage(id: item.id, provider: { px in
+                                        let store = context.thumbnails, it = item
+                                        if let img = try? await store.displayImage(
+                                            for: it.thumbHash, sourceURL: it.sourceURL,
+                                            kind: it.kind, maxPixel: px) {
+                                            return img
+                                        }
+                                        return await store.cachedDisplayImage(for: it.thumbHash, maxPixel: px)
+                                    }),
+                                    badges: { EmptyView() },
+                                    onTap: { openedPeek = item })
                             }
                         }
                         .padding(Theme.gridGap)
