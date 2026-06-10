@@ -105,7 +105,7 @@ private struct PeekViewer: View {
 
     @ViewBuilder private var content: some View {
         if current.kind == .video {
-            if let player { VideoPlayer(player: player) }
+            if let player { PlayerView(player: player) }
         } else if let fullImage {
             ZoomableImageView(image: fullImage).id(current.id)
         } else if loadFailed {

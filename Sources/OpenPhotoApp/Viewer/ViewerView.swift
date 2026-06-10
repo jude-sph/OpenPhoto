@@ -102,11 +102,11 @@ struct ViewerView: View {
                 }
             } else if item.kind == MediaKind.video.rawValue {
                 if let player {
-                    VideoPlayer(player: player)
+                    PlayerView(player: player)
                 }
             } else if playingLive {
                 if let player {
-                    VideoPlayer(player: player)
+                    PlayerView(player: player)
                 }
             } else if let fullImage {
                 // GPU-composited zoom/pan via a CALayer — no SwiftUI re-render during
