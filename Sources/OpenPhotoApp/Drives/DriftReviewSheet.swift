@@ -102,9 +102,37 @@ struct DriftReviewSheet: View {
                     }
                 }
             }
-            if !(r.changed + r.corrupt).isEmpty {
-                Section("Changed / corrupt (report only)") {
-                    ForEach(r.changed + r.corrupt, id: \.relPath) { f in
+            if !r.corrupt.isEmpty {
+                let recoverable = r.corrupt.filter { if case .recoverable = $0.recoverability { true } else { false } }
+                Section {
+                    ForEach(r.corrupt, id: \.relPath) { f in
+                        HStack {
+                            Text(f.relPath).font(.system(size: 12)); Spacer()
+                            HStack(spacing: 8) {
+                                recoverabilityLabel(f.recoverability)
+                                if case .recoverable = f.recoverability {
+                                    Button("Repair") {
+                                        Task { _ = await state.repairFinding(f, on: drive); report = state.driftScan(drive) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Corrupt (bit-rot)"); Spacer()
+                        if !recoverable.isEmpty {
+                            Button("Repair all") {
+                                Task { var rep = DriftReport(); rep.corrupt = recoverable
+                                       report = await state.repairAllRecoverable(rep, on: drive) }
+                            }.font(.system(size: 11))
+                        }
+                    }
+                }
+            }
+            if !r.changed.isEmpty {
+                Section("Changed (report only \u{2014} Adopt or Acknowledge per file)") {
+                    ForEach(r.changed, id: \.relPath) { f in
                         HStack {
                             Text(f.relPath).font(.system(size: 12)); Spacer()
                             recoverabilityLabel(f.recoverability)
