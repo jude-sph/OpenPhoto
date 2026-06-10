@@ -112,6 +112,19 @@ final class AppState {
         }
     }
 
+    /// Prompt for a folder/drive and Quick View it (the raw-folder entry point). Shared by the Drives
+    /// toolbar button and the File-menu command.
+    func quickViewFolderViaPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Quick View"
+        panel.message = "Choose a folder or drive to browse without adding it to your library."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await startQuickView(root: url) }
+    }
+
     /// Start an ephemeral, trace-free peek of `root` (a drive or any folder). Loads off-main into a
     /// throwaway temp dir; nothing is written to `root` or persisted on the Mac.
     func startQuickView(root: URL) async {

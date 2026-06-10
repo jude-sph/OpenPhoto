@@ -54,6 +54,11 @@ struct DrivesView: View {
                     adoptTarget = nil
                     Task { await state.adoptDrive(vaultRecord) }
                 }
+                Button("Quick View") {
+                    let root = URL(fileURLWithPath: vr.rootPath)
+                    adoptTarget = nil
+                    Task { await state.startQuickView(root: root) }
+                }
                 Button("Not now", role: .cancel) {
                     adoptDismissed.insert(vr.id)
                     adoptTarget = nil
@@ -89,6 +94,7 @@ struct DrivesView: View {
                 Text("Drives").font(.system(size: 15, weight: .semibold))
                 Spacer()
                 Button("Add Drive\u{2026}") { state.addDriveViaPanel() }.controlSize(.small)
+                Button("Quick View Folder\u{2026}") { state.quickViewFolderViaPanel() }.controlSize(.small)
             }
             .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
             Divider().overlay(Theme.hairline)
@@ -153,6 +159,9 @@ struct DrivesView: View {
             }.controlSize(.small).disabled(!present)
             Button("Verify Integrity") {
                 if let v = state.openVault(for: vr) { drift = DriftPresentation(drive: v, verify: true) }
+            }.controlSize(.small).disabled(!present)
+            Button("Quick View") {
+                Task { await state.startQuickView(root: URL(fileURLWithPath: vr.rootPath)) }
             }.controlSize(.small).disabled(!present)
             driveMenu(vr)
         }

@@ -28,6 +28,9 @@ struct OpenPhotoApp: App {
                 Button("Open Folder as Import Source…") {
                     MainActor.assumeIsolated { state.addImportSourceViaPanel() }
                 }
+                Button("Quick View Folder\u{2026}") {
+                    MainActor.assumeIsolated { state.quickViewFolderViaPanel() }
+                }
             }
         }
     }
