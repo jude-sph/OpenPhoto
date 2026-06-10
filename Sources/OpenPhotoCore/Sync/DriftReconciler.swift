@@ -98,6 +98,30 @@ public struct DriftReconciler: Sendable {
         try writeManifestEntry(hash: expectedHash, relPath: relPath, fileURL: dest, on: drive)
     }
 
+    /// Repair a corrupt (bit-rot) file from a verified-good `source`. Bin-then-replace ordering:
+    /// stage + verify a copy to a temp on the drive FIRST, so a rotten/short source throws before
+    /// anything is binned; then quarantine the rotten original to the drive bin (origin .repaired,
+    /// sidecar kept in place), atomically place the verified file, and re-record its size/mtime
+    /// (hash unchanged). Never overwrites: the placement target is absent after binning.
+    public func repairCorrupt(relPath: String, expectedHash: String, from source: URL,
+                              on drive: Vault) throws {
+        let fm = FileManager.default
+        let dest = drive.absoluteURL(forRelativePath: relPath)
+        let tmp = drive.stateDirURL.appendingPathComponent("repair-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: tmp) }
+        // 1. Stage + verify a good copy. A rotten/short source fails here — nothing is binned.
+        guard VerifiedCopy.copy(from: source, to: tmp, expectedHash: expectedHash) else {
+            throw DriftError.restoreFailed
+        }
+        // 2. Quarantine the rotten original (recoverable; keep its sidecar at the live location).
+        try BinStore(vault: drive).moveToBin(relPath: relPath,
+            hash: ContentHash(stringValue: expectedHash), origin: .repaired, includeSidecar: false)
+        // 3. Place the verified file (dest is now absent → atomic, same-volume rename).
+        try fm.moveItem(at: tmp, to: dest)
+        // 4. Re-record size/mtime to the placed file (hash stays `expectedHash`).
+        try writeManifestEntry(hash: expectedHash, relPath: relPath, fileURL: dest, on: drive)
+    }
+
     /// Drop an already-absent file from the manifest (records reality; deletes nothing).
     public func acknowledgeGone(relPath: String, on drive: Vault) throws {
         var entries = try Manifest.read(from: drive.manifestURL)

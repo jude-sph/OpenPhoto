@@ -633,6 +633,67 @@ final class AppState {
         return report
     }
 
+    /// Verify every connected durable drive (off-main, with progress), annotate cross-set
+    /// recoverability, update presence, and return each drive's report. Drives "Verify All Drives".
+    func verifyAllConnected(progress: @escaping @Sendable (String, DriftProgress) -> Void)
+        async -> [(vr: VaultRecord, report: DriftReport)] {
+        guard let lib = library else { return [] }
+        var out: [(VaultRecord, DriftReport)] = []
+        for vr in durableVaults where driveIsPresent(vr) {
+            cacheDriveKind(vr)
+            guard let drive = openVault(for: vr) else { continue }
+            let name = (vr.rootPath as NSString).lastPathComponent
+            let report = await Task.detached(priority: .userInitiated) {
+                (try? DriftReconciler().verify(drive: drive) { p in progress(name, p) }) ?? DriftReport()
+            }.value
+            var enriched = report
+            if let p = presenceService() {
+                DriftReconciler().annotateRecoverability(&enriched, driveID: vr.id, presence: p)
+            }
+            try? lib.catalog.replaceVaultPresence(vaultID: vr.id,
+                entries: presenceEntries(forDrive: drive, limitedTo: enriched.presentHashes))
+            driveDrift[vr.id] = enriched
+            out.append((vr, enriched))
+        }
+        reloadCanonicalPresence()
+        refreshPendingDeletions()
+        return out
+    }
+
+    /// Repair one finding from the best connected good copy: corrupt → repairCorrupt (bin-then-
+    /// replace), missing → restore. Off-main. Returns whether it succeeded.
+    @discardableResult
+    func repairFinding(_ finding: DriftFinding, on driveVault: Vault) async -> Bool {
+        guard let hash = finding.recordedHash,
+              let source = goodCopyURL(forHash: hash, excluding: driveVault.descriptor.vaultID)
+        else { return false }
+        return await Task.detached(priority: .userInitiated) {
+            do {
+                switch finding.kind {
+                case .corrupt:
+                    try DriftReconciler().repairCorrupt(relPath: finding.relPath,
+                        expectedHash: hash, from: source, on: driveVault)
+                case .missing:
+                    try DriftReconciler().restore(relPath: finding.relPath,
+                        expectedHash: hash, from: source, on: driveVault)
+                default: return false   // changed/unknown aren't auto-repaired
+                }
+                return true
+            } catch { return false }
+        }.value
+    }
+
+    /// Repair every recoverable corrupt+missing finding in `report` on `driveVault`, then one
+    /// re-scan. Returns the refreshed report.
+    @discardableResult
+    func repairAllRecoverable(_ report: DriftReport, on driveVault: Vault) async -> DriftReport {
+        let targets = (report.corrupt + report.missing).filter {
+            if case .recoverable = $0.recoverability { return true } else { return false }
+        }
+        for f in targets { _ = await repairFinding(f, on: driveVault) }
+        return driftScan(driveVault)
+    }
+
     /// Full integrity check (slow); same presence/badge/status refresh as driftScan.
     func verifyIntegrity(_ driveVault: Vault,
                          progress: @escaping @Sendable (DriftProgress) -> Void) async -> DriftReport {

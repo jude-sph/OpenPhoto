@@ -26,12 +26,15 @@ struct DrivesView: View {
     // Conflict resolution
     @State private var canonicalConflict: VaultRecord?
     @State private var conflictDismissed: Set<String> = []
+    // Cross-drive integrity
+    @State private var consensusRepair = false
 
     var body: some View {
         mainContent
             .sheet(item: $syncDrive) { drive in SyncPlanSheet(state: state, drive: drive) }
             .sheet(item: $drift) { d in DriftReviewSheet(state: state, drive: d.drive, verify: d.verify) }
             .sheet(item: $deletionDrive) { d in DeletionReviewSheet(state: state, drive: d) }
+            .sheet(isPresented: $consensusRepair) { ConsensusRepairSheet(state: state) }
             .alert("Forget \u{201c}\(forgetTarget.map { ($0.rootPath as NSString).lastPathComponent } ?? "")\u{201d}?",
                    isPresented: Binding(get: { forgetTarget != nil },
                                         set: { if !$0 { forgetTarget = nil } }),
@@ -95,6 +98,7 @@ struct DrivesView: View {
                 Spacer()
                 Button("Add Drive\u{2026}") { state.addDriveViaPanel() }.controlSize(.small)
                 Button("Quick View Folder\u{2026}") { state.quickViewFolderViaPanel() }.controlSize(.small)
+                Button("Verify All Drives") { consensusRepair = true }.controlSize(.small)
             }
             .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
             Divider().overlay(Theme.hairline)
