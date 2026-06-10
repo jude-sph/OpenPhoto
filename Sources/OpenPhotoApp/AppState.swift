@@ -479,7 +479,7 @@ final class AppState {
     }
 
     func openVault(for vr: VaultRecord) -> Vault? {
-        try? Vault.openOrCreate(at: URL(fileURLWithPath: vr.rootPath), role: .canonical)
+        try? Vault.open(at: URL(fileURLWithPath: vr.rootPath))
     }
 
     /// A connected drive that carries a catalog-snapshot whose contents this Mac doesn't yet know

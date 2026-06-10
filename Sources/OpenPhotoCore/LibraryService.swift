@@ -83,8 +83,8 @@ public final class LibraryService: Sendable {
         try timelineSections(grouping: .day)
     }
 
-    public func timelineSections(grouping: TimelineGrouping) throws -> [TimelineSection] {
-        let items = try catalog.timelineItems()
+    public func timelineSections(grouping: TimelineGrouping, videoOnly: Bool = false) throws -> [TimelineSection] {
+        let items = try catalog.timelineItems(videoOnly: videoOnly)
         switch grouping {
         case .none:
             return items.isEmpty ? [] : [TimelineSection(dayStartMs: 0, title: "All photos", items: items)]

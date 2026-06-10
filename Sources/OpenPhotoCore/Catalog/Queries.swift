@@ -28,11 +28,13 @@ extension Catalog {
     // Full union: local rows (with NULL driveRelPath) UNION ALL drive-only rows.
     private static var timelineSQL: String { "\(localSelect) UNION ALL \(driveSelect)" }
 
-    /// Whole-library browse rows, newest first. ~60k rows fetch in tens of ms.
-    public func timelineItems() throws -> [TimelineItem] {
+    /// Whole-library browse rows, newest first. `videoOnly` restricts to videos.
+    public func timelineItems(videoOnly: Bool = false) throws -> [TimelineItem] {
         try dbQueue.read { db in
-            try TimelineItem.fetchAll(db,
-                sql: "SELECT * FROM (\(Self.timelineSQL)) ORDER BY takenAtMs DESC")
+            var sql = "SELECT * FROM (\(Self.timelineSQL))"
+            if videoOnly { sql += " WHERE kind = 'video'" }
+            sql += " ORDER BY takenAtMs DESC"
+            return try TimelineItem.fetchAll(db, sql: sql)
         }
     }
 

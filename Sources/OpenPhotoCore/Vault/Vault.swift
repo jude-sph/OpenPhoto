@@ -37,25 +37,33 @@ public struct Vault: Sendable, Identifiable {
         rootURL.appendingPathComponent(rel)
     }
 
-    public static func openOrCreate(at root: URL, role: VaultRole) throws -> Vault {
+    /// Open an EXISTING vault, read-only. Returns nil if `root` isn't a directory or has no vault.json.
+    /// Never writes (unlike openOrCreate) — for read-only drive queries; upholds "drives are passive".
+    public static func open(at root: URL) throws -> Vault? {
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir),
-              isDir.boolValue else {
-            throw VaultError.notADirectory(root.path)
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
+            return nil
         }
         let vjson = root.appendingPathComponent(stateDirName).appendingPathComponent("vault.json")
-        let decoder = JSONDecoder()
-        if let data = try? Data(contentsOf: vjson) {
-            let desc = try decoder.decode(VaultDescriptor.self, from: data)
-            guard desc.formatVersion <= VaultDescriptor.currentFormatVersion else {
-                throw VaultError.unsupportedFormatVersion(desc.formatVersion)
-            }
-            return Vault(rootURL: root, descriptor: desc)
+        guard let data = try? Data(contentsOf: vjson) else { return nil }
+        let desc = try JSONDecoder().decode(VaultDescriptor.self, from: data)
+        guard desc.formatVersion <= VaultDescriptor.currentFormatVersion else {
+            throw VaultError.unsupportedFormatVersion(desc.formatVersion)
         }
+        return Vault(rootURL: root, descriptor: desc)
+    }
+
+    public static func openOrCreate(at root: URL, role: VaultRole) throws -> Vault {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
+            throw VaultError.notADirectory(root.path)
+        }
+        if let existing = try open(at: root) { return existing }
         let desc = VaultDescriptor.new(role: role)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try AtomicFile.write(try encoder.encode(desc), to: vjson)
+        try AtomicFile.write(try encoder.encode(desc),
+                             to: root.appendingPathComponent(stateDirName).appendingPathComponent("vault.json"))
         return Vault(rootURL: root, descriptor: desc)
     }
 

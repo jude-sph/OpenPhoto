@@ -49,8 +49,10 @@ public enum ISO8601Millis {
         f.formatOptions = [.withInternetDateTime]
         return f
     }()
-    /// Accepts ISO-8601 with or without fractional seconds.
-    public static func dateLenient(from string: String) -> Date? { lenient.date(from: string) }
+    /// Accepts ISO-8601 with OR without fractional seconds (the app writes fractional via string()).
+    public static func dateLenient(from string: String) -> Date? {
+        formatter.date(from: string) ?? lenient.date(from: string)
+    }
     public static func string(from date: Date) -> String { formatter.string(from: date) }
     public static func date(from string: String) -> Date? { formatter.date(from: string) }
 }
