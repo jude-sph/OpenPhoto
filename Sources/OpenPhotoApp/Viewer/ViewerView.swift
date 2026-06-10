@@ -68,9 +68,9 @@ struct ViewerView: View {
                     ZStack(alignment: .top) {
                         PlayerView(player: player)
                             .ignoresSafeArea(.container, edges: .top)   // still reaches the top edge
-                        topBar.background(
-                            LinearGradient(colors: [.black.opacity(0.5), .clear],
-                                           startPoint: .top, endPoint: .bottom))
+                        // A tight drop shadow on the controls keeps them legible over bright video
+                        // without the top-of-window vignette a gradient background created.
+                        topBar.shadow(color: .black.opacity(0.7), radius: 4)
                     }
                     galleryBar
                 }
