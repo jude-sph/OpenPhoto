@@ -93,17 +93,14 @@ struct TimelineView: View {
     }
 
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
-        Color.clear
-            .aspectRatio(1, contentMode: .fit)
-            .overlay { PhotoCellView(item: item, library: state.library!,
-                                     targetPixel: thumbPixels,
-                                     backedUp: state.isBackedUpOnCanonical(item),
-                                     driveOnly: item.driveRelPath != nil) }
-            .clipped()
-            .selectionChrome(selected: selection.contains(item.instanceID), show: selectMode)
-            .cellFrame(item.instanceID, in: "timelinegrid", active: selectMode)
-            .contentShape(Rectangle())
-            .onTapGesture {
+        MediaTile(
+            id: item.instanceID,
+            selectMode: selectMode,
+            selected: selection.contains(item.instanceID),
+            rubberBandSpace: "timelinegrid",
+            thumbnail: ThumbnailImage(timelineItem: item, library: state.library!, targetPixel: thumbPixels),
+            badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
+            onTap: {
                 if selectMode {
                     if let idx = state.flatItems.firstIndex(where: { $0.instanceID == item.instanceID }) {
                         selection.tap(index: idx, items: orderedSelectable,
@@ -112,7 +109,7 @@ struct TimelineView: View {
                 } else {
                     state.openViewer(item, within: state.flatItems)
                 }
-            }
+            })
     }
 
     @ViewBuilder private func sectionHeader(_ section: TimelineSection) -> some View {

@@ -97,17 +97,14 @@ struct FolderGridView: View {
     }
 
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
-        Color.clear
-            .aspectRatio(1, contentMode: .fit)
-            .overlay { PhotoCellView(item: item, library: state.library!,
-                                     targetPixel: thumbPixels,
-                                     backedUp: state.isBackedUpOnCanonical(item),
-                                     driveOnly: item.driveRelPath != nil) }
-            .clipped()
-            .selectionChrome(selected: selection.contains(item.instanceID), show: selectMode)
-            .cellFrame(item.instanceID, in: "foldergrid", active: selectMode)
-            .contentShape(Rectangle())
-            .onTapGesture {
+        MediaTile(
+            id: item.instanceID,
+            selectMode: selectMode,
+            selected: selection.contains(item.instanceID),
+            rubberBandSpace: "foldergrid",
+            thumbnail: ThumbnailImage(timelineItem: item, library: state.library!, targetPixel: thumbPixels),
+            badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
+            onTap: {
                 if selectMode {
                     if let idx = items.firstIndex(where: { $0.instanceID == item.instanceID }) {
                         selection.tap(index: idx, items: orderedSelectable,
@@ -116,7 +113,7 @@ struct FolderGridView: View {
                 } else {
                     state.openViewer(item, within: items)
                 }
-            }
+            })
     }
 
     private func reload() {

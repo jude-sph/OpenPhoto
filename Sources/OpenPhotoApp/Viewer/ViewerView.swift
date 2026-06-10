@@ -91,7 +91,7 @@ struct ViewerView: View {
             if driveUnplugged {
                 // Drive-only item and the drive is not connected — show thumbnail + prompt.
                 VStack(spacing: 16) {
-                    ThumbView(item: item, library: state.library!)
+                    ThumbnailImage(timelineItem: item, library: state.library!)
                         .frame(width: 240, height: 240)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     Label("Plug in the drive to view full-res",
@@ -123,7 +123,7 @@ struct ViewerView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 5) {
                     ForEach(flatItems, id: \.instanceID) { item in
-                        ThumbView(item: item, library: state.library!)
+                        ThumbnailImage(timelineItem: item, library: state.library!)
                             .frame(width: 52, height: 52)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                             .overlay(RoundedRectangle(cornerRadius: 4)
