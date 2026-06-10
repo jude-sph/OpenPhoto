@@ -196,6 +196,9 @@ final class AppState {
     func resolveCanonicalConflict(_ vr: VaultRecord, makeBackup: Bool) {
         guard let lib = library else { return }
         if makeBackup {
+            // A plain re-register (not setCanonical) is correct: a conflicting drive is by definition
+            // NOT the registered canonical (conflictingCanonical excludes canonicalVault), so there is
+            // no second canonical to demote in the same breath — we only need this stray set to backup.
             try? lib.catalog.registerVault(id: vr.id, role: "backup", rootPath: vr.rootPath)
             _ = try? openVault(for: vr)?.writingRole(.backup)
             reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
