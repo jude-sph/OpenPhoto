@@ -65,6 +65,15 @@ final class DeviceWatcher: NSObject {
         if !devices.contains(where: { $0.id == dev.id }) { devices.append(dev) }
     }
 
+    /// Remove a manually-added folder import source by its device id (`vol-manual-…`). Real
+    /// phones/SD cards are removed by unplugging; this is for folder sources the user added.
+    func removeManualVolume(id deviceID: String) {
+        sourceCache[deviceID]?.close()
+        sourceCache[deviceID] = nil
+        devices.removeAll { $0.id == deviceID }
+        openedDeviceRemoved?(deviceID)   // closes the import view if this source was open
+    }
+
     /// Returns the (cached) source for a device. Caching keeps a single open ICC
     /// session alive across ImportView appearances — without it, re-entering the
     /// import screen opens a second session and enumeration comes back empty.
@@ -94,7 +103,12 @@ final class DeviceWatcher: NSObject {
             vols.append(.volume(id: v.volumeUUIDString ?? url.path,
                                 name: v.volumeName ?? url.lastPathComponent, url: url))
         }
-        devices = devices.filter { if case .camera = $0 { true } else { false } } + vols
+        // Keep cameras and manually-added folder sources; re-detect real removable volumes.
+        let kept = devices.filter { dev in
+            if case .camera = dev { return true }
+            return dev.id.hasPrefix("vol-manual-")
+        }
+        devices = kept + vols
         onVolumesChanged?()
     }
 }
