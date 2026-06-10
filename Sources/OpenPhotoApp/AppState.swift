@@ -50,6 +50,8 @@ final class AppState {
     /// Non-nil while a Quick View peek is open. Ephemeral — its tempDir is deleted on teardown.
     var peekContext: PeekContext?
     var scanProgress: Scanner.Progress?
+    /// Background OCR/derivation progress (done, total) while the runner is active; nil when idle.
+    var derivationProgress: (done: Int, total: Int)?
     var scanning = false
     var refreshToken = 0
     var grouping: TimelineGrouping = {
@@ -770,6 +772,7 @@ final class AppState {
         let bases = lib.vaults.map { $0.rootURL.lastPathComponent }
         for p in relPaths { try? await ingest.ingestDriveFile(relPath: p, on: driveVault, sourceBasenames: bases) }
         try? refreshQueries()    // bring the new drive-only item into the timeline/folders
+        pokeDerivation()
     }
 
     /// Restore every recoverable missing file in one pass, then a single re-scan.
@@ -827,7 +830,7 @@ final class AppState {
             deviceWatcher.openedDeviceRemoved = { [weak self] id in
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
             }
-            Task { await rescan() }
+            Task { await rescan(); pokeDerivation() }
             // Load drives + badge presence from the persisted catalog, then auto-scan connected
             // drives so badges + status reflect reality without a manual Check. Re-scan on any
             // volume mount/unmount too.
@@ -861,9 +864,53 @@ final class AppState {
                 Task { @MainActor in if p.total > 50 { self?.scanProgress = p } }
             }
             try refreshQueries()
+            pokeDerivation()
         } catch {
             NSAlert(error: error).runModal()
         }
+    }
+
+    private var derivationTask: Task<Void, Never>?
+
+    /// Kick the background derivation runner if it isn't already draining. Called at library-open
+    /// and after anything that adds assets (scan/ingest). Cheap + idempotent.
+    func pokeDerivation() {
+        guard derivationTask == nil, library != nil else { return }
+        derivationTask = Task { [weak self] in
+            await self?.drainDerivation()
+            self?.derivationTask = nil
+        }
+    }
+
+    /// Drain every pending OCR job once (low priority, off-main Vision, yielding between items).
+    /// Pulls the WHOLE pending set up front so an unreachable newest asset can't block older
+    /// reachable ones behind a fixed window. Unreachable assets are skipped (retried on the next
+    /// poke, e.g. when their drive connects), not marked failed.
+    private func drainDerivation() async {
+        guard let lib = library else { return }
+        let pending = (try? lib.catalog.pendingDerivation(stage: OCRStage.id)) ?? []
+        guard !pending.isEmpty else { derivationProgress = nil; return }
+        // Seed the progress line from the catalog so it appears immediately, then advance it
+        // locally per successful item — Vision dominates the per-item cost, so a published
+        // increment each item is cheap and keeps the count climbing smoothly with no DB read.
+        var progress = (try? lib.catalog.derivationProgress(stage: OCRStage.id)) ?? (done: 0, total: pending.count)
+        derivationProgress = progress
+        for hash in pending {
+            if Task.isCancelled { break }
+            // "" excludes no vault — any reachable copy (Mac-local or a connected drive) is fine.
+            guard let url = goodCopyURL(forHash: hash, excluding: "") else { continue }  // unreachable → skip
+            let text = await Task.detached(priority: .utility) { OCRStage.recognizeText(in: url) }.value
+            if let text {
+                try? lib.catalog.upsertOCR(hash: hash, text: text)
+                try? lib.catalog.markDerived(hash: hash, stage: OCRStage.id)
+                progress.done += 1
+                derivationProgress = progress
+            } else {
+                try? lib.catalog.markDerivationFailed(hash: hash, stage: OCRStage.id)
+            }
+            await Task.yield()
+        }
+        derivationProgress = nil
     }
 
     func refreshQueries() throws {
