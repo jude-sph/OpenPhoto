@@ -2,7 +2,7 @@ import Foundation
 
 /// Vault bin — vault-format-v1 §8. Nothing in the system hard-deletes.
 public struct BinStore: Sendable {
-    public enum Origin: String, Codable, Sendable { case user, propagated }
+    public enum Origin: String, Codable, Sendable { case user, propagated, repaired }
 
     public struct BinItem: Codable, Equatable, Sendable {
         public let hash: String
@@ -18,7 +18,8 @@ public struct BinStore: Sendable {
     let vault: Vault
     public init(vault: Vault) { self.vault = vault }
 
-    public func moveToBin(relPath: String, hash: ContentHash, origin: Origin) throws {
+    public func moveToBin(relPath: String, hash: ContentHash, origin: Origin,
+                          includeSidecar: Bool = true) throws {
         let fm = FileManager.default
         let src = vault.absoluteURL(forRelativePath: relPath)
         let dst = vault.binDirURL.appendingPathComponent(relPath)
@@ -26,7 +27,7 @@ public struct BinStore: Sendable {
         try fm.moveItem(at: src, to: dst)
         // Sidecar travels with the file, same folder-level convention inside bin/.
         let sidecar = vault.sidecarURL(forMediaAt: src)
-        if fm.fileExists(atPath: sidecar.path) {
+        if includeSidecar, fm.fileExists(atPath: sidecar.path) {
             let sidecarDst = vault.sidecarURL(forMediaAt: dst)
             try fm.createDirectory(at: sidecarDst.deletingLastPathComponent(),
                                    withIntermediateDirectories: true)
