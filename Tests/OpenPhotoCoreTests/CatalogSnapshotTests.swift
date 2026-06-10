@@ -142,3 +142,17 @@ private func snapshotFixture(_ t: TestDirs) throws
     let browseHashes = Set(try fresh.timelineItems().filter { $0.driveRelPath != nil }.map(\.hash))
     #expect(browseHashes == manifestHashes)
 }
+
+@Test func presenceWithoutAssetsBrowsesEmpty() throws {
+    // Adoption must seed ASSETS, not just presence: the drive-only browse query joins
+    // assets ⋈ vault_presence, so presence alone (no asset row) yields nothing. This pins why a
+    // snapshot-carrying drive defers to `import` (which seeds assets) rather than presence-only —
+    // populating presence at add time without assets would leave a fresh Mac with an empty drive.
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.replaceVaultPresence(vaultID: "drive-x", entries: [
+        VaultPresenceEntry(hash: "sha256:" + String(repeating: "a", count: 64),
+                           relPath: "rome/IMG_1.jpg", dirPath: "rome", size: 3,
+                           driveRelPath: "Pictures/rome/IMG_1.jpg")])
+    #expect(try cat.timelineItems().isEmpty)   // no asset row → no browse item
+}

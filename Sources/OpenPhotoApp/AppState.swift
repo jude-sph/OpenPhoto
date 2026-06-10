@@ -273,12 +273,13 @@ final class AppState {
         guard panel.runModal() == .OK, let url = panel.url, let lib = library else { return }
         do {
             let vault = try Vault.openOrCreate(at: url, role: .canonical)
-            // Refuse a folder that already holds a non-canonical vault (e.g. the user picked
-            // one of their own source roots). Adopting it would diverge catalog/disk role and
-            // could make the engine try to sync a vault onto itself.
-            guard vault.descriptor.role == .canonical else {
+            // Accept a canonical or backup drive (a backup self-describes as `backup` and is a valid
+            // library to add/adopt for browse). Refuse a folder that is one of the user's own LOCAL
+            // source vaults — adopting it would diverge catalog/disk role and could make the engine
+            // try to sync a vault onto itself.
+            guard vault.descriptor.role != .local else {
                 driveAlert("Can’t use this folder",
-                    "“\(url.lastPathComponent)” already contains a \(vault.descriptor.role.rawValue) library vault. Choose an empty folder or a drive dedicated to your canonical library.")
+                    "“\(url.lastPathComponent)” is one of your local library folders, not a drive. Choose a drive or a folder dedicated to your canonical library.")
                 return
             }
             // Already adopted? Same vault_id means it's the same drive.
@@ -291,7 +292,17 @@ final class AppState {
                                           role: vault.descriptor.role.rawValue, rootPath: url.path)
             reloadDrives()
             if let vr = durableVaults.first(where: { $0.id == vault.descriptor.vaultID }) { cacheDriveKind(vr) }
-            try refreshCanonicalPresence(driveVault: vault)
+            // A drive that carries a catalog-snapshot is adopted through a CONFIRMED prompt
+            // (`adoptableDrive` → Adopt → `adoptDrive` imports assets+presence+thumbs, then verifies
+            // vs the manifest). Leave its presence empty for now so the prompt can fire — seeding
+            // presence here without `assets` would suppress the prompt AND leave a fresh Mac with an
+            // empty drive (the browse query joins assets ⋈ vault_presence). A drive WITHOUT a snapshot
+            // gets its presence populated immediately (browse from existing local assets).
+            let hasSnapshot = FileManager.default.fileExists(
+                atPath: url.appendingPathComponent(".openphoto/catalog-snapshot/catalog.sqlite").path)
+            if !hasSnapshot {
+                try refreshCanonicalPresence(driveVault: vault)
+            }
         } catch { driveAlert("Couldn’t add drive", error.localizedDescription) }
     }
 
