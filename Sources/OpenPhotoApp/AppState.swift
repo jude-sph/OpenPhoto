@@ -156,6 +156,7 @@ final class AppState {
         // it now holds so badges/presence reflect it.
         try? lib.catalog.registerVault(id: target.descriptor.vaultID, role: "backup",
                                        rootPath: target.rootURL.path)
+        _ = try? target.writingRole(.backup)   // self-describe on disk so any Mac identifies it correctly
         try? refreshCanonicalPresence(driveVault: target)
         reloadDrives()
         try? refreshQueries()

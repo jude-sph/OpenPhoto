@@ -58,4 +58,16 @@ public struct Vault: Sendable, Identifiable {
         try AtomicFile.write(try encoder.encode(desc), to: vjson)
         return Vault(rootURL: root, descriptor: desc)
     }
+
+    /// Rewrite this vault's vault.json with a new role, preserving vault_id/created_at/format_version.
+    /// Atomic. Returns the updated Vault. Used when a drive becomes a backup (clone) or canonical.
+    public func writingRole(_ role: VaultRole) throws -> Vault {
+        let desc = VaultDescriptor(formatVersion: descriptor.formatVersion, vaultID: descriptor.vaultID,
+                                   role: role, createdAt: descriptor.createdAt, app: descriptor.app)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try AtomicFile.write(try encoder.encode(desc),
+                             to: stateDirURL.appendingPathComponent("vault.json"))
+        return Vault(rootURL: rootURL, descriptor: desc)
+    }
 }
