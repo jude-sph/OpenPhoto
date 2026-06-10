@@ -15,6 +15,7 @@ struct DrivesView: View {
     @State private var drift: DriftPresentation?
     @State private var forgetTarget: VaultRecord?
     @State private var deletionDrive: Vault?
+    @State private var cloningDriveIDs: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,6 +62,22 @@ struct DrivesView: View {
                 pendingDeletionsLine(vr)
             }
             Spacer()
+            if vr.id != state.canonicalVault?.id,
+               let canon = state.canonicalVault, state.driveIsPresent(canon),
+               !state.driveIsEjected(vr) {
+                let behind = state.backupBehindCount(vr)
+                let cloning = cloningDriveIDs.contains(vr.id)
+                Button(vr.role == "backup" ? (behind > 0 ? "Update backup (\(behind))" : "Up to date")
+                                           : "Make backup") {
+                    cloningDriveIDs.insert(vr.id)
+                    Task {
+                        _ = await state.cloneToBackup(vr)
+                        cloningDriveIDs.remove(vr.id)
+                    }
+                }
+                .controlSize(.small)
+                .disabled((vr.role == "backup" && behind == 0) || cloning || !present)
+            }
             Button("Sync…") { syncDrive = state.openVault(for: vr) }
                 .controlSize(.small).disabled(!present)
             Button("Check") {
@@ -76,12 +93,14 @@ struct DrivesView: View {
 
     @ViewBuilder private func statusText(_ vr: VaultRecord) -> some View {
         let kind = state.driveKind(vr).label
+        let roleLabel = vr.role == "canonical" ? "Canonical" : vr.role == "backup" ? "Backup" : nil
+        let kindWithRole = roleLabel.map { "\($0) · \(kind)" } ?? kind
         if state.driveIsEjected(vr) {
-            Text("\(kind) · Ejected").font(.system(size: 11)).foregroundStyle(Theme.textFaint)
+            Text("\(kindWithRole) · Ejected").font(.system(size: 11)).foregroundStyle(Theme.textFaint)
         } else if state.driveFolderExists(vr) {
-            Text("\(kind) · Connected · \(vr.rootPath)").font(.system(size: 11)).foregroundStyle(Theme.textDim)
+            Text("\(kindWithRole) · Connected · \(vr.rootPath)").font(.system(size: 11)).foregroundStyle(Theme.textDim)
         } else {
-            Text("\(kind) · Not connected").font(.system(size: 11)).foregroundStyle(Theme.textFaint)
+            Text("\(kindWithRole) · Not connected").font(.system(size: 11)).foregroundStyle(Theme.textFaint)
         }
     }
 

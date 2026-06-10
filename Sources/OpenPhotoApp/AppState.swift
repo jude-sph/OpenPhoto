@@ -124,6 +124,44 @@ final class AppState {
             .compactMap { openVault(for: $0) }
     }
 
+    /// Hashes the canonical currently holds (from its presence mirror) — for "behind by N".
+    private func canonicalHashes() -> Set<String> {
+        guard let vr = canonicalVault,
+              let hs = try? library?.catalog.vaultPresenceHashes(forVault: vr.id) else { return [] }
+        return hs
+    }
+
+    /// How many photos a backup is missing relative to the canonical (catalog-only, no I/O).
+    func backupBehindCount(_ vr: VaultRecord) -> Int {
+        guard let hs = try? library?.catalog.vaultPresenceHashes(forVault: vr.id) else { return 0 }
+        return OpenPhotoCore.backupBehindCount(canonicalHashes: canonicalHashes(), backupHashes: hs)
+    }
+
+    /// Clone the canonical onto `vr` (both must be connected): copy the diff hash-verified, then
+    /// mark `vr` a backup in the catalog and refresh its presence. Off-main for the copy.
+    @discardableResult
+    func cloneToBackup(_ vr: VaultRecord) async -> SyncResult {
+        guard let lib = library,
+              let canonVR = canonicalVault, driveIsPresent(canonVR),
+              let canonical = openVault(for: canonVR),
+              driveIsPresent(vr), let target = openVault(for: vr) else { return SyncResult() }
+        let engine = SyncEngine(library: lib)
+        let result = await Task.detached(priority: .userInitiated) {
+            guard let plan = try? engine.planClone(source: canonical, destinationVault: target) else { return SyncResult() }
+            return await engine.apply(plan, destinationVault: target,
+                                      volume: FileSystemVolume(rootURL: target.rootURL),
+                                      event: "clone", counterpartyVaultID: canonical.descriptor.vaultID)
+        }.value
+        // Mark the target a backup (catalog role is authoritative for app behavior) and record what
+        // it now holds so badges/presence reflect it.
+        try? lib.catalog.registerVault(id: target.descriptor.vaultID, role: "backup",
+                                       rootPath: target.rootURL.path)
+        try? refreshCanonicalPresence(driveVault: target)
+        reloadDrives()
+        try? refreshQueries()
+        return result
+    }
+
     /// Refresh the observable drive list from the catalog. A computed property that queries the
     /// DB doesn't trigger @Observable invalidation, so the Drives view wouldn't react when a drive
     /// is adopted — this stored property does. Call after adopting a drive and at library-open.
