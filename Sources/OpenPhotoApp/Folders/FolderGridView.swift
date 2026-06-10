@@ -33,6 +33,8 @@ struct FolderGridView: View {
             reload()
         }
         .task(id: state.refreshToken) { reload() }      // refresh after rescans (keep selection)
+        .task(id: state.videoOnly) { reload() }          // re-filter when the video-only toggle flips
+        .task(id: state.foldersRecursive) { reload() }   // re-query when include-subfolders flips
         .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
@@ -118,7 +120,8 @@ struct FolderGridView: View {
 
     private func reload() {
         guard let lib = state.library, let dir = state.selectedFolder else { items = []; return }
-        items = (try? lib.items(inDir: dir)) ?? []
+        let all = (try? lib.items(inDir: dir, recursive: state.foldersRecursive)) ?? []
+        items = state.videoOnly ? all.filter { $0.kind == MediaKind.video.rawValue } : all
     }
 
     private var selectionBar: some View {
@@ -153,6 +156,18 @@ struct FolderGridView: View {
                         [root.appendingPathComponent(dir)])
                 } label: { Label("Reveal in Finder", systemImage: "arrow.up.forward.app") }
                     .buttonStyle(.bordered).controlSize(.small)
+            }
+            if state.selectedFolder != nil {
+                Toggle(isOn: Binding(get: { state.foldersRecursive },
+                                     set: { state.foldersRecursive = $0 })) {
+                    Image(systemName: "rectangle.stack")
+                }
+                .toggleStyle(.button).controlSize(.small).help("Include photos from subfolders")
+                Toggle(isOn: Binding(get: { state.videoOnly },
+                                     set: { state.videoOnly = $0 })) {
+                    Image(systemName: "video.fill")
+                }
+                .toggleStyle(.button).controlSize(.small).help("Show videos only")
             }
             Image(systemName: "square.grid.2x2")
                 .font(.system(size: 11)).foregroundStyle(Theme.textFaint)

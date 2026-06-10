@@ -63,6 +63,11 @@ final class AppState {
     var videoOnly: Bool = UserDefaults.standard.bool(forKey: "videoOnly") {
         didSet { UserDefaults.standard.set(videoOnly, forKey: "videoOnly") }
     }
+    /// Folder view: include photos from every descendant folder (the whole subtree), not just the
+    /// selected folder.
+    var foldersRecursive: Bool = UserDefaults.standard.bool(forKey: "foldersRecursive") {
+        didSet { UserDefaults.standard.set(foldersRecursive, forKey: "foldersRecursive") }
+    }
     var sidebarShown: Bool = UserDefaults.standard.object(forKey: "sidebarShown") == nil
         ? true
         : UserDefaults.standard.bool(forKey: "sidebarShown") {

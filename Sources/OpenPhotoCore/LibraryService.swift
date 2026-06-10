@@ -138,8 +138,8 @@ public final class LibraryService: Sendable {
         return result
     }
 
-    public func items(inDir dir: String) throws -> [TimelineItem] {
-        try catalog.items(inDir: dir)
+    public func items(inDir dir: String, recursive: Bool = false) throws -> [TimelineItem] {
+        try catalog.items(inDir: dir, recursive: recursive)
     }
 
     public func item(hash: String) throws -> TimelineItem? { try catalog.item(hash: hash) }

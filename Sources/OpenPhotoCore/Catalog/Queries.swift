@@ -38,12 +38,26 @@ extension Catalog {
         }
     }
 
-    /// Items whose instance lives in the given folder (non-recursive).
-    /// - Parameter vaultID: when non-nil, restricts to that vault; nil = union across vaults.
-    public func items(inDir dirPath: String, vaultID: String? = nil) throws -> [TimelineItem] {
+    /// Items whose instance lives in the given folder.
+    /// - Parameters:
+    ///   - vaultID: when non-nil, restricts to that vault; nil = union across vaults.
+    ///   - recursive: when true, also includes every descendant folder (the whole subtree).
+    public func items(inDir dirPath: String, vaultID: String? = nil,
+                      recursive: Bool = false) throws -> [TimelineItem] {
         try dbQueue.read { db in
-            var sql = "SELECT * FROM (\(Self.timelineSQL)) WHERE dirPath = ?"
-            var args: [DatabaseValueConvertible] = [dirPath]
+            var sql = "SELECT * FROM (\(Self.timelineSQL)) WHERE "
+            var args: [DatabaseValueConvertible] = []
+            if recursive {
+                // The folder itself plus every descendant. GLOB "<dir>/*" matches only paths under
+                // "<dir>/" (so a sibling like "2025x" is NOT matched), and isn't tripped by "_"/"%"
+                // the way LIKE would be.
+                sql += "(dirPath = ? OR dirPath GLOB ?)"
+                args.append(dirPath)
+                args.append(dirPath + "/*")
+            } else {
+                sql += "dirPath = ?"
+                args.append(dirPath)
+            }
             if let vid = vaultID {
                 sql += " AND vaultID = ?"
                 args.append(vid)
