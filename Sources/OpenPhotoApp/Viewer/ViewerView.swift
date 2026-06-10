@@ -21,6 +21,7 @@ struct ViewerView: View {
             stage
             if state.inspectorShown, let item = state.openedItem {
                 Divider().overlay(Theme.hairline)
+                    .ignoresSafeArea(.container, edges: .top)
                 InspectorView(state: state, item: item)
                     .frame(width: Theme.inspectorWidth)
             }
