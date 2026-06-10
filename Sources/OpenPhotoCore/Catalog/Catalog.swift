@@ -18,6 +18,11 @@ public struct VaultPresenceEntry: Sendable, Equatable {
 public final class Catalog: Sendable {
     public let dbQueue: DatabaseQueue
 
+    /// On-disk catalog schema version — the latest registered migration below. Written into a
+    /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
+    /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
+    public static let schemaVersion = 5
+
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
@@ -90,6 +95,22 @@ public final class Catalog: Sendable {
                 t.primaryKey("hash", .text)
                 t.column("relPath", .text).notNull()
                 t.column("deletedAtMs", .integer).notNull()
+            }
+        }
+        migrator.registerMigration("v5") { db in
+            // Per-asset per-stage derivation completion (rebuildable cache; resumable, retry-capped).
+            try db.create(table: "derivation_jobs") { t in
+                t.column("hash", .text).notNull()
+                t.column("stage", .text).notNull()
+                t.column("status", .text).notNull()        // "done" | "failed"
+                t.column("attempts", .integer).notNull().defaults(to: 0)
+                t.column("updatedAtMs", .integer).notNull()
+                t.primaryKey(["hash", "stage"])
+            }
+            // Full-text index over recognized text (rebuildable cache).
+            try db.create(virtualTable: "ocr", using: FTS5()) { t in
+                t.column("hash").notIndexed()
+                t.column("text")
             }
         }
         try migrator.migrate(dbQueue)

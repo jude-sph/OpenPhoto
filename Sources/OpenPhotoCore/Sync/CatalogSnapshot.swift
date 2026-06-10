@@ -41,7 +41,7 @@ public enum CatalogSnapshot {
 
         // Header.
         let meta: [String: Any] = [
-            "format_version": 1, "catalog_schema_version": 4,
+            "format_version": 1, "catalog_schema_version": Catalog.schemaVersion,
             "source_vault_id": drive.descriptor.vaultID,
             "written_at": ISO8601Millis.string(from: Date()),
             "asset_count": hashes.count]

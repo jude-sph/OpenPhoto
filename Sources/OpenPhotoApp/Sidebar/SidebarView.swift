@@ -105,6 +105,12 @@ struct SidebarView: View {
             if let p = state.scanProgress {
                 ActivityIndicatorView(progress: p)
             }
+            if let d = state.derivationProgress, d.done < d.total {
+                Text("Analyzing \(d.done)/\(d.total)\u{2026}")
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(Theme.textFaint)
+                    .padding(.horizontal, 18).padding(.bottom, 4)
+            }
         }
         .frame(width: Theme.sidebarWidth)
         .background(.ultraThinMaterial)
