@@ -49,6 +49,18 @@ public struct PresenceService: Sendable {
                                 detail: folders.sorted().joined(separator: ", ")))
         }
 
+        // Registered drive vaults (confirmed) — presence derived from their manifests.
+        if let vaults = try? catalog.registeredVaults() {
+            for vr in vaults where vr.role != "local" {
+                guard let present = try? catalog.vaultPresenceHashes(forVault: vr.id),
+                      present.contains(hash), !seenDevices.contains(vr.id) else { continue }
+                seenDevices.insert(vr.id)
+                let name = (vr.rootPath as NSString).lastPathComponent
+                out.append(Location(place: .device(key: vr.id, name: name, kind: .volume),
+                                    confidence: .confirmed, detail: vr.role))
+            }
+        }
+
         // Sent to devices (believed) — confirmed at send time, not re-checked since.
         for e in sends.entries(forHash: hash) where !seenDevices.contains(e.destinationKey) {
             seenDevices.insert(e.destinationKey)
@@ -71,6 +83,8 @@ public struct PresenceService: Sendable {
     /// True when no copy is known on any device with confidence confirmed/believed
     /// (historical "came from" doesn't count — that card may have been wiped).
     public func isOnlyOnThisMac(hash: String) -> Bool {
+        // Drives surface as `.confirmed` device locations in locations(), so this single
+        // check already accounts for canonical/backup presence — no separate vault walk needed.
         !locations(forHash: hash).contains { loc in
             if case .device = loc.place { return loc.confidence == .confirmed || loc.confidence == .believed }
             return false

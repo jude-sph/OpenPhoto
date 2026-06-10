@@ -219,57 +219,53 @@ public final class LibraryService: Sendable {
     }
 
     public func delete(_ item: TimelineItem) async throws {
-        guard let bin = binStores[item.vaultID] else { return }
-        try bin.moveToBin(relPath: item.relPath,
-                          hash: ContentHash(stringValue: item.hash), origin: .user)
-        // If this is a Live Photo, the paired video goes too.
-        if let pairHash = item.livePairHash,
-           let pairInstance = try catalog.instanceItem(hash: pairHash, vaultID: item.vaultID) {
-            try bin.moveToBin(relPath: pairInstance.relPath,
-                              hash: ContentHash(stringValue: pairHash), origin: .user)
-        }
-        try await rescan(vaultID: item.vaultID)
+        _ = try await delete([item])
     }
 
-    /// Evict a selection to the bin (vault-format §8). The still is the unit of
-    /// success; its Live-pair video is binned best-effort alongside it. Resilient:
-    /// a file already gone is skipped, not fatal. One rescan + one sync-log `evict`
-    /// event per vault touched. Returns the count actually binned.
+    /// Delete a selection: move each file (and its Live-pair video) into the local bin
+    /// (`origin: .user`) AND enqueue a pending deletion so the removal can later be reviewed
+    /// for propagation to a drive. Resilient: a file already gone is skipped, not fatal. One
+    /// rescan per vault touched. Returns the count actually binned. Unlike `evict`, this records
+    /// the intent to remove the photo everywhere; `evict` (which never enqueues) only frees the
+    /// local copy of something kept on a drive.
     @discardableResult
-    public func evict(_ items: [TimelineItem]) async throws -> Int {
+    public func delete(_ items: [TimelineItem]) async throws -> Int {
         var byVault: [String: [TimelineItem]] = [:]
         for it in items { byVault[it.vaultID, default: []].append(it) }
-        var evicted = 0
+        var deleted = 0
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         for (vaultID, group) in byVault {
-            guard let bin = binStores[vaultID], let v = vault(id: vaultID) else { continue }
+            guard let bin = binStores[vaultID] else { continue }
             var n = 0
             for item in group {
                 do {
                     try bin.moveToBin(relPath: item.relPath,
                                       hash: ContentHash(stringValue: item.hash), origin: .user)
                 } catch { continue }   // primary already gone / unreadable — skip, not counted
-                n += 1                  // the still is in the bin → counted
-                // Best-effort: the Live pair's video goes too. A rare failure here
-                // (e.g. the .mov already missing) leaves the video to be evicted
-                // separately — never lost — rather than un-counting the binned still.
+                try catalog.enqueuePendingDeletion(hash: item.hash, relPath: item.relPath, deletedAtMs: nowMs)
+                n += 1
+                // Best-effort: the Live pair's video is binned + queued alongside it.
                 if let pairHash = item.livePairHash,
                    let pairInstance = try? catalog.instanceItem(hash: pairHash, vaultID: vaultID) {
                     try? bin.moveToBin(relPath: pairInstance.relPath,
                                        hash: ContentHash(stringValue: pairHash), origin: .user)
+                    try? catalog.enqueuePendingDeletion(hash: pairHash, relPath: pairInstance.relPath,
+                                                        deletedAtMs: nowMs)
                 }
             }
-            if n > 0 {
-                appendSyncLog(vault: v, event: "evict", summary: "\(n) evicted to bin",
-                              counterpartyKey: "")
-                try await rescan(vaultID: vaultID)
-            }
-            evicted += n
+            if n > 0 { try await rescan(vaultID: vaultID); deleted += n }
         }
-        return evicted
+        return deleted
     }
 
     public func restore(_ entry: BinEntry) async throws {
         try binStores[entry.vaultID]?.restore(relPath: entry.item.path)
+        try catalog.dequeuePendingDeletion(hash: entry.item.hash)
+        // Mirror the dequeue onto a Live pair (favor not-deleting: a restored still
+        // should not leave its video queued to propagate alone).
+        if let pair = try catalog.assetLivePairHash(forHash: entry.item.hash) {
+            try catalog.dequeuePendingDeletion(hash: pair)
+        }
         try await rescan(vaultID: entry.vaultID)
     }
 
@@ -296,14 +292,7 @@ public final class LibraryService: Sendable {
     /// Append an event to the vault's sync-log.jsonl (format §9, informative).
     public func appendSyncLog(vault: Vault, event: String, summary: String,
                               counterpartyKey: String) {
-        let line: [String: Any] = ["event": event,
-                                   "at": ISO8601Millis.string(from: Date()),
-                                   "counterparty_vault_id": counterpartyKey,
-                                   "summary": summary]
-        guard let data = try? JSONSerialization.data(withJSONObject: line,
-                                                     options: [.sortedKeys]) else { return }
-        var existing = (try? Data(contentsOf: vault.syncLogURL)) ?? Data()
-        existing.append(data); existing.append(0x0A)
-        try? AtomicFile.write(existing, to: vault.syncLogURL)
+        SyncLog.append(event: event, summary: summary,
+                       counterparty: counterpartyKey, to: vault.syncLogURL)
     }
 }

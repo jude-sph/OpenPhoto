@@ -6,11 +6,12 @@ Your photos and videos live in your own folders (`~/Pictures`, `~/Movies` — ar
 
 ## Status
 
-**Phases 1–2 implemented (plus a library-management feature on top); Phases 3–5 designed.**
+**Phases 1–2 implemented (plus a library-management feature on top); Phase 3 in progress (Slice 1 done); Phases 4–5 designed.**
 
 - **Phase 1 — Browse:** library indexing (content-hash identity, manifest, rebuildable catalog), timeline, folder tree, viewer, inspector with XMP-sidecar metadata editing, bin.
 - **Phase 2 — Import:** import from iPhones (ImageCaptureCore) and SD cards / arbitrary folders, with staged copy, hash verification, a durable import registry, and an opt-in free-up-phone flow.
 - **Library selection · evict · send · locations** (built after Phase 2): multi-select in the timeline and folders (click / shift / rubber-band, with pinch-to-zoom and edge auto-scroll); **evict** to the recoverable bin with an "only-copy" warning; **send to a device** — back to an iPhone via AirDrop (confirmed by re-enumerating the phone) or to an SD/USB volume by hash-verified copy — tracked in `sends.jsonl`/`devices.jsonl`; and a **Locations** inspector panel showing everywhere a photo is known to exist (This Mac / phones / cards) with confidence.
+- **Phase 3 — Drives (in progress):** Slice 1 — additive one-way sync (Mac → canonical drive): adopt a drive, preview a plan, hash-verified atomic resumable copy that never overwrites, and a "backed up on canonical" badge. See `docs/superpowers/specs/2026-06-09-phase3-drives-design.md`.
 
 See `docs/` for the designs and hardware-spike findings.
 

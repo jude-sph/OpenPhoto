@@ -28,6 +28,9 @@ struct OpenPhotoApp: App {
                 Button("Open Folder as Import Source…") {
                     MainActor.assumeIsolated { state.addImportSourceViaPanel() }
                 }
+                Button("Quick View Folder\u{2026}") {
+                    MainActor.assumeIsolated { state.quickViewFolderViaPanel() }
+                }
             }
         }
     }
@@ -72,12 +75,15 @@ struct RootView: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if let device = state.openedDevice {
+        if let ctx = state.peekContext {
+            PeekView(context: ctx) { state.endQuickView() }
+        } else if let device = state.openedDevice {
             ImportView(state: state, device: device)
         } else {
             switch state.selection {
             case .timeline: TimelineView(state: state)
             case .folders: FoldersView(state: state)
+            case .drives: DrivesView(state: state)
             case .bin: BinView(state: state)
             }
         }

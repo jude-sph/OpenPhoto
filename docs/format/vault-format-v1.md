@@ -38,6 +38,7 @@ Rules:
 - A directory named `.openphoto` is never media content. Scanners must skip it when enumerating photos.
 - The vault-root `.openphoto/` holds vault state. Folder-level `.openphoto/` directories hold **only** XMP sidecars for that folder's files.
 - A Mac library typically consists of two vaults (`~/Pictures`, `~/Movies`). A drive carries **one** vault whose top-level directories mirror the source vault roots by name (`Pictures/`, `Movies/`).
+- When OpenPhoto syncs a Mac library onto a canonical drive it acts as a third-party writer per §10: each source vault maps to a top-level directory named by that root's basename, originals are added but never overwritten (a name collision with differing bytes is reported, not replaced), and `manifest.jsonl` is rewritten atomically after each sync. No fields beyond those specified in this document are used.
 
 ## 2. Asset identity
 
@@ -117,11 +118,43 @@ Notes:
 
 A Live Photo is one logical asset made of two files (e.g. `IMG_4123.heic` + `IMG_4123.mov`), each with its own hash and manifest line. Pairing is determined by Apple's content identifier (`com.apple.quicktime.content.identifier` in the MOV; the corresponding Maker Apple key in the HEIC). Fallback heuristic when stripped: same basename in the same folder with capture timestamps within 2 seconds. Sidecar metadata attaches to the still image's sidecar; the video carries none.
 
-## 7. `catalog-snapshot/` (optional, non-normative)
+## 7. `catalog-snapshot/` (optional)
 
-A copy of the OpenPhoto catalog (SQLite) and thumbnail cache, refreshed by the Mac at the end of each sync. It exists so a fresh machine gets search/faces/thumbnails without re-running ML.
+A copy of the OpenPhoto catalog (SQLite) and thumbnail cache, written by the Mac at the end of each sync or clone. It exists so a fresh machine — or server-side reader — gets search metadata and thumbnails without re-running ML or re-scanning the drive.
 
-Third parties: **treat it as a disposable accelerator.** The authoritative data is always files + sidecars + manifest. You may read it (schema documented in `catalog-schema.md` once stable), but MUST NOT treat it as a source of truth and MUST NOT write to it. OpenPhoto regenerates it wholesale.
+### 7.1 Layout
+
+```
+<drive-root>/.openphoto/catalog-snapshot/
+  catalog.sqlite          ← clean VACUUM INTO copy of the Mac's catalog (schema: catalog-schema.md)
+  thumbs/<hh>/<hash>.jpg  ← content-addressed thumbnails, ONLY this drive's manifest hashes
+  snapshot.json           ← {"format_version":1,"catalog_schema_version":<N>,
+                              "source_vault_id":"…","written_at":"ISO-8601","asset_count":N}
+```
+
+`catalog_schema_version` is the catalog's current migration version (the value at the time of writing is **4**; it tracks the schema in `catalog-schema.md` and increases as the catalog evolves). `format_version` is the snapshot-envelope version, currently `1`.
+
+### 7.2 Write protocol
+
+The snapshot is assembled in a sibling directory `catalog-snapshot.tmp/` (at the same level inside `.openphoto/`) and renamed into place atomically only after all files have been written and fsynced. The directory that was previously at `catalog-snapshot/` (if any) is removed only after the rename succeeds. A reader that finds `catalog-snapshot.tmp/` but no `catalog-snapshot/` MUST treat the snapshot as absent.
+
+### 7.3 Reader obligations
+
+The snapshot is **disposable and non-normative**. It is a cache/accelerator; OpenPhoto regenerates it wholesale after every sync and clone.
+
+A reader MUST treat the snapshot as an accelerator only:
+
+- If `catalog-snapshot/` is absent, unreadable, or carries a `snapshot.json` `format_version` newer than the reader understands, the reader MUST fall back to a full re-scan of the drive's originals, sidecars, and `manifest.jsonl`.
+- The `manifest.jsonl` (§4) is **always authoritative** for what files are on the drive. On any disagreement between the snapshot and the manifest, the manifest wins.
+- A reader MUST NOT write to `catalog-snapshot/`. OpenPhoto owns and rebuilds it.
+
+### 7.4 Thumbnails
+
+`thumbs/` uses the same content-addressed layout as the Mac's live thumbnail cache: files are placed at `thumbs/<first-two-hex-chars-of-hash>/<full-hash>.jpg`. Only hashes that appear in this drive's `manifest.jsonl` are stored here; thumbnails for assets evicted or never synced to this drive are absent.
+
+### 7.5 Catalog schema
+
+The schema of `catalog.sqlite` is documented in `docs/format/catalog-schema.md`. A snapshot reader uses only the `assets` table (hash-keyed machine metadata) and the `vault_presence` rows whose `vaultID` matches this drive's own vault id. All other tables and rows are internal to the source Mac and MUST be ignored by external readers (see the Portability key in `catalog-schema.md`).
 
 ## 8. Deletion (`bin/`, `bin.jsonl`)
 
@@ -133,9 +166,11 @@ Conforming software never hard-deletes. Deletion = move the file (and its sideca
 
 `origin` is `"user"` (deleted directly in this vault's UI) or `"propagated"` (a reviewed deletion synced from the user's catalog). Restore = the reverse move + manifest line re-added.
 
+A *vault's* propagated deletions therefore land in that vault's own `.openphoto/bin/` (the same mechanism as a local deletion), tagged `origin:"propagated"`. The volume-root `.openphoto-trash/` directory of §12 is used **only** for deletions on removable *non-vault* volumes (e.g. an SD card during import), which have no `.openphoto/` vault to host a bin.
+
 ## 9. `sync-log.jsonl` (informative)
 
-Append-only journal of import/sync/clone/evict sessions, one JSON object per line with at minimum `{"event", "at", "counterparty_vault_id", "summary"}`. Event names include `"import"`, `"device-delete"`, `"send"`, `"sync"`, `"clone"`, `"evict"`. Diagnostic and forensic value; readers MUST NOT require it. For purely local events that have no other party (e.g. `"evict"`), `counterparty_vault_id` is the empty string `""`.
+Append-only journal of import/sync/clone/evict sessions, one JSON object per line with at minimum `{"event", "at", "counterparty_vault_id", "summary"}`. Event names include `"import"`, `"device-delete"`, `"send"`, `"sync"`, `"clone"`, `"evict"`, `"rehydrate"` (an evicted original copied back from a drive), `"delete"` (a reviewed deletion propagated to this vault's bin). Diagnostic and forensic value; readers MUST NOT require it. For purely local events that have no other party (e.g. `"evict"`), `counterparty_vault_id` is the empty string `""`.
 
 ## 10. Rules for third-party writers
 

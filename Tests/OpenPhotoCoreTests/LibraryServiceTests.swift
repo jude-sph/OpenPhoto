@@ -146,31 +146,39 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     #expect(sections[0].items.count == 2)
 }
 
-@Test func evictBatchMovesAllToBinAndUpdatesCatalog() async throws {
+@Test func deleteEnqueuesPendingDeletion() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
-    let lib = try makeLibrary(t)
+    let pics = try t.sub("Pictures")
+    try makeJPEG(at: pics.appendingPathComponent("rome/IMG_1.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
     try await lib.scanAll()
-    let items = try lib.timelineSections().flatMap(\.items)
-    #expect(items.count == 2)
-    let n = try await lib.evict(items)
-    #expect(n == 2)
-    #expect(try lib.timelineSections().flatMap(\.items).isEmpty)
-    #expect(try lib.binItems().count == 2)
+    let item = try #require(try lib.catalog.timelineItems().first)
+
+    try await lib.delete(item)
+
+    let queued = try lib.catalog.pendingDeletions()
+    #expect(queued.map(\.hash) == [item.hash])
+    #expect(queued.first?.relPath == "rome/IMG_1.jpg")
 }
 
-@Test func evictSkipsMissingFilesAndCountsSuccesses() async throws {
+@Test func restoreDequeuesPendingDeletion() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
-    let lib = try makeLibrary(t)
+    let pics = try t.sub("Pictures")
+    try makeJPEG(at: pics.appendingPathComponent("rome/IMG_1.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
     try await lib.scanAll()
-    let items = try lib.timelineSections().flatMap(\.items)
-    // Remove one file out from under the catalog; evict must skip it, not throw.
-    try FileManager.default.removeItem(at: lib.absoluteURL(for: items[0])!)
-    let n = try await lib.evict(items)
-    #expect(n == 1)                                   // the surviving file was binned
-    #expect(try lib.binItems().count == 1)
+    let item = try #require(try lib.catalog.timelineItems().first)
+    try await lib.delete(item)
+    let entry = try #require(try lib.binItems().first)
+
+    try await lib.restore(entry)
+
+    #expect(try lib.catalog.pendingDeletions().isEmpty)   // undeleting cancels the propagation
 }
 
-@Test func evictLivePhotoBinsBothHalves() async throws {
+@Test func deleteAndRestoreLivePhotoRoundTripsPendingQueue() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let pics = try t.sub("Pictures")
     try makeJPEG(at: pics.appendingPathComponent("a/IMG_9.jpg").creatingParent(),
@@ -185,10 +193,62 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
     try await lib.scanAll()
     let items = try lib.timelineSections().flatMap(\.items)
-    #expect(items.count == 1)                         // the pair shows as one item
-    #expect(items[0].livePairHash != nil)
-    let n = try await lib.evict(items)
-    #expect(n == 1)
-    #expect(try lib.binItems().count == 2)            // still + video both binned
-    #expect(try lib.timelineSections().flatMap(\.items).isEmpty)
+    // Verify the pair was formed; if not, the heuristic didn't fire and setup is wrong.
+    #expect(items.count == 1, "Expected exactly one timeline item for the Live pair, got \(items.count)")
+    let pairHash = try #require(items[0].livePairHash, "Expected livePairHash to be set — heuristic did not fire")
+    let still = items[0]
+
+    // Delete the still — both the still and its Live-pair video must be enqueued.
+    try await lib.delete(still)
+    let queued = try lib.catalog.pendingDeletions()
+    #expect(Set(queued.map(\.hash)) == Set([still.hash, pairHash]),
+            "Expected both the still and the video to be enqueued for deletion, got \(queued.map(\.hash))")
+
+    // Restore the still — both halves must be dequeued (conservative: don't propagate video alone).
+    let entry = try #require(try lib.binItems().first(where: { $0.item.hash == still.hash }))
+    try await lib.restore(entry)
+    #expect(try lib.catalog.pendingDeletions().isEmpty,
+            "Expected pending deletions to be empty after restore, but some remain")
+}
+
+@Test func evictDoesNotEnqueuePendingDeletion() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    try makeJPEG(at: pics.appendingPathComponent("rome/IMG_1.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let item = try #require(try lib.catalog.timelineItems().first)
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let dp = "Pictures/rome/IMG_1.jpg"
+    let df = drive.rootURL.appendingPathComponent(dp)
+    try FileManager.default.createDirectory(at: df.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.copyItem(at: pics.appendingPathComponent("rome/IMG_1.jpg"), to: df)
+    try lib.catalog.registerVault(id: drive.descriptor.vaultID, role: "canonical", rootPath: drive.rootURL.path)
+    try lib.catalog.replaceVaultPresence(vaultID: drive.descriptor.vaultID, entries: [
+        VaultPresenceEntry(hash: item.hash, relPath: "rome/IMG_1.jpg", dirPath: "rome", size: item.size, driveRelPath: dp)])
+
+    _ = try await lib.evict([item], mode: .verified, connectedCanonical: [drive], canonicalPresence: [item.hash])
+
+    #expect(try lib.catalog.pendingDeletions().isEmpty)
+}
+
+@Test func batchDeleteEnqueuesAllAndReturnsCount() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    // Distinct EXIF dates → distinct bytes → distinct hashes (else they'd be one asset).
+    try makeJPEG(at: pics.appendingPathComponent("a/IMG_1.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    try makeJPEG(at: pics.appendingPathComponent("a/IMG_2.jpg").creatingParent(),
+                 dateTimeOriginal: "2023:01:02 09:00:00", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+    let items = try lib.catalog.timelineItems()
+    #expect(items.count == 2)
+
+    let n = try await lib.delete(items)
+
+    #expect(n == 2)
+    #expect(Set(try lib.catalog.pendingDeletions().map(\.relPath)) == ["a/IMG_1.jpg", "a/IMG_2.jpg"])
+    #expect(try lib.catalog.timelineItems().isEmpty)   // both binned, gone from the library
 }

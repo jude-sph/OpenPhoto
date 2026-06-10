@@ -4,11 +4,12 @@ import OpenPhotoCore
 typealias Scanner = OpenPhotoCore.Scanner   // Foundation.Scanner collision
 
 enum SidebarItem: String, Hashable, CaseIterable {
-    case timeline, folders, bin
+    case timeline, folders, drives, bin
     var label: String {
         switch self {
         case .timeline: "Timeline"
         case .folders: "Folders"
+        case .drives: "Drives"
         case .bin: "Bin"
         }
     }
@@ -16,6 +17,7 @@ enum SidebarItem: String, Hashable, CaseIterable {
         switch self {   // SF Symbol map from the UI-Design README
         case .timeline: "photo.on.rectangle.angled"
         case .folders: "folder"
+        case .drives: "externaldrive"
         case .bin: "trash"
         }
     }
@@ -45,6 +47,8 @@ final class AppState {
     var binEntries: [LibraryService.BinEntry] = []
     var deviceWatcher = DeviceWatcher()
     var openedDevice: ConnectedDevice?      // non-nil → ImportView is shown
+    /// Non-nil while a Quick View peek is open. Ephemeral — its tempDir is deleted on teardown.
+    var peekContext: PeekContext?
     var scanProgress: Scanner.Progress?
     var scanning = false
     var refreshToken = 0
@@ -108,6 +112,615 @@ final class AppState {
         }
     }
 
+    /// Prompt for a folder/drive and Quick View it (the raw-folder entry point). Shared by the Drives
+    /// toolbar button and the File-menu command.
+    func quickViewFolderViaPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Quick View"
+        panel.message = "Choose a folder or drive to browse without adding it to your library."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await startQuickView(root: url) }
+    }
+
+    /// Start an ephemeral, trace-free peek of `root` (a drive or any folder). Loads off-main into a
+    /// throwaway temp dir; nothing is written to `root` or persisted on the Mac.
+    func startQuickView(root: URL) async {
+        endQuickView()   // tear down any prior peek first (single peekContext)
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenPhotoPeek-" + UUID().uuidString)
+        let ctx = await Task.detached(priority: .userInitiated) {
+            try? PeekSource.load(root: root, tempDir: tmp)
+        }.value
+        if let ctx {
+            peekContext = ctx
+        } else {
+            try? FileManager.default.removeItem(at: tmp)
+            driveAlert("Couldn\u{2019}t open Quick View",
+                       "\u{201c}\(root.lastPathComponent)\u{201d} couldn\u{2019}t be read.")
+        }
+    }
+
+    /// End the current peek and delete its temp dir (idempotent).
+    func endQuickView() {
+        guard let ctx = peekContext else { return }
+        peekContext = nil
+        try? FileManager.default.removeItem(at: ctx.tempDir)
+    }
+
+    // All drives that hold the library durably (canonical + its backups). Used for presence,
+    // browse, drift, deletion, and as candidate read/verify sources.
+    private(set) var durableVaults: [VaultRecord] = []
+    // The authoritative canonical (source of truth / preferred read source / migration anchor).
+    var canonicalVault: VaultRecord? { durableVaults.first { $0.role == "canonical" } }
+
+    /// Connected durable drives as open Vaults, canonical first — so reads/verifies (rehydrate,
+    /// evict, send) prefer the canonical source of truth and fall back to a backup.
+    func connectedDrivesCanonicalFirst() -> [Vault] {
+        durableVaults.filter { driveIsPresent($0) }
+            .sorted { ($0.role == "canonical" ? 0 : 1) < ($1.role == "canonical" ? 0 : 1) }
+            .compactMap { openVault(for: $0) }
+    }
+
+    /// Hashes the canonical currently holds (from its presence mirror) — for "behind by N".
+    private func canonicalHashes() -> Set<String> {
+        guard let vr = canonicalVault,
+              let hs = try? library?.catalog.vaultPresenceHashes(forVault: vr.id) else { return [] }
+        return hs
+    }
+
+    /// How many photos a backup is missing relative to the canonical (catalog-only, no I/O).
+    func backupBehindCount(_ vr: VaultRecord) -> Int {
+        guard let hs = try? library?.catalog.vaultPresenceHashes(forVault: vr.id) else { return 0 }
+        return OpenPhotoCore.backupBehindCount(canonicalHashes: canonicalHashes(), backupHashes: hs)
+    }
+
+    /// A backup is promotable iff it's connected, the canonical is connected, and their content sets
+    /// are exactly equal (cheap presence-set gate; promotion re-verifies via manifests).
+    func isPromotable(_ vr: VaultRecord) -> Bool {
+        guard let lib = library, vr.role == "backup", driveIsPresent(vr),
+              let canon = canonicalVault, driveIsPresent(canon) else { return false }
+        let canonHashes = (try? lib.catalog.vaultPresenceHashes(forVault: canon.id)) ?? []
+        let backupHashes = (try? lib.catalog.vaultPresenceHashes(forVault: vr.id)) ?? []
+        return canonicalAgreement(canonicalHashes: canonHashes, backupHashes: backupHashes)
+    }
+
+    /// Promote a backup to canonical (planned): re-verify exact agreement against BOTH manifests, then
+    /// atomically flip the catalog roles (new→canonical, old→backup) and rewrite the drives' vault.json
+    /// best-effort. Returns false (no change) if the backup is not an exact copy — the caller tells the
+    /// user to "Update backup" first.
+    @discardableResult
+    func promoteToCanonical(_ vr: VaultRecord) async -> Bool {
+        guard let lib = library, let oldVR = canonicalVault,
+              driveIsPresent(vr), driveIsPresent(oldVR),
+              let newVault = openVault(for: vr), let oldVault = openVault(for: oldVR) else { return false }
+        let agree = await Task.detached(priority: .userInitiated) { () -> Bool in
+            let newHashes = Set((try? Manifest.read(from: newVault.manifestURL))?.map { $0.hash.stringValue } ?? [])
+            let oldHashes = Set((try? Manifest.read(from: oldVault.manifestURL))?.map { $0.hash.stringValue } ?? [])
+            return canonicalAgreement(canonicalHashes: oldHashes, backupHashes: newHashes)
+        }.value
+        guard agree else { return false }
+        try? lib.catalog.setCanonical(vr.id, demoting: oldVR.id)   // atomic catalog flip
+        _ = try? newVault.writingRole(.canonical)                  // best-effort on-disk self-describe
+        _ = try? oldVault.writingRole(.backup)
+        reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
+        return true
+    }
+
+    /// When the registered canonical is NOT connected (lost/failed but not yet forgotten), the
+    /// precise data-loss picture of recovering from backup `vr`: how many at-risk photos the Mac can
+    /// still supply vs how many are lost. nil if there is no registered canonical (already forgotten).
+    func recoveryAcknowledgment(_ vr: VaultRecord) -> RecoveryLoss? {
+        guard let lib = library, let lostCanon = canonicalVault, !driveIsPresent(lostCanon) else { return nil }
+        let lostHashes = (try? lib.catalog.vaultPresenceHashes(forVault: lostCanon.id)) ?? []
+        let backupHashes = (try? lib.catalog.vaultPresenceHashes(forVault: vr.id)) ?? []
+        let macLocalHashes = (try? lib.catalog.instanceHashes()) ?? []
+        return recoveryLoss(lostCanonicalHashes: lostHashes, backupHashes: backupHashes,
+                            macLocalHashes: macLocalHashes)
+    }
+
+    /// A connected drive whose on-disk vault.json says it's canonical but which ISN'T the registered
+    /// canonical -- a leftover from a recovery (the old drive turned up) or a partial flip. Surfaced to
+    /// the user for confirmed resolution; the catalog's registered canonical stays authoritative.
+    var conflictingCanonical: VaultRecord? {
+        durableVaults.first { vr in
+            driveIsPresent(vr) && vr.id != canonicalVault?.id
+            && (openVault(for: vr)?.descriptor.role == .canonical)
+        }
+    }
+
+    /// Resolve a canonical conflict: demote the stray drive to a backup (reconcile catalog + vault.json),
+    /// or forget it. Never leaves two canonicals.
+    func resolveCanonicalConflict(_ vr: VaultRecord, makeBackup: Bool) {
+        guard let lib = library else { return }
+        if makeBackup {
+            // A plain re-register (not setCanonical) is correct: a conflicting drive is by definition
+            // NOT the registered canonical (conflictingCanonical excludes canonicalVault), so there is
+            // no second canonical to demote in the same breath — we only need this stray set to backup.
+            try? lib.catalog.registerVault(id: vr.id, role: "backup", rootPath: vr.rootPath)
+            _ = try? openVault(for: vr)?.writingRole(.backup)
+            reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
+        } else {
+            forgetDrive(vr)
+        }
+    }
+
+    /// Recovery: promote backup `vr` to canonical when the old canonical is absent (acknowledged by
+    /// the caller). Flip the catalog roles (the absent old → backup in the catalog; its vault.json is
+    /// reconciled on reconnect by the conflict detector), then SALVAGE everything the Mac still holds
+    /// via the existing one-way Mac→canonical sync.
+    func recoverCanonical(_ vr: VaultRecord) async {
+        guard let lib = library, let newVault = openVault(for: vr) else { return }
+        let lostID = canonicalVault?.id
+        try? lib.catalog.setCanonical(vr.id, demoting: lostID)
+        _ = try? newVault.writingRole(.canonical)
+        await Task.detached(priority: .userInitiated) {
+            let engine = SyncEngine(library: lib)
+            let plan = (try? engine.plan(sources: lib.vaults, destinationVault: newVault)) ?? SyncPlan()
+            _ = await engine.apply(plan, destinationVault: newVault,
+                                   volume: FileSystemVolume(rootURL: newVault.rootURL))
+        }.value
+        try? refreshCanonicalPresence(driveVault: newVault)
+        let cat = lib.catalog, thumbs = lib.thumbnails
+        await Task.detached(priority: .utility) { try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: newVault) }.value
+        reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
+    }
+
+    /// Clone the canonical onto `vr` (both must be connected): copy the diff hash-verified, then
+    /// mark `vr` a backup in the catalog and refresh its presence. Off-main for the copy.
+    @discardableResult
+    func cloneToBackup(_ vr: VaultRecord) async -> SyncResult {
+        guard let lib = library,
+              let canonVR = canonicalVault, driveIsPresent(canonVR),
+              let canonical = openVault(for: canonVR),
+              driveIsPresent(vr), let target = openVault(for: vr) else { return SyncResult() }
+        let engine = SyncEngine(library: lib)
+        let result = await Task.detached(priority: .userInitiated) {
+            guard let plan = try? engine.planClone(source: canonical, destinationVault: target) else { return SyncResult() }
+            return await engine.apply(plan, destinationVault: target,
+                                      volume: FileSystemVolume(rootURL: target.rootURL),
+                                      event: "clone", counterpartyVaultID: canonical.descriptor.vaultID)
+        }.value
+        // Mark the target a backup (catalog role is authoritative for app behavior) and record what
+        // it now holds so badges/presence reflect it.
+        try? lib.catalog.registerVault(id: target.descriptor.vaultID, role: "backup",
+                                       rootPath: target.rootURL.path)
+        _ = try? target.writingRole(.backup)   // self-describe on disk so any Mac identifies it correctly
+        try? refreshCanonicalPresence(driveVault: target)
+        reloadDrives()
+        try? refreshQueries()
+        let cat = lib.catalog, thumbs = lib.thumbnails
+        await Task.detached(priority: .utility) {
+            try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: target)
+        }.value
+        return result
+    }
+
+    /// Refresh the observable drive list from the catalog. A computed property that queries the
+    /// DB doesn't trigger @Observable invalidation, so the Drives view wouldn't react when a drive
+    /// is adopted — this stored property does. Call after adopting a drive and at library-open.
+    func reloadDrives() {
+        durableVaults = (try? library?.catalog.registeredVaults()
+            .filter { $0.role == "canonical" || $0.role == "backup" }) ?? []
+    }
+
+    private(set) var canonicalPresence: Set<String> = []
+
+    static let ejectedDefaultsKey = "ejectedDrives"
+    /// Drives the user manually "ejected" — treated as not-present even though the folder is still
+    /// on disk (folder/network drives never physically unmount). Persisted across launches.
+    private(set) var ejectedDrives: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: AppState.ejectedDefaultsKey) ?? [])
+
+    func driveIsEjected(_ vr: VaultRecord) -> Bool { ejectedDrives.contains(vr.id) }
+
+    /// The drive's folder is reachable on disk right now (independent of the eject flag).
+    func driveFolderExists(_ vr: VaultRecord) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: vr.rootPath, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    /// "Connected": reachable AND not ejected. Ejected or missing folders read as not present.
+    func driveIsPresent(_ vr: VaultRecord) -> Bool {
+        !ejectedDrives.contains(vr.id) && driveFolderExists(vr)
+    }
+
+    /// Last-known kind per drive (for accurate labels while unplugged). Refreshed when present.
+    private(set) var driveKinds: [String: String] =
+        (UserDefaults.standard.dictionary(forKey: "driveKinds") as? [String: String]) ?? [:]
+
+    /// The drive's kind for display. Prefers the cache (kept fresh by add/scan/reconnect) so the
+    /// render path stays a pure lookup — a live classify here would do synchronous filesystem I/O
+    /// every render, which could hang on a slow/offline network share. Falls back to a one-time
+    /// live classify only when the cache is cold.
+    func driveKind(_ vr: VaultRecord) -> DriveKind {
+        if let cached = DriveKind(rawValue: driveKinds[vr.id] ?? "") { return cached }
+        if driveFolderExists(vr) { return DriveKind.of(path: vr.rootPath) }
+        return .unknown
+    }
+
+    /// Remember a reachable drive's kind so its label stays accurate after it's unplugged.
+    func cacheDriveKind(_ vr: VaultRecord) {
+        guard driveFolderExists(vr) else { return }
+        let raw = DriveKind.of(path: vr.rootPath).rawValue
+        if driveKinds[vr.id] != raw {
+            driveKinds[vr.id] = raw
+            UserDefaults.standard.set(driveKinds, forKey: "driveKinds")
+        }
+    }
+
+    /// Eject a drive. A real removable/network volume is *physically* unmounted (safe to unplug);
+    /// a plain folder is ejected logically (it never unmounts on its own).
+    func ejectDrive(_ vr: VaultRecord) {
+        guard driveKind(vr).isRealVolume else {
+            ejectedDrives.insert(vr.id); persistEjected(); return   // folder: logical eject
+        }
+        let url = URL(fileURLWithPath: vr.rootPath)
+        let volume = (try? url.resourceValues(forKeys: [.volumeURLKey]).volume) ?? url
+        do {
+            try NSWorkspace.shared.unmountAndEjectDevice(at: volume)   // safe to unplug now
+            driveDrift[vr.id] = nil                                    // its folder vanishes → not-present
+        } catch {
+            driveAlert("Couldn’t eject \((vr.rootPath as NSString).lastPathComponent)",
+                       error.localizedDescription)
+        }
+    }
+
+    func reconnectDrive(_ vr: VaultRecord) {
+        ejectedDrives.remove(vr.id); persistEjected()
+        cacheDriveKind(vr)
+        if let drive = openVault(for: vr) { driftScan(drive) }   // re-scan just this drive
+    }
+
+    /// Forget a drive entirely: unregister it + drop its presence. The files on the drive are NOT
+    /// touched; you can add it again later. Photos that lived only on it stop showing.
+    func forgetDrive(_ vr: VaultRecord) {
+        try? library?.catalog.unregisterVault(id: vr.id)
+        ejectedDrives.remove(vr.id); persistEjected()
+        driveDrift[vr.id] = nil
+        // If the viewer is showing a photo that lived only on this drive, close it (it's now gone
+        // from browse — leaving it open would strand the viewer's navigation).
+        if let opened = openedItem, opened.vaultID == vr.id { openedItem = nil }
+        reloadDrives()
+        reloadCanonicalPresence()
+        try? refreshQueries()
+    }
+
+    private func persistEjected() {
+        UserDefaults.standard.set(Array(ejectedDrives), forKey: Self.ejectedDefaultsKey)
+    }
+
+    func isBackedUpOnCanonical(_ item: TimelineItem) -> Bool { canonicalPresence.contains(item.hash) }
+
+    func addDriveViaPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use as Canonical Drive"
+        panel.message = "Choose a drive or folder to hold your canonical library."
+        guard panel.runModal() == .OK, let url = panel.url, let lib = library else { return }
+        do {
+            let vault = try Vault.openOrCreate(at: url, role: .canonical)
+            // Accept a canonical or backup drive (a backup self-describes as `backup` and is a valid
+            // library to add/adopt for browse). Refuse a folder that is one of the user's own LOCAL
+            // source vaults — adopting it would diverge catalog/disk role and could make the engine
+            // try to sync a vault onto itself.
+            guard vault.descriptor.role != .local else {
+                driveAlert("Can’t use this folder",
+                    "“\(url.lastPathComponent)” is one of your local library folders, not a drive. Choose a drive or a folder dedicated to your canonical library.")
+                return
+            }
+            // Already adopted? Same vault_id means it's the same drive.
+            if durableVaults.contains(where: { $0.id == vault.descriptor.vaultID }) {
+                driveAlert("Already added",
+                    "“\(url.lastPathComponent)” is already one of your drives.")
+                return
+            }
+            try lib.catalog.registerVault(id: vault.descriptor.vaultID,
+                                          role: vault.descriptor.role.rawValue, rootPath: url.path)
+            reloadDrives()
+            if let vr = durableVaults.first(where: { $0.id == vault.descriptor.vaultID }) { cacheDriveKind(vr) }
+            // A drive that carries a catalog-snapshot is adopted through a CONFIRMED prompt
+            // (`adoptableDrive` → Adopt → `adoptDrive` imports assets+presence+thumbs, then verifies
+            // vs the manifest). Leave its presence empty for now so the prompt can fire — seeding
+            // presence here without `assets` would suppress the prompt AND leave a fresh Mac with an
+            // empty drive (the browse query joins assets ⋈ vault_presence). A drive WITHOUT a snapshot
+            // gets its presence populated immediately (browse from existing local assets).
+            let hasSnapshot = FileManager.default.fileExists(
+                atPath: url.appendingPathComponent(".openphoto/catalog-snapshot/catalog.sqlite").path)
+            if !hasSnapshot {
+                try refreshCanonicalPresence(driveVault: vault)
+            }
+        } catch { driveAlert("Couldn’t add drive", error.localizedDescription) }
+    }
+
+    private func driveAlert(_ title: String, _ message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.runModal()
+    }
+
+    /// Build presence entries for a drive from its manifest, restricted to `hashes` when given.
+    private func presenceEntries(forDrive drive: Vault, limitedTo hashes: Set<String>?) -> [VaultPresenceEntry] {
+        let bases = (library?.vaults ?? []).map { $0.rootURL.lastPathComponent }
+        let entries = (try? Manifest.read(from: drive.manifestURL)) ?? []
+        return entries.compactMap { e in
+            if let hs = hashes, !hs.contains(e.hash.stringValue) { return nil }
+            let mac = DrivePathMap.driveToMacRelPath(e.path, sourceBasenames: bases)
+            return VaultPresenceEntry(hash: e.hash.stringValue, relPath: mac,
+                                      dirPath: (mac as NSString).deletingLastPathComponent,
+                                      size: e.size, driveRelPath: e.path)
+        }
+    }
+
+    /// Re-read a drive's manifest into vault_presence, then rebuild the badge cache as the
+    /// union across all durable vaults (canonical + backups), so refreshing one drive never
+    /// wipes another's badges.
+    func refreshCanonicalPresence(driveVault: Vault) throws {
+        guard let lib = library else { return }
+        let entries = presenceEntries(forDrive: driveVault, limitedTo: nil)
+        try lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID, entries: entries)
+        reloadCanonicalPresence()
+    }
+
+    /// Rebuild `canonicalPresence` from the persisted catalog — union of every durable vault's
+    /// (canonical + backup) presence set. Cheap; safe to call at library-open and after any sync.
+    func reloadCanonicalPresence() {
+        guard let lib = library else { return }
+        var union = Set<String>()
+        for vr in durableVaults {
+            if let hs = try? lib.catalog.vaultPresenceHashes(forVault: vr.id) { union.formUnion(hs) }
+        }
+        canonicalPresence = union
+    }
+
+    func openVault(for vr: VaultRecord) -> Vault? {
+        try? Vault.openOrCreate(at: URL(fileURLWithPath: vr.rootPath), role: .canonical)
+    }
+
+    /// A connected drive that carries a catalog-snapshot whose contents this Mac doesn't yet know
+    /// (no vault_presence) — a candidate to adopt. nil if none.
+    var adoptableDrive: VaultRecord? {
+        guard let lib = library else { return nil }
+        return durableVaults.first { vr in
+            driveIsPresent(vr)
+            && FileManager.default.fileExists(atPath:
+                URL(fileURLWithPath: vr.rootPath).appendingPathComponent(".openphoto/catalog-snapshot/catalog.sqlite").path)
+            && ((try? lib.catalog.vaultPresenceHashes(forVault: vr.id))?.isEmpty ?? true)
+        }
+    }
+
+    /// Photos a candidate drive's snapshot says it holds (snapshot.json asset_count) — for the prompt.
+    func adoptablePhotoCount(_ vr: VaultRecord) -> Int {
+        let url = URL(fileURLWithPath: vr.rootPath).appendingPathComponent(".openphoto/catalog-snapshot/snapshot.json")
+        guard let data = try? Data(contentsOf: url),
+              let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return 0 }
+        return meta["asset_count"] as? Int ?? 0
+    }
+
+    /// Adopt a drive: import its snapshot for instant browse, then verify against the manifest.
+    func adoptDrive(_ vr: VaultRecord) async {
+        guard let lib = library, let drive = openVault(for: vr) else { return }
+        let cat = lib.catalog, thumbs = lib.thumbnails
+        let bases = lib.vaults.map { $0.rootURL.lastPathComponent }
+        await Task.detached(priority: .userInitiated) {
+            _ = try? CatalogSnapshot.import(from: drive, into: cat, thumbnails: thumbs)
+            try? CatalogSnapshot.verifyAdoption(drive: drive, into: cat, sourceBasenames: bases)
+        }.value
+        reloadCanonicalPresence()
+        reloadDrives()
+        try? refreshQueries()
+    }
+
+    /// Full-res URL for an item: local file, or the drive file when the drive is connected.
+    func fullResURL(for item: TimelineItem) -> URL? {
+        if item.driveRelPath == nil { return library?.absoluteURL(for: item) }
+        // Drive-only: source from any connected durable drive holding the hash (canonical preferred),
+        // not only the pinned vault — so a backup serves when the canonical is unplugged. Skip a drive
+        // whose recorded copy is missing on disk and try the next.
+        for drive in connectedDrivesCanonicalFirst() {
+            guard let row = (try? library?.catalog.vaultPresenceRows(forVault: drive.descriptor.vaultID))?
+                    .first(where: { $0.hash == item.hash }) else { continue }
+            let url = drive.absoluteURL(forRelativePath: row.driveRelPath)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
+    }
+
+    func isDriveOnly(_ item: TimelineItem) -> Bool { item.driveRelPath != nil }
+
+    // MARK: — Drift scan / verify / repairs
+
+    /// Last drift report per drive (vaultID → report) — drives the row status line. Populated by
+    /// auto-scan on connect and by every scan/verify/repair.
+    private(set) var driveDrift: [String: DriftReport] = [:]
+
+    /// Eligible pending deletions per connected drive (vaultID → entries). Drives the row
+    /// indicator + both review surfaces. Recomputed whenever an eligibility input changes:
+    /// on connect/auto-scan, after any delete/restore/evict (via refreshQueries), after sync,
+    /// after propagation, and after any drift scan/repair/verify (which rewrites vault_presence).
+    private(set) var drivePendingDeletions: [String: [PendingDeletion]] = [:]
+
+    func refreshPendingDeletions() {
+        guard let lib = library else { drivePendingDeletions = [:]; return }
+        let queue = (try? lib.catalog.pendingDeletions()) ?? []
+        let local = (try? lib.catalog.instanceHashes()) ?? []
+        var out: [String: [PendingDeletion]] = [:]
+        for vr in durableVaults where driveIsPresent(vr) {
+            let presence = (try? lib.catalog.vaultPresenceRows(forVault: vr.id)) ?? []
+            let eligible = DeletionPropagator().eligible(queue: queue, localHashes: local, presence: presence)
+            if !eligible.isEmpty { out[vr.id] = eligible }
+        }
+        drivePendingDeletions = out
+    }
+
+    /// Move the selected drive copies into the drive's bin (off the main thread), then refresh
+    /// presence/badges/queue/UI. Returns the propagation result so the caller can report how many
+    /// moved vs. were left queued (a failed move stays queued for retry).
+    @discardableResult
+    func propagateDeletions(drive driveVault: Vault, selected: [PendingDeletion]) async -> DeletionPropagator.Result {
+        guard let lib = library, !selected.isEmpty else { return DeletionPropagator.Result() }
+        let macID = lib.vaults.first?.descriptor.vaultID ?? ""
+        let catalog = lib.catalog
+        let result = await Task.detached(priority: .userInitiated) {
+            (try? DeletionPropagator().propagate(drive: driveVault, entries: selected,
+                                                 macVaultID: macID, catalog: catalog))
+                ?? DeletionPropagator.Result()
+        }.value
+        _ = driftScan(driveVault)        // re-derives presence + badges + drift from the updated manifest
+        try? refreshQueries()            // also calls refreshPendingDeletions()
+        return result
+    }
+
+    /// Undo one pending deletion: un-bin the photo locally (which dequeues it + its Live pair).
+    func restorePending(_ e: PendingDeletion) async {
+        guard let lib = library else { return }
+        if let entry = (try? lib.binItems())?.first(where: { $0.item.hash == e.hash }) {
+            try? await lib.restore(entry)
+        } else {
+            // File already restored/gone from the bin — just drop the intent.
+            try? lib.catalog.dequeuePendingDeletion(hash: e.hash)
+        }
+        try? refreshQueries()
+    }
+
+    /// Run a fast drift scan, set this drive's presence to verified reality, refresh badges + status.
+    @discardableResult
+    func driftScan(_ driveVault: Vault) -> DriftReport {
+        guard let lib = library else { return DriftReport() }
+        var report = (try? DriftReconciler().scan(drive: driveVault)) ?? DriftReport()
+        if let p = presenceService() {
+            DriftReconciler().annotateRecoverability(&report, driveID: driveVault.descriptor.vaultID, presence: p)
+        }
+        try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
+                                              entries: presenceEntries(forDrive: driveVault,
+                                                                       limitedTo: report.presentHashes))
+        reloadCanonicalPresence()
+        driveDrift[driveVault.descriptor.vaultID] = report
+        refreshPendingDeletions()   // vault_presence just changed → recompute eligibility (reconnect + drift-repair paths)
+        return report
+    }
+
+    /// Full integrity check (slow); same presence/badge/status refresh as driftScan.
+    func verifyIntegrity(_ driveVault: Vault,
+                         progress: @escaping @Sendable (DriftProgress) -> Void) async -> DriftReport {
+        guard let lib = library else { return DriftReport() }
+        let report = await Task.detached(priority: .userInitiated) {
+            (try? DriftReconciler().verify(drive: driveVault) { p in progress(p) }) ?? DriftReport()
+        }.value
+        var enriched = report
+        if let p = presenceService() {
+            DriftReconciler().annotateRecoverability(&enriched, driveID: driveVault.descriptor.vaultID, presence: p)
+        }
+        try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
+                                              entries: presenceEntries(forDrive: driveVault,
+                                                                       limitedTo: enriched.presentHashes))
+        reloadCanonicalPresence()
+        driveDrift[driveVault.descriptor.vaultID] = enriched
+        refreshPendingDeletions()   // presence just changed → keep the deletions indicator honest after Verify
+        return enriched
+    }
+
+    /// Background fast-scan of every connected durable drive (canonical + backups) — keeps badges +
+    /// the status line honest automatically (at library-open and whenever a volume mounts), no manual Check.
+    func autoScanConnectedDrives() async {
+        for vr in durableVaults where driveIsPresent(vr) {
+            cacheDriveKind(vr)
+            guard let drive = openVault(for: vr) else { continue }
+            let scanned = await Task.detached(priority: .utility) {
+                (try? DriftReconciler().scan(drive: drive)) ?? DriftReport()
+            }.value
+            var report = scanned
+            if let p = presenceService() {
+                DriftReconciler().annotateRecoverability(&report, driveID: vr.id, presence: p)
+            }
+            try? library?.catalog.replaceVaultPresence(vaultID: vr.id,
+                                                       entries: presenceEntries(forDrive: drive,
+                                                                                limitedTo: report.presentHashes))
+            driveDrift[vr.id] = report
+        }
+        reloadCanonicalPresence()
+        refreshPendingDeletions()
+    }
+
+    @discardableResult
+    func adoptDriftFile(relPath: String, on driveVault: Vault) -> DriftReport {
+        _ = try? DriftReconciler().adopt(relPath: relPath, on: driveVault)
+        Task { await ingestAdopted([relPath], on: driveVault) }
+        return driftScan(driveVault)
+    }
+
+    @discardableResult
+    func acknowledgeGone(relPath: String, on driveVault: Vault) -> DriftReport {
+        try? DriftReconciler().acknowledgeGone(relPath: relPath, on: driveVault)
+        return driftScan(driveVault)
+    }
+
+    /// Restore a missing file from its best available good copy; returns the refreshed report.
+    @discardableResult
+    func restoreDriftFile(_ finding: DriftFinding, on driveVault: Vault) -> DriftReport {
+        restoreOne(finding, on: driveVault)
+        return driftScan(driveVault)
+    }
+
+    /// Adopt every unknown file in one pass, then a single re-scan.
+    @discardableResult
+    func adoptAll(_ relPaths: [String], on driveVault: Vault) -> DriftReport {
+        for p in relPaths { _ = try? DriftReconciler().adopt(relPath: p, on: driveVault) }
+        Task { await ingestAdopted(relPaths, on: driveVault) }
+        return driftScan(driveVault)
+    }
+
+    private func ingestAdopted(_ relPaths: [String], on driveVault: Vault) async {
+        guard let lib = library else { return }
+        let ingest = CatalogIngest(catalog: lib.catalog, thumbnails: lib.thumbnails)
+        let bases = lib.vaults.map { $0.rootURL.lastPathComponent }
+        for p in relPaths { try? await ingest.ingestDriveFile(relPath: p, on: driveVault, sourceBasenames: bases) }
+        try? refreshQueries()    // bring the new drive-only item into the timeline/folders
+    }
+
+    /// Restore every recoverable missing file in one pass, then a single re-scan.
+    @discardableResult
+    func restoreAllRecoverable(_ findings: [DriftFinding], on driveVault: Vault) -> DriftReport {
+        for f in findings { restoreOne(f, on: driveVault) }
+        return driftScan(driveVault)
+    }
+
+    private func restoreOne(_ finding: DriftFinding, on driveVault: Vault) {
+        guard let hash = finding.recordedHash,
+              let source = goodCopyURL(forHash: hash, excluding: driveVault.descriptor.vaultID) else { return }
+        do {
+            try DriftReconciler().restore(relPath: finding.relPath, expectedHash: hash,
+                                          from: source, on: driveVault)
+        } catch { NSLog("restore failed: \(error)") }
+    }
+
+    /// A reachable on-disk file with `hash` outside `driveID`: prefer the Mac's local copy, else
+    /// any currently-connected durable drive (canonical or backup) that holds it. (restore re-verifies the bytes, so
+    /// even a drive copy that is itself rotten fails safely rather than spreading corruption.)
+    private func goodCopyURL(forHash hash: String, excluding driveID: String) -> URL? {
+        guard let lib = library else { return nil }
+        // 1. A local Mac instance.
+        if let inst = (try? lib.catalog.instances(forHash: hash))?.first(where: { $0.vaultID != driveID }),
+           let vault = lib.vault(id: inst.vaultID) {
+            let url = vault.absoluteURL(forRelativePath: inst.relPath)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        // 2. Another connected durable drive that holds the hash (look up its path in its manifest).
+        for vr in durableVaults where vr.id != driveID && driveIsPresent(vr) {
+            guard let drive = openVault(for: vr),
+                  let entry = (try? Manifest.read(from: drive.manifestURL))?
+                      .first(where: { $0.hash.stringValue == hash }) else { continue }
+            let url = drive.absoluteURL(forRelativePath: entry.path)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
+    }
+
     var configuredRoots: [URL] {
         (UserDefaults.standard.stringArray(forKey: Self.rootsDefaultsKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
@@ -126,6 +739,25 @@ final class AppState {
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
             }
             Task { await rescan() }
+            // Load drives + badge presence from the persisted catalog, then auto-scan connected
+            // drives so badges + status reflect reality without a manual Check. Re-scan on any
+            // volume mount/unmount too.
+            reloadDrives()
+            reloadCanonicalPresence()
+            deviceWatcher.onVolumesChanged = { [weak self] in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.reloadDrives()
+                    // A peeked drive that vanished (ejected/unplugged) → close the peek. Nothing was
+                    // persisted, so this just discards the throwaway temp dir.
+                    if let ctx = self.peekContext,
+                       !FileManager.default.fileExists(atPath: ctx.root.path) {
+                        self.endQuickView()
+                    }
+                    await self.autoScanConnectedDrives()
+                }
+            }
+            Task { await autoScanConnectedDrives() }
         } catch {
             NSAlert(error: error).runModal()
         }
@@ -159,6 +791,7 @@ final class AppState {
             expandedFolders = paths
         }
         binEntries = try library.binItems()
+        refreshPendingDeletions()
         refreshToken += 1
     }
 
@@ -181,15 +814,77 @@ final class AppState {
         return presence.onlyOnThisMac(hashes: items.map(\.hash)).count
     }
 
-    /// Evict a selection to the bin, then refresh all queries.
-    func evict(_ items: [TimelineItem]) async {
+    /// Items in `items` that are drive-only AND whose drive is currently connected (rehydratable).
+    func rehydratableItems(_ items: [TimelineItem]) -> [TimelineItem] {
+        items.filter { item in
+            item.driveRelPath != nil &&
+            durableVaults.contains { $0.id == item.vaultID && driveIsPresent($0) }
+        }
+    }
+
+    @discardableResult
+    func rehydrate(_ items: [TimelineItem]) async -> RehydrateOutcome {
+        guard let lib = library else { return RehydrateOutcome() }
+        let drives = connectedDrivesCanonicalFirst()
+        let outcome = await Task.detached(priority: .userInitiated) {
+            (try? await lib.rehydrate(items, connectedCanonical: drives)) ?? RehydrateOutcome()
+        }.value
+        for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
+        try? refreshQueries()
+        return outcome
+    }
+
+    /// Evict a selection (verified by default) — release verified local originals to the Trash.
+    /// Runs the re-hash + trash off the main thread; refreshes queries + presence afterward.
+    @discardableResult
+    func evict(_ items: [TimelineItem], mode: EvictMode = .verified) async -> EvictOutcome {
+        guard let lib = library else { return EvictOutcome() }
+        let drives = connectedDrivesCanonicalFirst()
+        let presence = canonicalPresence
+        var outcome = EvictOutcome()
+        do {
+            outcome = try await Task.detached(priority: .userInitiated) {
+                try await lib.evict(items, mode: mode, connectedCanonical: drives, canonicalPresence: presence)
+            }.value
+        } catch {
+            // Files may already be in the Trash but the bookkeeping rescan threw — reconcile each
+            // touched local vault so the catalog never shows a trashed file as still-local.
+            for vid in Set(items.filter { $0.driveRelPath == nil }.map(\.vaultID)) {
+                try? await lib.rescan(vaultID: vid)
+            }
+        }
+        // driftScan re-derives canonical presence first; refreshQueries then reads the fresh state.
+        for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
+        try? refreshQueries()
+        return outcome
+    }
+
+    /// Delete a selection: move to the bin AND record the intent so it can be propagated to
+    /// drives (via Review Deletions). Refreshes all queries — including the pending-deletions
+    /// indicator. Unlike evict, this is how a removal reaches the canonical drive.
+    func delete(_ items: [TimelineItem]) async {
         guard let library else { return }
         do {
-            _ = try await library.evict(items)
+            _ = try await library.delete(items)
             try refreshQueries()
         } catch {
             NSAlert(error: error).runModal()
         }
+    }
+
+    /// Remove the open photo, then advance the viewer to the next one (or close it if it was the
+    /// last). Shared by the viewer's keyboard delete and the inspector's Delete/Evict so they
+    /// behave identically — keep culling without leaving the viewer. `removal` performs the actual
+    /// bin operation (delete or evict) on the previously-open item in the background.
+    func removeOpenedItem(using removal: @escaping ([TimelineItem]) async -> Void) {
+        guard let item = openedItem else { return }
+        if let i = flatItems.firstIndex(where: { $0.instanceID == item.instanceID }),
+           flatItems.indices.contains(i + 1) {
+            openedItem = flatItems[i + 1]      // advance to the next photo (current list, pre-removal)
+        } else {
+            openedItem = nil                    // was the last (or not found) → close the viewer
+        }
+        Task { await removal([item]) }
     }
 
     /// The connected device we can currently send to, if any. Cameras (AirDrop)
@@ -210,22 +905,22 @@ final class AppState {
         }
     }
 
-    /// Map a library item to a SendItem (read-only original + fingerprint).
-    func sendItem(for item: TimelineItem) -> SendItem? {
-        guard let url = library?.absoluteURL(for: item) else { return nil }
-        return SendItem(
-            hash: item.hash, originalURL: url,
-            fingerprint: PresenceFingerprint(size: item.size, captureDateMs: item.takenAtMs, hash: item.hash),
-            displayName: (item.relPath as NSString).lastPathComponent)
+    /// Split a selection into what can be sent now (local files + connected-drive files) and what
+    /// can't (drive-only items whose drive is unplugged), so the send sheet can warn before sending.
+    func sendPlan(for items: [TimelineItem]) -> SendSourcePlan {
+        guard let library else { return SendSourcePlan(sendable: [], unreachable: []) }
+        let connectedDrives = connectedDrivesCanonicalFirst()
+        let driveNames = Dictionary(durableVaults.map { ($0.id, ($0.rootPath as NSString).lastPathComponent) },
+                                    uniquingKeysWith: { first, _ in first })
+        return library.resolveSendSources(items, connectedDrives: connectedDrives, driveNames: driveNames)
     }
 
-    /// Send a selection to a connected device, reporting progress. Returns the result.
-    func send(_ items: [TimelineItem], to device: ConnectedDevice,
+    /// Send already-resolved items to a connected device, reporting progress. Returns the result.
+    func send(_ sendItems: [SendItem], to device: ConnectedDevice,
               progress: @escaping @Sendable (SendProgress) -> Void) async -> SendEngine.Result? {
         guard let library, let vault = library.vaults.first,
               let sends = sendRegistry, let devices = deviceRegistry,
               let destination = sendDestination(for: device) else { return nil }
-        let sendItems = items.compactMap { sendItem(for: $0) }
         let engine = SendEngine(library: library, sends: sends, devices: devices)
         let result = await engine.run(destination: destination, items: sendItems, vault: vault, progress: progress)
         try? refreshQueries()

@@ -14,6 +14,8 @@ struct InspectorView: View {
     @State private var renaming = false
     @State private var newName = ""
     @State private var filenameHovered = false
+    @State private var showDelete = false
+    @State private var showEvict = false
     @FocusState private var renameFocused: Bool
 
     var body: some View {
@@ -23,12 +25,23 @@ struct InspectorView: View {
                     .formatted(date: .complete, time: .shortened))
                     .font(.system(size: 13, weight: .semibold))
 
+                if state.isDriveOnly(item) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "externaldrive.fill")
+                            .font(.system(size: 11))
+                        Text("On drive — view only")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundStyle(Theme.textFaint)
+                }
+
                 section("Caption") {
                     TextField("Add a caption…", text: $caption, axis: .vertical)
                         .textFieldStyle(.plain).font(.system(size: 13))
                         .padding(8).background(Theme.elevated, in: RoundedRectangle(cornerRadius: 8))
                         .onSubmit { save() }
                 }
+                .disabled(state.isDriveOnly(item))
 
                 section("Rating") {
                     HStack(spacing: 4) {
@@ -50,6 +63,7 @@ struct InspectorView: View {
                         }.buttonStyle(.plain)
                     }
                 }
+                .disabled(state.isDriveOnly(item))
 
                 section("Tags") {
                     FlowLayoutLite(spacing: 6) {
@@ -75,6 +89,7 @@ struct InspectorView: View {
                             }
                     }
                 }
+                .disabled(state.isDriveOnly(item))
 
                 Divider().overlay(Theme.hairline)
 
@@ -110,6 +125,10 @@ struct InspectorView: View {
                         ForEach(locations) { loc in
                             locationRow(loc)
                         }
+                    }
+                    // At-a-glance "not backed up": flag absence from the canonical drive.
+                    if !state.durableVaults.isEmpty && !state.isBackedUpOnCanonical(item) {
+                        notOnCanonicalRow()
                     }
                 }
 
@@ -150,13 +169,14 @@ struct InspectorView: View {
                             Text(filename)
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(Theme.text)
-                                .underline(filenameHovered)
+                                .underline(filenameHovered && !state.isDriveOnly(item))
                                 .onHover { filenameHovered = $0 }
                                 // System-managed cursor — auto-balanced, so it can
                                 // never get stuck (the manual NSCursor.push/pop did
                                 // when the label was swapped for the editor mid-hover).
-                                .pointerStyle(.horizontalText)
+                                .pointerStyle(state.isDriveOnly(item) ? .default : .horizontalText)
                                 .onTapGesture {
+                                    guard !state.isDriveOnly(item) else { return }
                                     newName = filename
                                     renaming = true
                                     renameFocused = true
@@ -170,17 +190,65 @@ struct InspectorView: View {
                             .foregroundStyle(Theme.textFaint)
                         Spacer()
                         Button("Reveal in Finder") {
-                            if let url = state.library?.absoluteURL(for: item) {
+                            if let url = state.fullResURL(for: item) {
                                 NSWorkspace.shared.activateFileViewerSelecting([url])
                             }
-                        }.controlSize(.small)
+                        }
+                        .controlSize(.small)
+                        .disabled(state.fullResURL(for: item) == nil)  // unreachable (drive ejected / missing)
                     }
                 }
+                deleteEvictActions
             }
             .padding(16)
         }
         .background(Theme.bg2)
         .task(id: item.hash) { load() }
+        .alert("Delete this photo?", isPresented: $showDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                state.removeOpenedItem { await state.delete($0) }   // advance to next, like the keyboard
+            }
+        } message: {
+            Text("It moves to the bin (restore anytime). On connected drives, its copy is then queued for removal — review under the drive before anything is deleted there.")
+        }
+        .alert("Evict this photo?", isPresented: $showEvict) {
+            Button("Cancel", role: .cancel) {}
+            Button("Evict", role: .destructive) {
+                state.removeOpenedItem { await state.evict($0) }     // advance to next, then evict
+            }
+        } message: {
+            Text(evictAlertMessage(total: 1, onlyCopy: state.onlyCopyCount([item])))
+        }
+    }
+
+    /// Delete / Evict for the photo on screen. Hidden for drive-only assets (view-only —
+    /// there’s no local copy to bin; deleting a drive-only photo arrives in Slice 4).
+    @ViewBuilder private var deleteEvictActions: some View {
+        if !state.isDriveOnly(item) {
+            Divider().overlay(Theme.hairline)
+            HStack(spacing: 8) {
+                Button(role: .destructive) { showDelete = true } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .controlSize(.small)
+                .help("Move to the bin and queue removal from drives (review before it propagates).")
+                Button { showEvict = true } label: {
+                    Label("Evict", systemImage: "arrow.down.circle")
+                }
+                .controlSize(.small)
+                .help("Free local space — keep the copy on the drive. Doesn’t delete anywhere.")
+                Spacer()
+            }
+        } else if state.rehydratableItems([item]).count == 1 {
+            Divider().overlay(Theme.hairline)
+            HStack(spacing: 8) {
+                Button { Task { _ = await state.rehydrate([item]) } } label: {
+                    Label("Rehydrate", systemImage: "arrow.down.circle.dotted")
+                }.controlSize(.small)
+                Spacer()
+            }
+        }
     }
 
     private var exifGrid: some View {
@@ -208,6 +276,16 @@ struct InspectorView: View {
             }
             Spacer()
             confidenceBadge(loc.confidence)
+        }
+    }
+
+    @ViewBuilder private func notOnCanonicalRow() -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "externaldrive.trianglebadge.exclamationmark")
+                .foregroundStyle(.orange).frame(width: 16)
+            Text("Not on the canonical drive")
+                .font(.system(size: 12.5)).foregroundStyle(.orange)
+            Spacer()
         }
     }
 

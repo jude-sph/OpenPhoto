@@ -5,6 +5,8 @@ struct PhotoCellView: View {
     let item: TimelineItem
     let library: LibraryService
     var targetPixel: Int = ThumbnailStore.maxPixel
+    var backedUp: Bool = false
+    var driveOnly: Bool = false
     var onDelete: () -> Void = {}
 
     var body: some View {
@@ -24,6 +26,22 @@ struct PhotoCellView: View {
                     Image(systemName: "heart.fill")
                         .font(.system(size: 10))
                         .foregroundStyle(.white.opacity(0.92))
+                        .shadow(radius: 2).padding(5)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if backedUp {
+                    Image(systemName: "externaldrive.fill.badge.checkmark")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .shadow(radius: 2).padding(5)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if driveOnly {
+                    Image(systemName: "externaldrive.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.white.opacity(0.70))
                         .shadow(radius: 2).padding(5)
                 }
             }

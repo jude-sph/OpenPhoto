@@ -38,6 +38,27 @@ import Foundation
         if case .device = $0.place { $0.confidence == .historical } else { false } })
 }
 
+@Test func presenceIncludesDriveVaultAsConfirmed() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let c = try Catalog(at: try t.sub("as").appendingPathComponent("catalog.sqlite"))
+    let v = try Vault.openOrCreate(at: try t.sub("pics"), role: .local)
+    let sends = SendRegistry(vault: v); let devices = DeviceRegistry(vault: v)
+    let imports = ImportRegistry(vault: v)
+    let h = "sha256:" + String(repeating: "a", count: 64)
+    try c.registerVault(id: "v-canon", role: "canonical", rootPath: "/Volumes/Canonical")
+    try c.replaceVaultPresence(vaultID: "v-canon", entries: [
+        VaultPresenceEntry(hash: h, relPath: "a.jpg", dirPath: "", size: 1, driveRelPath: "Pictures/a.jpg"),
+    ])
+
+    let svc = PresenceService(catalog: c, imports: imports, sends: sends, devices: devices)
+    let locs = svc.locations(forHash: h)
+    #expect(locs.contains { loc in
+        if case .device(let key, _, _) = loc.place { return key == "v-canon" && loc.confidence == .confirmed }
+        return false
+    })
+    #expect(svc.isOnlyOnThisMac(hash: h) == false)
+}
+
 @Test func presenceDedupsDeviceSeenInBothSendAndImport() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let vault = try Vault.openOrCreate(at: try t.sub("Pictures"), role: .local)

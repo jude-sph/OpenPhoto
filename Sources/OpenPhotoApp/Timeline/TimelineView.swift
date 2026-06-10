@@ -6,6 +6,8 @@ struct TimelineView: View {
     @State private var selectMode = false
     @State private var selection = SelectionModel()
     @State private var showEvict = false
+    @State private var showForceEvict = false
+    @State private var showDelete = false
     @State private var showSend = false
 
     private var orderedSelectable: [SelectableItem] {
@@ -14,6 +16,9 @@ struct TimelineView: View {
     private var selectedItems: [TimelineItem] {
         state.flatItems.filter { selection.contains($0.instanceID) }
     }
+    /// Evict/move-to-bin only applies to local files; drive-only assets are view-only.
+    private var evictableItems: [TimelineItem] { selectedItems.filter { $0.driveRelPath == nil } }
+    private var rehydratableItems: [TimelineItem] { state.rehydratableItems(selectedItems) }
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
 
     var body: some View {
@@ -22,24 +27,43 @@ struct TimelineView: View {
             Divider().overlay(Theme.hairline)
             grid
         }
-        .alert("Move \(selection.count) to Bin?", isPresented: $showEvict) {
+        .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
-                let items = selectedItems
+                let items = evictableItems
                 Task {
                     await state.evict(items)
                     selection.clear(); selectMode = false
                 }
             }
         } message: {
-            Text(evictAlertMessage(total: selection.count,
-                                   onlyCopy: state.onlyCopyCount(selectedItems)))
+            Text(evictAlertMessage(total: evictableItems.count,
+                                   onlyCopy: state.onlyCopyCount(evictableItems)))
+        }
+        .alert("Delete \(evictableItems.count) photo\(evictableItems.count == 1 ? "" : "s")?",
+               isPresented: $showDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                let items = evictableItems
+                Task {
+                    await state.delete(items)
+                    selection.clear(); selectMode = false
+                }
+            }
+        } message: {
+            Text("They move to the bin (restore anytime). On connected drives, their copies are then queued for removal — review under the drive before anything is deleted there.")
         }
         .sheet(isPresented: $showSend) {
             if let target = state.connectedSendTarget() {
                 SendSheet(state: state, items: selectedItems, device: target) {
                     selection.clear(); selectMode = false
                 }
+            }
+        }
+        .sheet(isPresented: $showForceEvict) {
+            ForceEvictSheet(count: evictableItems.count) {
+                let items = evictableItems
+                Task { _ = await state.evict(items, mode: .forced); selection.clear(); selectMode = false }
             }
         }
     }
@@ -71,7 +95,10 @@ struct TimelineView: View {
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
-            .overlay { PhotoCellView(item: item, library: state.library!, targetPixel: thumbPixels) }
+            .overlay { PhotoCellView(item: item, library: state.library!,
+                                     targetPixel: thumbPixels,
+                                     backedUp: state.isBackedUpOnCanonical(item),
+                                     driveOnly: item.driveRelPath != nil) }
             .clipped()
             .selectionChrome(selected: selection.contains(item.instanceID), show: selectMode)
             .cellFrame(item.instanceID, in: "timelinegrid", active: selectMode)
@@ -108,7 +135,12 @@ struct TimelineView: View {
             count: selection.count,
             sendTargetName: state.connectedSendTarget()?.name,
             onSend: { showSend = true },
-            onEvict: { showEvict = true },
+            onDelete: { if !evictableItems.isEmpty { showDelete = true } },
+            onEvict: { if !evictableItems.isEmpty { showEvict = true } },
+            onForceEvict: { if !evictableItems.isEmpty { showForceEvict = true } },
+            showRehydrate: !rehydratableItems.isEmpty,
+            onRehydrate: { let items = rehydratableItems
+                           Task { _ = await state.rehydrate(items); selection.clear(); selectMode = false } },
             onDeselect: { selection.clear() },
             onDone: { selection.clear(); selectMode = false })
     }

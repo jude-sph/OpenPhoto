@@ -37,6 +37,9 @@ final class DeviceWatcher: NSObject {
     /// Set by AppState; called with the removed device's id.
     var openedDeviceRemoved: ((String) -> Void)?
 
+    /// Set by AppState; called whenever volumes mount/unmount (to re-scan canonical drives).
+    var onVolumesChanged: (() -> Void)?
+
     func start() {
         browser.delegate = self
         browser.browsedDeviceTypeMask = ICDeviceTypeMask(rawValue: 0x00000001 | 0x00000100)!
@@ -92,6 +95,7 @@ final class DeviceWatcher: NSObject {
                                 name: v.volumeName ?? url.lastPathComponent, url: url))
         }
         devices = devices.filter { if case .camera = $0 { true } else { false } } + vols
+        onVolumesChanged?()
     }
 }
 

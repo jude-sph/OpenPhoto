@@ -43,11 +43,15 @@ struct ThumbView: View {
             let key = cacheKey
             if let hit = thumbMemoryCache.object(forKey: key)?.image { asyncImage = hit; return }
             let lib = library, it = item, px = targetPixel
-            let result = await Task.detached(priority: .userInitiated) {
-                guard let url = lib.absoluteURL(for: it) else { return CGImage?.none }
-                return try? await lib.thumbnails.displayImage(
-                    for: ContentHash(stringValue: it.hash), sourceURL: url,
-                    kind: MediaKind(rawValue: it.kind) ?? .photo, maxPixel: px)
+            let result: CGImage? = await Task.detached(priority: .userInitiated) {
+                if let url = lib.absoluteURL(for: it),
+                   let img = try? await lib.thumbnails.displayImage(
+                       for: ContentHash(stringValue: it.hash), sourceURL: url,
+                       kind: MediaKind(rawValue: it.kind) ?? .photo, maxPixel: px) {
+                    return img
+                }
+                return await lib.thumbnails.cachedDisplayImage(
+                    for: ContentHash(stringValue: it.hash), maxPixel: px)
             }.value
             if let img = result {
                 thumbMemoryCache.setObject(CGImageBox(img), forKey: key)

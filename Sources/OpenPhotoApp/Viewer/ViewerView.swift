@@ -9,6 +9,7 @@ struct ViewerView: View {
     @State private var player: AVPlayer?
     @FocusState private var stageFocused: Bool
     @State private var liveURL: URL?   // paired Live Photo video, resolved on load
+    @State private var driveUnplugged = false   // true when item is drive-only and drive is ejected
 
     private var flatItems: [TimelineItem] {
         state.viewerItems.isEmpty ? state.flatItems : state.viewerItems
@@ -87,7 +88,18 @@ struct ViewerView: View {
 
     @ViewBuilder private var content: some View {
         if let item = state.openedItem {
-            if item.kind == MediaKind.video.rawValue {
+            if driveUnplugged {
+                // Drive-only item and the drive is not connected — show thumbnail + prompt.
+                VStack(spacing: 16) {
+                    ThumbView(item: item, library: state.library!)
+                        .frame(width: 240, height: 240)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    Label("Plug in the drive to view full-res",
+                          systemImage: "externaldrive.fill")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.70))
+                }
+            } else if item.kind == MediaKind.video.rawValue {
                 if let player {
                     VideoPlayer(player: player)
                 }
@@ -140,13 +152,9 @@ struct ViewerView: View {
     }
 
     private func deleteCurrent() {
-        guard let item = state.openedItem else { return }
-        step(1)
-        if state.openedItem?.instanceID == item.instanceID { state.openedItem = nil }  // was last item
-        Task {
-            try? await state.library?.delete(item)
-            try? state.refreshQueries()
-        }
+        // Drive-only assets are view-only — they have no local copy to move to a bin.
+        guard let item = state.openedItem, !state.isDriveOnly(item) else { return }
+        state.removeOpenedItem { await state.delete($0) }   // advance to next, delete in background
     }
 
     private func loadFull() async {
@@ -154,8 +162,13 @@ struct ViewerView: View {
         player = nil
         playingLive = false
         liveURL = nil
-        guard let item = state.openedItem,
-              let url = state.library?.absoluteURL(for: item) else { return }
+        driveUnplugged = false
+        guard let item = state.openedItem else { return }
+        guard let url = state.fullResURL(for: item) else {
+            // Drive-only and the drive is not connected.
+            if state.isDriveOnly(item) { driveUnplugged = true }
+            return
+        }
         if item.kind == MediaKind.video.rawValue {
             player = AVPlayer(url: url)
             return
@@ -203,7 +216,7 @@ struct ViewerView: View {
 /// GPU-composited zoomable/pannable image. The CGImage is uploaded once as a
 /// CALayer's contents; pinch/scroll/double-click only adjust the layer's frame
 /// (a GPU transform), so there is no per-frame rasterization or SwiftUI re-render.
-private struct ZoomableImageView: NSViewRepresentable {
+struct ZoomableImageView: NSViewRepresentable {
     let image: NSImage
     func makeNSView(context: Context) -> ZoomPanLayerView {
         let v = ZoomPanLayerView()
