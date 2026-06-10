@@ -661,22 +661,22 @@ final class AppState {
         }
     }
 
-    /// Map a library item to a SendItem (read-only original + fingerprint).
-    func sendItem(for item: TimelineItem) -> SendItem? {
-        guard let url = library?.absoluteURL(for: item) else { return nil }
-        return SendItem(
-            hash: item.hash, originalURL: url,
-            fingerprint: PresenceFingerprint(size: item.size, captureDateMs: item.takenAtMs, hash: item.hash),
-            displayName: (item.relPath as NSString).lastPathComponent)
+    /// Split a selection into what can be sent now (local files + connected-drive files) and what
+    /// can't (drive-only items whose drive is unplugged), so the send sheet can warn before sending.
+    func sendPlan(for items: [TimelineItem]) -> SendSourcePlan {
+        guard let library else { return SendSourcePlan(sendable: [], unreachable: []) }
+        let connectedDrives = canonicalVaults.filter { driveIsPresent($0) }.compactMap { openVault(for: $0) }
+        let driveNames = Dictionary(canonicalVaults.map { ($0.id, ($0.rootPath as NSString).lastPathComponent) },
+                                    uniquingKeysWith: { first, _ in first })
+        return library.resolveSendSources(items, connectedDrives: connectedDrives, driveNames: driveNames)
     }
 
-    /// Send a selection to a connected device, reporting progress. Returns the result.
-    func send(_ items: [TimelineItem], to device: ConnectedDevice,
+    /// Send already-resolved items to a connected device, reporting progress. Returns the result.
+    func send(_ sendItems: [SendItem], to device: ConnectedDevice,
               progress: @escaping @Sendable (SendProgress) -> Void) async -> SendEngine.Result? {
         guard let library, let vault = library.vaults.first,
               let sends = sendRegistry, let devices = deviceRegistry,
               let destination = sendDestination(for: device) else { return nil }
-        let sendItems = items.compactMap { sendItem(for: $0) }
         let engine = SendEngine(library: library, sends: sends, devices: devices)
         let result = await engine.run(destination: destination, items: sendItems, vault: vault, progress: progress)
         try? refreshQueries()
