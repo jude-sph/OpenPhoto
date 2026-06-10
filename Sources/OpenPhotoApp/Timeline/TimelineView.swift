@@ -55,10 +55,10 @@ struct TimelineView: View {
         } message: {
             Text("They move to the bin (restore anytime). On connected drives, their copies are then queued for removal — review under the drive before anything is deleted there.")
         }
-        .sheet(isPresented: $showSend) {
+        .sheet(isPresented: $showSend, onDismiss: { chosenSendDevice = nil }) {
             if let target = chosenSendDevice ?? state.connectedSendTarget() {
                 SendSheet(state: state, items: selectedItems, device: target) {
-                    selection.clear(); selectMode = false; chosenSendDevice = nil
+                    selection.clear(); selectMode = false
                 }
             }
         }
@@ -137,7 +137,10 @@ struct TimelineView: View {
     private var selectionBar: some View {
         SelectionActionBar(
             count: selection.count,
-            sendTargetName: state.connectedSendTarget()?.name,
+            sendTargetName: {
+                let targets = state.connectedSendTargets()
+                return targets.count > 1 ? "device\u{2026}" : targets.first?.name
+            }(),
             onSend: {
                 let targets = state.connectedSendTargets()
                 if targets.count <= 1 { showSend = true }
