@@ -60,6 +60,9 @@ final class AppState {
             UserDefaults.standard.set(grouping.rawValue, forKey: "timelineGrouping")
         }
     }
+    var videoOnly: Bool = UserDefaults.standard.bool(forKey: "videoOnly") {
+        didSet { UserDefaults.standard.set(videoOnly, forKey: "videoOnly") }
+    }
     var sidebarShown: Bool = UserDefaults.standard.object(forKey: "sidebarShown") == nil
         ? true
         : UserDefaults.standard.bool(forKey: "sidebarShown") {
@@ -779,7 +782,7 @@ final class AppState {
 
     func refreshQueries() throws {
         guard let library else { return }
-        sections = try library.timelineSections(grouping: grouping)
+        sections = try library.timelineSections(grouping: grouping, videoOnly: videoOnly)
         flatItems = sections.flatMap(\.items)
         folderTree = try library.folderTree()
         if expandedFolders.isEmpty && !folderTree.isEmpty {
@@ -891,6 +894,11 @@ final class AppState {
     /// are listed first by DeviceWatcher, so a connected iPhone is preferred.
     func connectedSendTarget() -> ConnectedDevice? {
         deviceWatcher.devices.first { sendDestination(for: $0) != nil }
+    }
+
+    /// All connected devices that can receive a send (phones via AirDrop, volumes via copy).
+    func connectedSendTargets() -> [ConnectedDevice] {
+        deviceWatcher.devices.filter { sendDestination(for: $0) != nil }
     }
 
     /// Build a SendDestination for a connected device: AirDrop for an iPhone,

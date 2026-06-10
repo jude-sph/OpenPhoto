@@ -9,6 +9,8 @@ struct TimelineView: View {
     @State private var showForceEvict = false
     @State private var showDelete = false
     @State private var showSend = false
+    @State private var sendChooser = false
+    @State private var chosenSendDevice: ConnectedDevice?
 
     private var orderedSelectable: [SelectableItem] {
         state.flatItems.map { SelectableItem(id: $0.instanceID) }
@@ -54,10 +56,15 @@ struct TimelineView: View {
             Text("They move to the bin (restore anytime). On connected drives, their copies are then queued for removal — review under the drive before anything is deleted there.")
         }
         .sheet(isPresented: $showSend) {
-            if let target = state.connectedSendTarget() {
+            if let target = chosenSendDevice ?? state.connectedSendTarget() {
                 SendSheet(state: state, items: selectedItems, device: target) {
-                    selection.clear(); selectMode = false
+                    selection.clear(); selectMode = false; chosenSendDevice = nil
                 }
+            }
+        }
+        .confirmationDialog("Send to which device?", isPresented: $sendChooser, titleVisibility: .visible) {
+            ForEach(state.connectedSendTargets(), id: \.id) { dev in
+                Button(dev.name) { chosenSendDevice = dev; showSend = true }
             }
         }
         .sheet(isPresented: $showForceEvict) {
@@ -131,7 +138,11 @@ struct TimelineView: View {
         SelectionActionBar(
             count: selection.count,
             sendTargetName: state.connectedSendTarget()?.name,
-            onSend: { showSend = true },
+            onSend: {
+                let targets = state.connectedSendTargets()
+                if targets.count <= 1 { showSend = true }
+                else { sendChooser = true }
+            },
             onDelete: { if !evictableItems.isEmpty { showDelete = true } },
             onEvict: { if !evictableItems.isEmpty { showEvict = true } },
             onForceEvict: { if !evictableItems.isEmpty { showForceEvict = true } },
@@ -149,6 +160,12 @@ struct TimelineView: View {
                 .foregroundStyle(Theme.textDim)
             Spacer()
             Button("Select") { selectMode = true }.controlSize(.small)
+            Toggle(isOn: Binding(get: { state.videoOnly },
+                                 set: { state.videoOnly = $0; try? state.refreshQueries() })) {
+                Image(systemName: "video.fill")
+            }
+            .toggleStyle(.button).controlSize(.small)
+            .help("Show videos only")
             Picker("Group", selection: $state.grouping) {
                 Text("Day").tag(TimelineGrouping.day)
                 Text("Week").tag(TimelineGrouping.week)

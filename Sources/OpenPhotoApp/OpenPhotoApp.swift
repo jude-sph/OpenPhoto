@@ -64,6 +64,7 @@ struct RootView: View {
                         .background(.ultraThinMaterial)
                     }
                     Divider().overlay(Theme.hairline)
+                        .ignoresSafeArea(.container, edges: .top)
                     detail
                 }
                 .animation(.easeOut(duration: 0.18), value: state.sidebarShown)
