@@ -1,4 +1,4 @@
-# OpenPhoto Catalog Schema — Version 4
+# OpenPhoto Catalog Schema — Version 5
 
 **Status:** NORMATIVE for readers of `catalog-snapshot/catalog.sqlite` and for the Mac's live catalog database. Field names are stable from schema version 4 onward; any change bumps the version in `snapshot.json`'s `catalog_schema_version` field.
 
@@ -94,11 +94,38 @@ The source Mac's internal queue of assets approved for deletion but not yet prop
 
 External readers MUST ignore this table. It reflects the source Mac's private delete queue and does not represent anything that has happened (or will happen) on the drive being read.
 
+### `derivation_jobs` (v5, rebuildable)
+
+Per-asset, per-stage completion record for the background **derivation pipeline** — the lane that derives machine-only intelligence (OCR, and in later Phase-4 slices faces / embeddings / reverse-geocoding) from an asset's bytes after it enters the library. Resumable and retry-capped: the **absence** of a `"done"` row for a (`hash`, `stage`) pair means that stage is still pending for that asset.
+
+| Column | Type | Notes |
+|---|---|---|
+| `hash` | TEXT | References `assets.hash`. |
+| `stage` | TEXT | Pipeline stage id — `"ocr"` (later `"faces"` / `"embed"` / `"geocode"`). |
+| `status` | TEXT | `"done"` \| `"failed"`. A missing row = pending. |
+| `attempts` | INTEGER | Failed-attempt counter; a `"failed"` row at the attempt cap (3) is never retried. |
+| `updatedAtMs` | INTEGER | Epoch milliseconds of the last update. |
+
+**Primary key:** (`hash`, `stage`).
+
+This is the source Mac's internal pipeline bookkeeping — it records which derivations the Mac has run, nothing about the drive's contents. External readers MUST ignore it. Rebuildable: dropping it makes the pipeline re-derive everything (the work is idempotent).
+
+### `ocr` (v5, FTS5, rebuildable)
+
+A SQLite **FTS5** full-text virtual table over text recognized in photos (on-device Vision, `VNRecognizeTextRequest`). One row per photo that has been OCR'd; an empty `text` means "analyzed, no text found".
+
+| Column | Type | Notes |
+|---|---|---|
+| `hash` | TEXT (UNINDEXED) | References `assets.hash`. Stored and retrievable, but not tokenized. |
+| `text` | TEXT (FTS5) | Recognized text, tokenized for full-text `MATCH`. |
+
+Machine-derived and keyed by content hash, so it survives eviction and is portable in the same spirit as `assets`. A reader MAY full-text-search a drive's photos with it (`SELECT hash FROM ocr WHERE ocr MATCH ?`). It is a rebuildable cache (drop it → the pipeline re-derives), never a source of truth.
+
 ---
 
 ## Portability key
 
-> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it.
+> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping).
 
 ---
 
