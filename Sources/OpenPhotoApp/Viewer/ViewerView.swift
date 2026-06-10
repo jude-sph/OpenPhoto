@@ -21,6 +21,7 @@ struct ViewerView: View {
             stage
             if state.inspectorShown, let item = state.openedItem {
                 Divider().overlay(Theme.hairline)
+                    .ignoresSafeArea(.container, edges: .top)
                 InspectorView(state: state, item: item)
                     .frame(width: Theme.inspectorWidth)
             }
@@ -29,7 +30,12 @@ struct ViewerView: View {
         .focusEffectDisabled()   // keep keyboard focus for arrow-keys, hide the blue focus ring
         .focused($stageFocused)
         .onAppear { stageFocused = true }
-        .onChange(of: state.openedItem?.instanceID) { stageFocused = true }
+        .onChange(of: state.openedItem?.instanceID) {
+            // Re-assert focus (toggle off→on): leaving a video can drift the first responder, and
+            // setting `true` when it's already `true` won't reclaim it — so arrow-key nav would die.
+            stageFocused = false
+            DispatchQueue.main.async { stageFocused = true }
+        }
         .background(Color.black.opacity(0.96))
         .onKeyPress(.escape) { state.openedItem = nil; return .handled }
         .onKeyPress(.leftArrow) { step(-1); return .handled }
@@ -50,40 +56,69 @@ struct ViewerView: View {
     }
 
     private var stage: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Button { state.openedItem = nil } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 44, height: 36)
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain)
-                if let item = state.openedItem {
-                    Text(title(for: item)).font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
+        Group {
+            if isFullWindowVideo, let player {
+                // Video fills the whole stage — over the top bar, under the gallery — matching the
+                // immersive full-window look of a zoomed photo (the gallery is the only overlay).
+                // Back: Esc; toggle inspector: i.
+                VStack(spacing: 0) {
+                    // Video fills from the top edge down to JUST ABOVE the gallery — so the player's
+                    // own controls sit above the gallery (like a photo rests above it), not hidden
+                    // under it — with the top bar floating over the video.
+                    ZStack(alignment: .top) {
+                        PlayerView(player: player)
+                            .ignoresSafeArea(.container, edges: .top)   // still reaches the top edge
+                        topBar.background(
+                            LinearGradient(colors: [.black.opacity(0.5), .clear],
+                                           startPoint: .top, endPoint: .bottom))
+                    }
+                    galleryBar
                 }
-                Spacer()
-                if liveURL != nil {
-                    Button { playingLive.toggle() } label: {
-                        Label(playingLive ? "Photo" : "Live",
-                              systemImage: playingLive ? "photo" : "livephoto")
-                    }.buttonStyle(.bordered).controlSize(.small)
+            } else {
+                VStack(spacing: 0) {
+                    topBar
+                    content.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    galleryBar
                 }
-                Button { state.inspectorShown.toggle() } label: {
-                    Image(systemName: "sidebar.right")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 44, height: 36)
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain)
             }
-            .padding(.horizontal, 16).frame(height: 44)
-
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            filmstrip
         }
         .foregroundStyle(.white)
+    }
+
+    /// True only for actual video clips (not playing Live Photos, which keep the bar visible for the
+    /// Live/Photo toggle), and only once the player is ready.
+    private var isFullWindowVideo: Bool {
+        guard let item = state.openedItem, !driveUnplugged, player != nil else { return false }
+        return item.kind == MediaKind.video.rawValue
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 14) {
+            Button { state.openedItem = nil } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 44, height: 36)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if let item = state.openedItem {
+                Text(title(for: item)).font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            Spacer()
+            if liveURL != nil {
+                Button { playingLive.toggle() } label: {
+                    Label(playingLive ? "Photo" : "Live",
+                          systemImage: playingLive ? "photo" : "livephoto")
+                }.buttonStyle(.bordered).controlSize(.small)
+            }
+            Button { state.inspectorShown.toggle() } label: {
+                Image(systemName: "sidebar.right")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 44, height: 36)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16).frame(height: 44)
     }
 
     @ViewBuilder private var content: some View {
@@ -91,7 +126,7 @@ struct ViewerView: View {
             if driveUnplugged {
                 // Drive-only item and the drive is not connected — show thumbnail + prompt.
                 VStack(spacing: 16) {
-                    ThumbView(item: item, library: state.library!)
+                    ThumbnailImage(timelineItem: item, library: state.library!)
                         .frame(width: 240, height: 240)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     Label("Plug in the drive to view full-res",
@@ -101,11 +136,11 @@ struct ViewerView: View {
                 }
             } else if item.kind == MediaKind.video.rawValue {
                 if let player {
-                    VideoPlayer(player: player)
+                    PlayerView(player: player)
                 }
             } else if playingLive {
                 if let player {
-                    VideoPlayer(player: player)
+                    PlayerView(player: player)
                 }
             } else if let fullImage {
                 // GPU-composited zoom/pan via a CALayer — no SwiftUI re-render during
@@ -118,12 +153,30 @@ struct ViewerView: View {
         }
     }
 
+    /// The bottom gallery (filmstrip) with a thin always-visible handle to collapse/expand it.
+    @ViewBuilder private var galleryBar: some View {
+        VStack(spacing: 0) {
+            Button { state.viewerGalleryShown.toggle() } label: {
+                Image(systemName: state.viewerGalleryShown ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(maxWidth: .infinity).frame(height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.55))
+            .background(.black.opacity(0.5))
+            if state.viewerGalleryShown {
+                filmstrip
+            }
+        }
+    }
+
     private var filmstrip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 5) {
                     ForEach(flatItems, id: \.instanceID) { item in
-                        ThumbView(item: item, library: state.library!)
+                        ThumbnailImage(timelineItem: item, library: state.library!)
                             .frame(width: 52, height: 52)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                             .overlay(RoundedRectangle(cornerRadius: 4)

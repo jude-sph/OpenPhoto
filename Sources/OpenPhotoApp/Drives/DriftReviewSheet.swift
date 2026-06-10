@@ -30,10 +30,17 @@ struct DriftReviewSheet: View {
     @ViewBuilder private var content: some View {
         if let report {
             if report.isClean {
-                ContentUnavailableView(verify ? "Integrity verified" : "No changes",
-                    systemImage: "checkmark.seal",
-                    description: Text(verify ? "Every file matches OpenPhoto's record."
-                                             : "The drive matches OpenPhoto's record."))
+                // Top-aligned (like the Sync sheet) rather than vertically centered, so there's no
+                // large empty gap below the header.
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(verify ? "Integrity verified" : "No changes", systemImage: "checkmark.seal")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.green)
+                    Text(verify ? "Every file matches OpenPhoto's record."
+                                : "The drive matches OpenPhoto's record.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.textDim)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(24)
             } else {
                 findings(report)
             }

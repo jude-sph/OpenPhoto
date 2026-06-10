@@ -45,9 +45,12 @@ public enum PeekSource {
             .appendingPathComponent("catalog.sqlite")
 
         if fm.fileExists(atPath: snapshotDB.path) {
-            // SNAPSHOT backend. vault.json already exists for an OpenPhoto drive, so openOrCreate
-            // only READS it — it never writes to the drive here.
-            let drive = try Vault.openOrCreate(at: root, role: .canonical)
+            // SNAPSHOT backend. Open the drive READ-ONLY via Vault.open so we NEVER write to a
+            // passive drive. If vault.json has vanished despite the snapshot DB, fall through to the
+            // raw backend (still a valid peek) rather than creating a vault.json on the drive.
+            guard let drive = try Vault.open(at: root) else {
+                return loadRaw(root: root, tempDir: tempDir, thumbs: thumbs)
+            }
             let cat = try Catalog(at: tempDir.appendingPathComponent("catalog.sqlite"))
             _ = try CatalogSnapshot.import(from: drive, into: cat, thumbnails: thumbs)
             let items = try cat.timelineItems()
@@ -63,7 +66,11 @@ public enum PeekSource {
                                thumbnails: thumbs, tempDir: tempDir, root: root)
         }
 
-        // RAW backend — read-only media walk; NEVER openOrCreate a raw folder.
+        return loadRaw(root: root, tempDir: tempDir, thumbs: thumbs)
+    }
+
+    /// RAW backend — read-only media walk; NEVER openOrCreate a raw folder.
+    private static func loadRaw(root: URL, tempDir: URL, thumbs: ThumbnailStore) -> PeekContext {
         let items = mediaFiles(under: root).map { url in
             PeekItem(id: url.path,
                      name: url.lastPathComponent,

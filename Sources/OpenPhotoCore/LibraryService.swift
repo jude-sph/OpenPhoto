@@ -83,8 +83,8 @@ public final class LibraryService: Sendable {
         try timelineSections(grouping: .day)
     }
 
-    public func timelineSections(grouping: TimelineGrouping) throws -> [TimelineSection] {
-        let items = try catalog.timelineItems()
+    public func timelineSections(grouping: TimelineGrouping, videoOnly: Bool = false) throws -> [TimelineSection] {
+        let items = try catalog.timelineItems(videoOnly: videoOnly)
         switch grouping {
         case .none:
             return items.isEmpty ? [] : [TimelineSection(dayStartMs: 0, title: "All photos", items: items)]
@@ -138,8 +138,8 @@ public final class LibraryService: Sendable {
         return result
     }
 
-    public func items(inDir dir: String) throws -> [TimelineItem] {
-        try catalog.items(inDir: dir)
+    public func items(inDir dir: String, recursive: Bool = false) throws -> [TimelineItem] {
+        try catalog.items(inDir: dir, recursive: recursive)
     }
 
     public func item(hash: String) throws -> TimelineItem? { try catalog.item(hash: hash) }

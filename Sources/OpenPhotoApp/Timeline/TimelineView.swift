@@ -9,6 +9,8 @@ struct TimelineView: View {
     @State private var showForceEvict = false
     @State private var showDelete = false
     @State private var showSend = false
+    @State private var sendChooser = false
+    @State private var chosenSendDevice: ConnectedDevice?
 
     private var orderedSelectable: [SelectableItem] {
         state.flatItems.map { SelectableItem(id: $0.instanceID) }
@@ -53,11 +55,16 @@ struct TimelineView: View {
         } message: {
             Text("They move to the bin (restore anytime). On connected drives, their copies are then queued for removal — review under the drive before anything is deleted there.")
         }
-        .sheet(isPresented: $showSend) {
-            if let target = state.connectedSendTarget() {
+        .sheet(isPresented: $showSend, onDismiss: { chosenSendDevice = nil }) {
+            if let target = chosenSendDevice ?? state.connectedSendTarget() {
                 SendSheet(state: state, items: selectedItems, device: target) {
                     selection.clear(); selectMode = false
                 }
+            }
+        }
+        .confirmationDialog("Send to which device?", isPresented: $sendChooser, titleVisibility: .visible) {
+            ForEach(state.connectedSendTargets(), id: \.id) { dev in
+                Button(dev.name) { chosenSendDevice = dev; showSend = true }
             }
         }
         .sheet(isPresented: $showForceEvict) {
@@ -93,17 +100,14 @@ struct TimelineView: View {
     }
 
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
-        Color.clear
-            .aspectRatio(1, contentMode: .fit)
-            .overlay { PhotoCellView(item: item, library: state.library!,
-                                     targetPixel: thumbPixels,
-                                     backedUp: state.isBackedUpOnCanonical(item),
-                                     driveOnly: item.driveRelPath != nil) }
-            .clipped()
-            .selectionChrome(selected: selection.contains(item.instanceID), show: selectMode)
-            .cellFrame(item.instanceID, in: "timelinegrid", active: selectMode)
-            .contentShape(Rectangle())
-            .onTapGesture {
+        MediaTile(
+            id: item.instanceID,
+            selectMode: selectMode,
+            selected: selection.contains(item.instanceID),
+            rubberBandSpace: "timelinegrid",
+            thumbnail: ThumbnailImage(timelineItem: item, library: state.library!, targetPixel: thumbPixels),
+            badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
+            onTap: {
                 if selectMode {
                     if let idx = state.flatItems.firstIndex(where: { $0.instanceID == item.instanceID }) {
                         selection.tap(index: idx, items: orderedSelectable,
@@ -112,7 +116,7 @@ struct TimelineView: View {
                 } else {
                     state.openViewer(item, within: state.flatItems)
                 }
-            }
+            })
     }
 
     @ViewBuilder private func sectionHeader(_ section: TimelineSection) -> some View {
@@ -133,8 +137,15 @@ struct TimelineView: View {
     private var selectionBar: some View {
         SelectionActionBar(
             count: selection.count,
-            sendTargetName: state.connectedSendTarget()?.name,
-            onSend: { showSend = true },
+            sendTargetName: {
+                let targets = state.connectedSendTargets()
+                return targets.count > 1 ? "device\u{2026}" : targets.first?.name
+            }(),
+            onSend: {
+                let targets = state.connectedSendTargets()
+                if targets.count <= 1 { showSend = true }
+                else { sendChooser = true }
+            },
             onDelete: { if !evictableItems.isEmpty { showDelete = true } },
             onEvict: { if !evictableItems.isEmpty { showEvict = true } },
             onForceEvict: { if !evictableItems.isEmpty { showForceEvict = true } },
@@ -152,6 +163,12 @@ struct TimelineView: View {
                 .foregroundStyle(Theme.textDim)
             Spacer()
             Button("Select") { selectMode = true }.controlSize(.small)
+            Toggle(isOn: Binding(get: { state.videoOnly },
+                                 set: { state.videoOnly = $0; try? state.refreshQueries() })) {
+                Image(systemName: "video.fill")
+            }
+            .toggleStyle(.button).controlSize(.small)
+            .help("Show videos only")
             Picker("Group", selection: $state.grouping) {
                 Text("Day").tag(TimelineGrouping.day)
                 Text("Week").tag(TimelineGrouping.week)

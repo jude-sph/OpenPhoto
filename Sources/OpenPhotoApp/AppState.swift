@@ -60,6 +60,20 @@ final class AppState {
             UserDefaults.standard.set(grouping.rawValue, forKey: "timelineGrouping")
         }
     }
+    var videoOnly: Bool = UserDefaults.standard.bool(forKey: "videoOnly") {
+        didSet { UserDefaults.standard.set(videoOnly, forKey: "videoOnly") }
+    }
+    /// Folder view: include photos from every descendant folder (the whole subtree), not just the
+    /// selected folder.
+    var foldersRecursive: Bool = UserDefaults.standard.bool(forKey: "foldersRecursive") {
+        didSet { UserDefaults.standard.set(foldersRecursive, forKey: "foldersRecursive") }
+    }
+    /// Viewer: whether the bottom gallery (filmstrip) is expanded. Defaults to shown.
+    var viewerGalleryShown: Bool = UserDefaults.standard.object(forKey: "viewerGalleryShown") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "viewerGalleryShown") {
+        didSet { UserDefaults.standard.set(viewerGalleryShown, forKey: "viewerGalleryShown") }
+    }
     var sidebarShown: Bool = UserDefaults.standard.object(forKey: "sidebarShown") == nil
         ? true
         : UserDefaults.standard.bool(forKey: "sidebarShown") {
@@ -107,9 +121,14 @@ final class AppState {
         panel.message = "Choose a folder to import photos from."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         deviceWatcher.addManualVolume(url: url)
-        if let dev = deviceWatcher.devices.first(where: { $0.id == "manual-" + url.path }) {
+        if let dev = deviceWatcher.devices.first(where: { $0.id == "vol-manual-" + url.path }) {
             openedDevice = dev
         }
+    }
+
+    /// Remove a manually-added folder import source (phones/SD cards are removed by unplugging).
+    func removeImportSource(_ device: ConnectedDevice) {
+        deviceWatcher.removeManualVolume(id: device.id)
     }
 
     /// Prompt for a folder/drive and Quick View it (the raw-folder entry point). Shared by the Drives
@@ -479,7 +498,7 @@ final class AppState {
     }
 
     func openVault(for vr: VaultRecord) -> Vault? {
-        try? Vault.openOrCreate(at: URL(fileURLWithPath: vr.rootPath), role: .canonical)
+        try? Vault.open(at: URL(fileURLWithPath: vr.rootPath))
     }
 
     /// A connected drive that carries a catalog-snapshot whose contents this Mac doesn't yet know
@@ -545,17 +564,26 @@ final class AppState {
     /// after propagation, and after any drift scan/repair/verify (which rewrites vault_presence).
     private(set) var drivePendingDeletions: [String: [PendingDeletion]] = [:]
 
+    /// Photos on the Mac that aren't on each connected drive yet (a Mac->drive Sync would add them).
+    /// Catalog-only; recomputed alongside drivePendingDeletions. Drives the "Updates to sync" status.
+    private(set) var drivePendingSync: [String: Int] = [:]
+
     func refreshPendingDeletions() {
-        guard let lib = library else { drivePendingDeletions = [:]; return }
+        guard let lib = library else { drivePendingDeletions = [:]; drivePendingSync = [:]; return }
         let queue = (try? lib.catalog.pendingDeletions()) ?? []
         let local = (try? lib.catalog.instanceHashes()) ?? []
         var out: [String: [PendingDeletion]] = [:]
+        var pendingSync: [String: Int] = [:]
         for vr in durableVaults where driveIsPresent(vr) {
             let presence = (try? lib.catalog.vaultPresenceRows(forVault: vr.id)) ?? []
             let eligible = DeletionPropagator().eligible(queue: queue, localHashes: local, presence: presence)
             if !eligible.isEmpty { out[vr.id] = eligible }
+            // Mac photos this drive doesn't hold yet → a Sync would add them.
+            let behind = local.subtracting(presence.map(\.hash)).count
+            if behind > 0 { pendingSync[vr.id] = behind }
         }
         drivePendingDeletions = out
+        drivePendingSync = pendingSync
     }
 
     /// Move the selected drive copies into the drive's bin (off the main thread), then refresh
@@ -779,7 +807,7 @@ final class AppState {
 
     func refreshQueries() throws {
         guard let library else { return }
-        sections = try library.timelineSections(grouping: grouping)
+        sections = try library.timelineSections(grouping: grouping, videoOnly: videoOnly)
         flatItems = sections.flatMap(\.items)
         folderTree = try library.folderTree()
         if expandedFolders.isEmpty && !folderTree.isEmpty {
@@ -891,6 +919,11 @@ final class AppState {
     /// are listed first by DeviceWatcher, so a connected iPhone is preferred.
     func connectedSendTarget() -> ConnectedDevice? {
         deviceWatcher.devices.first { sendDestination(for: $0) != nil }
+    }
+
+    /// All connected devices that can receive a send (phones via AirDrop, volumes via copy).
+    func connectedSendTargets() -> [ConnectedDevice] {
+        deviceWatcher.devices.filter { sendDestination(for: $0) != nil }
     }
 
     /// Build a SendDestination for a connected device: AirDrop for an iPhone,

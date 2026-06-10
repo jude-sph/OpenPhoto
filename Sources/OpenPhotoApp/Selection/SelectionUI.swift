@@ -24,30 +24,6 @@ extension View {
             }
         }
     }
-
-    /// Selection ring + checkbox, shown only while `show` (select mode) is true.
-    @ViewBuilder
-    func selectionChrome(selected: Bool, show: Bool,
-                         radius: CGFloat = Theme.cellRadius) -> some View {
-        if show {
-            self
-                .overlay {
-                    if selected {
-                        RoundedRectangle(cornerRadius: radius)
-                            .strokeBorder(Theme.accent, lineWidth: 3)
-                    }
-                }
-                .overlay(alignment: .topLeading) {
-                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 20, weight: .bold))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, selected ? Theme.accent : .black.opacity(0.45))
-                        .shadow(radius: 2).padding(7)
-                }
-        } else {
-            self
-        }
-    }
 }
 
 /// Rubber-band drag selection over a grid. Apply to the scrolling container; the

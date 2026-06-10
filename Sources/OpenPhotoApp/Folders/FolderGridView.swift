@@ -33,6 +33,8 @@ struct FolderGridView: View {
             reload()
         }
         .task(id: state.refreshToken) { reload() }      // refresh after rescans (keep selection)
+        .task(id: state.videoOnly) { reload() }          // re-filter when the video-only toggle flips
+        .task(id: state.foldersRecursive) { reload() }   // re-query when include-subfolders flips
         .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
@@ -97,17 +99,14 @@ struct FolderGridView: View {
     }
 
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
-        Color.clear
-            .aspectRatio(1, contentMode: .fit)
-            .overlay { PhotoCellView(item: item, library: state.library!,
-                                     targetPixel: thumbPixels,
-                                     backedUp: state.isBackedUpOnCanonical(item),
-                                     driveOnly: item.driveRelPath != nil) }
-            .clipped()
-            .selectionChrome(selected: selection.contains(item.instanceID), show: selectMode)
-            .cellFrame(item.instanceID, in: "foldergrid", active: selectMode)
-            .contentShape(Rectangle())
-            .onTapGesture {
+        MediaTile(
+            id: item.instanceID,
+            selectMode: selectMode,
+            selected: selection.contains(item.instanceID),
+            rubberBandSpace: "foldergrid",
+            thumbnail: ThumbnailImage(timelineItem: item, library: state.library!, targetPixel: thumbPixels),
+            badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
+            onTap: {
                 if selectMode {
                     if let idx = items.firstIndex(where: { $0.instanceID == item.instanceID }) {
                         selection.tap(index: idx, items: orderedSelectable,
@@ -116,12 +115,13 @@ struct FolderGridView: View {
                 } else {
                     state.openViewer(item, within: items)
                 }
-            }
+            })
     }
 
     private func reload() {
         guard let lib = state.library, let dir = state.selectedFolder else { items = []; return }
-        items = (try? lib.items(inDir: dir)) ?? []
+        let all = (try? lib.items(inDir: dir, recursive: state.foldersRecursive)) ?? []
+        items = state.videoOnly ? all.filter { $0.kind == MediaKind.video.rawValue } : all
     }
 
     private var selectionBar: some View {
@@ -156,6 +156,18 @@ struct FolderGridView: View {
                         [root.appendingPathComponent(dir)])
                 } label: { Label("Reveal in Finder", systemImage: "arrow.up.forward.app") }
                     .buttonStyle(.bordered).controlSize(.small)
+            }
+            if state.selectedFolder != nil {
+                Toggle(isOn: Binding(get: { state.foldersRecursive },
+                                     set: { state.foldersRecursive = $0 })) {
+                    Image(systemName: "rectangle.stack")
+                }
+                .toggleStyle(.button).controlSize(.small).help("Include photos from subfolders")
+                Toggle(isOn: Binding(get: { state.videoOnly },
+                                     set: { state.videoOnly = $0 })) {
+                    Image(systemName: "video.fill")
+                }
+                .toggleStyle(.button).controlSize(.small).help("Show videos only")
             }
             Image(systemName: "square.grid.2x2")
                 .font(.system(size: 11)).foregroundStyle(Theme.textFaint)

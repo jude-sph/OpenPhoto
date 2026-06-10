@@ -216,8 +216,15 @@ struct DrivesView: View {
         if state.driveIsPresent(vr), let r = state.driveDrift[vr.id] {
             let n = r.unknown.count + r.missing.count + r.changed.count + r.corrupt.count
             if n == 0 {
-                Label("No changes", systemImage: "checkmark.seal")
-                    .font(.system(size: 11)).foregroundStyle(.green)
+                if (state.drivePendingSync[vr.id] ?? 0) > 0 {
+                    Button { syncDrive = state.openVault(for: vr) } label: {
+                        Label("Updates to sync \u{00b7} Sync", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11)).foregroundStyle(Theme.amber)
+                    }.buttonStyle(.plain)
+                } else {
+                    Label("No changes", systemImage: "checkmark.seal")
+                        .font(.system(size: 11)).foregroundStyle(.green)
+                }
             } else {
                 Button {
                     if let v = state.openVault(for: vr) { drift = DriftPresentation(drive: v, verify: false) }

@@ -28,20 +28,36 @@ extension Catalog {
     // Full union: local rows (with NULL driveRelPath) UNION ALL drive-only rows.
     private static var timelineSQL: String { "\(localSelect) UNION ALL \(driveSelect)" }
 
-    /// Whole-library browse rows, newest first. ~60k rows fetch in tens of ms.
-    public func timelineItems() throws -> [TimelineItem] {
+    /// Whole-library browse rows, newest first. `videoOnly` restricts to videos.
+    public func timelineItems(videoOnly: Bool = false) throws -> [TimelineItem] {
         try dbQueue.read { db in
-            try TimelineItem.fetchAll(db,
-                sql: "SELECT * FROM (\(Self.timelineSQL)) ORDER BY takenAtMs DESC")
+            var sql = "SELECT * FROM (\(Self.timelineSQL))"
+            if videoOnly { sql += " WHERE kind = 'video'" }
+            sql += " ORDER BY takenAtMs DESC"
+            return try TimelineItem.fetchAll(db, sql: sql)
         }
     }
 
-    /// Items whose instance lives in the given folder (non-recursive).
-    /// - Parameter vaultID: when non-nil, restricts to that vault; nil = union across vaults.
-    public func items(inDir dirPath: String, vaultID: String? = nil) throws -> [TimelineItem] {
+    /// Items whose instance lives in the given folder.
+    /// - Parameters:
+    ///   - vaultID: when non-nil, restricts to that vault; nil = union across vaults.
+    ///   - recursive: when true, also includes every descendant folder (the whole subtree).
+    public func items(inDir dirPath: String, vaultID: String? = nil,
+                      recursive: Bool = false) throws -> [TimelineItem] {
         try dbQueue.read { db in
-            var sql = "SELECT * FROM (\(Self.timelineSQL)) WHERE dirPath = ?"
-            var args: [DatabaseValueConvertible] = [dirPath]
+            var sql = "SELECT * FROM (\(Self.timelineSQL)) WHERE "
+            var args: [DatabaseValueConvertible] = []
+            if recursive {
+                // The folder itself plus every descendant. GLOB "<dir>/*" matches only paths under
+                // "<dir>/" (so a sibling like "2025x" is NOT matched), and isn't tripped by "_"/"%"
+                // the way LIKE would be.
+                sql += "(dirPath = ? OR dirPath GLOB ?)"
+                args.append(dirPath)
+                args.append(dirPath + "/*")
+            } else {
+                sql += "dirPath = ?"
+                args.append(dirPath)
+            }
             if let vid = vaultID {
                 sql += " AND vaultID = ?"
                 args.append(vid)

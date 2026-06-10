@@ -56,7 +56,7 @@ struct SidebarView: View {
                 .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
             ForEach(state.deviceWatcher.devices) { device in
                 let active = state.openedDevice?.id == device.id
-                Button { state.openedDevice = device } label: {
+                let button = Button { state.openedDevice = device } label: {
                     HStack(spacing: 9) {
                         Image(systemName: device.symbol).frame(width: 18)
                         Text(device.name).font(.system(size: 13.5, weight: .medium))
@@ -71,6 +71,17 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 8)
+                // Folder sources (added via "Add import source…") can be removed here;
+                // phones/SD cards are removed by unplugging.
+                if device.id.hasPrefix("vol-manual-") {
+                    button.contextMenu {
+                        Button(role: .destructive) { state.removeImportSource(device) } label: {
+                            Label("Remove import source", systemImage: "minus.circle")
+                        }
+                    }
+                } else {
+                    button
+                }
             }
             Button { state.addImportSourceViaPanel() } label: {
                 HStack(spacing: 9) {

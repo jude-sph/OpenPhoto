@@ -77,7 +77,7 @@ struct SendSheet: View {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 5) {
                                     ForEach(thumbItems(for: entries), id: \.instanceID) { item in
-                                        ThumbView(item: item, library: state.library!)
+                                        ThumbnailImage(timelineItem: item, library: state.library!)
                                             .frame(width: 44, height: 44)
                                             .clipShape(RoundedRectangle(cornerRadius: 4))
                                     }
