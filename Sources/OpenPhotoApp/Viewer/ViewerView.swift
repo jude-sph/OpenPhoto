@@ -51,40 +51,61 @@ struct ViewerView: View {
     }
 
     private var stage: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Button { state.openedItem = nil } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 44, height: 36)
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain)
-                if let item = state.openedItem {
-                    Text(title(for: item)).font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
+        Group {
+            if isFullWindowVideo, let player {
+                // Video fills the whole stage — over the top bar, under the gallery — matching the
+                // immersive full-window look of a zoomed photo (the gallery is the only overlay).
+                // Back: Esc; toggle inspector: i.
+                ZStack {
+                    VStack(spacing: 0) { topBar; Spacer() }       // bar underneath (covered)
+                    PlayerView(player: player)                     // full-window video
+                    VStack(spacing: 0) { Spacer(); filmstrip }     // gallery overlays the bottom
                 }
-                Spacer()
-                if liveURL != nil {
-                    Button { playingLive.toggle() } label: {
-                        Label(playingLive ? "Photo" : "Live",
-                              systemImage: playingLive ? "photo" : "livephoto")
-                    }.buttonStyle(.bordered).controlSize(.small)
+            } else {
+                VStack(spacing: 0) {
+                    topBar
+                    content.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    filmstrip
                 }
-                Button { state.inspectorShown.toggle() } label: {
-                    Image(systemName: "sidebar.right")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 44, height: 36)
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain)
             }
-            .padding(.horizontal, 16).frame(height: 44)
-
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            filmstrip
         }
         .foregroundStyle(.white)
+    }
+
+    /// True only for actual video clips (not playing Live Photos, which keep the bar visible for the
+    /// Live/Photo toggle), and only once the player is ready.
+    private var isFullWindowVideo: Bool {
+        guard let item = state.openedItem, !driveUnplugged, player != nil else { return false }
+        return item.kind == MediaKind.video.rawValue
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 14) {
+            Button { state.openedItem = nil } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 44, height: 36)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if let item = state.openedItem {
+                Text(title(for: item)).font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            Spacer()
+            if liveURL != nil {
+                Button { playingLive.toggle() } label: {
+                    Label(playingLive ? "Photo" : "Live",
+                          systemImage: playingLive ? "photo" : "livephoto")
+                }.buttonStyle(.bordered).controlSize(.small)
+            }
+            Button { state.inspectorShown.toggle() } label: {
+                Image(systemName: "sidebar.right")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 44, height: 36)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16).frame(height: 44)
     }
 
     @ViewBuilder private var content: some View {
