@@ -59,13 +59,13 @@ struct ViewerView: View {
                 ZStack {
                     VStack(spacing: 0) { topBar; Spacer() }       // bar underneath (covered)
                     PlayerView(player: player)                     // full-window video
-                    VStack(spacing: 0) { Spacer(); filmstrip }     // gallery overlays the bottom
+                    VStack(spacing: 0) { Spacer(); galleryBar }    // gallery overlays the bottom
                 }
             } else {
                 VStack(spacing: 0) {
                     topBar
                     content.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    filmstrip
+                    galleryBar
                 }
             }
         }
@@ -136,6 +136,24 @@ struct ViewerView: View {
                     .id(state.openedItem?.instanceID)
             } else {
                 ProgressView().controlSize(.large)
+            }
+        }
+    }
+
+    /// The bottom gallery (filmstrip) with a thin always-visible handle to collapse/expand it.
+    @ViewBuilder private var galleryBar: some View {
+        VStack(spacing: 0) {
+            Button { state.viewerGalleryShown.toggle() } label: {
+                Image(systemName: state.viewerGalleryShown ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(maxWidth: .infinity).frame(height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.55))
+            .background(.black.opacity(0.5))
+            if state.viewerGalleryShown {
+                filmstrip
             }
         }
     }

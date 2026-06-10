@@ -68,6 +68,12 @@ final class AppState {
     var foldersRecursive: Bool = UserDefaults.standard.bool(forKey: "foldersRecursive") {
         didSet { UserDefaults.standard.set(foldersRecursive, forKey: "foldersRecursive") }
     }
+    /// Viewer: whether the bottom gallery (filmstrip) is expanded. Defaults to shown.
+    var viewerGalleryShown: Bool = UserDefaults.standard.object(forKey: "viewerGalleryShown") == nil
+        ? true
+        : UserDefaults.standard.bool(forKey: "viewerGalleryShown") {
+        didSet { UserDefaults.standard.set(viewerGalleryShown, forKey: "viewerGalleryShown") }
+    }
     var sidebarShown: Bool = UserDefaults.standard.object(forKey: "sidebarShown") == nil
         ? true
         : UserDefaults.standard.bool(forKey: "sidebarShown") {
