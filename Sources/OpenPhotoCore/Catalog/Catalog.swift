@@ -18,6 +18,11 @@ public struct VaultPresenceEntry: Sendable, Equatable {
 public final class Catalog: Sendable {
     public let dbQueue: DatabaseQueue
 
+    /// On-disk catalog schema version — the latest registered migration below. Written into a
+    /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
+    /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
+    public static let schemaVersion = 5
+
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
