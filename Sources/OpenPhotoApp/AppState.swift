@@ -137,6 +137,38 @@ final class AppState {
         return OpenPhotoCore.backupBehindCount(canonicalHashes: canonicalHashes(), backupHashes: hs)
     }
 
+    /// A backup is promotable iff it's connected, the canonical is connected, and their content sets
+    /// are exactly equal (cheap presence-set gate; promotion re-verifies via manifests).
+    func isPromotable(_ vr: VaultRecord) -> Bool {
+        guard let lib = library, vr.role == "backup", driveIsPresent(vr),
+              let canon = canonicalVault, driveIsPresent(canon) else { return false }
+        let canonHashes = (try? lib.catalog.vaultPresenceHashes(forVault: canon.id)) ?? []
+        let backupHashes = (try? lib.catalog.vaultPresenceHashes(forVault: vr.id)) ?? []
+        return canonicalAgreement(canonicalHashes: canonHashes, backupHashes: backupHashes)
+    }
+
+    /// Promote a backup to canonical (planned): re-verify exact agreement against BOTH manifests, then
+    /// atomically flip the catalog roles (new→canonical, old→backup) and rewrite the drives' vault.json
+    /// best-effort. Returns false (no change) if the backup is not an exact copy — the caller tells the
+    /// user to "Update backup" first.
+    @discardableResult
+    func promoteToCanonical(_ vr: VaultRecord) async -> Bool {
+        guard let lib = library, let oldVR = canonicalVault,
+              driveIsPresent(vr), driveIsPresent(oldVR),
+              let newVault = openVault(for: vr), let oldVault = openVault(for: oldVR) else { return false }
+        let agree = await Task.detached(priority: .userInitiated) { () -> Bool in
+            let newHashes = Set((try? Manifest.read(from: newVault.manifestURL))?.map { $0.hash.stringValue } ?? [])
+            let oldHashes = Set((try? Manifest.read(from: oldVault.manifestURL))?.map { $0.hash.stringValue } ?? [])
+            return canonicalAgreement(canonicalHashes: oldHashes, backupHashes: newHashes)
+        }.value
+        guard agree else { return false }
+        try? lib.catalog.setCanonical(vr.id, demoting: oldVR.id)   // atomic catalog flip
+        _ = try? newVault.writingRole(.canonical)                  // best-effort on-disk self-describe
+        _ = try? oldVault.writingRole(.backup)
+        reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
+        return true
+    }
+
     /// Clone the canonical onto `vr` (both must be connected): copy the diff hash-verified, then
     /// mark `vr` a backup in the catalog and refresh its presence. Off-main for the copy.
     @discardableResult
