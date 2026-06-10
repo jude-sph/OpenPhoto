@@ -91,8 +91,20 @@ On plug-in: read drive manifest → reconcile → present a **plan** before touc
 ### 5.3 Evict / Rehydrate
 Per-folder. Evict requires full hash-verification on canonical. Rehydrate copies a folder back from the drive, verified the same way.
 
-### 5.4 Clone (canonical → backup)
-The Mac cannot populate backups alone (it lacks evicted originals), so backups are made by cloning canonical → backup with **both drives plugged in** — manifest-driven, hash-verified. Any number of backup drives; the catalog tracks per-drive presence.
+### 5.4 Clone & backups (canonical → backup)
+The Mac cannot populate backups alone (it lacks evicted originals), so backups are made by cloning canonical → backup with **both drives plugged in** — manifest-driven, hash-verified, identity-mapped (a mirror: the backup's layout equals the canonical's). Any number of backup drives; the catalog tracks per-drive presence.
+
+**The canonical is the source of truth; backups are derived from it.** A backup is a full redundant copy whose contents are *defined by* the canonical. The principle:
+
+- **Reads treat all connected durable drives (canonical + backup) as equal** — any of them satisfies "backed up", and any is a valid source for browse, rehydrate, send-from-drive, and verified-evict (re-hashing a backup copy is proof as good as canonical). When several are connected, **canonical is preferred** as the read source.
+- **Writes flow one-way, canonical → backup, only.** A backup never feeds back into the canonical (no merge — except the explicit migration flag-flip, §5.5). Additions always flow *through* the canonical: a backup never receives a photo before the canonical has it. When a backup deviates from the canonical, the backup is **wrong** and is repaired *from* the canonical (drift restore), never the reverse.
+
+**Keeping backups current — no byte caching, no bloat.** When the canonical gains photos (a new import synced Mac→canonical) or loses them (a deletion), other drives may be unplugged. The Mac never stages the changed *bytes* — the canonical **is** the byte store. It remembers only tiny metadata it already has: **per-drive presence** (which hashes each drive holds, in the catalog) and **pending deletions** (just hashes). Bringing a backup up to date is therefore two independent streams:
+
+- **Additions** = a re-runnable, diff-driven clone (canonical manifest − backup manifest = the missing files), copied canonical → backup. This requires the canonical *and* the backup both connected (the bytes live on canonical). Nothing accumulates on the Mac, so adding GBs to the canonical while a backup is away costs the Mac nothing — the diff is recomputed and copied the next time both are present.
+- **Deletions** = per-drive cached instructions (a hash each). A deletion stays pending **for every drive that still holds the photo** and applies (through the Review-Deletions gate) when that drive next connects — needing only that drive (the instruction is the cache). It clears for a drive once that drive no longer holds the hash, and clears entirely once no drive holds it. So a deleted photo can never resurrect from an unplugged backup, and the only thing "remembered" indefinitely is a hash.
+
+On connect, the app already knows from the catalog whether a backup is behind, and offers to **update it** — copy the additions (if the canonical is also connected) and review+apply its pending deletions (always). If the canonical is absent, deletions still apply and the additions are reported as pending ("connect the canonical to copy N photos").
 
 ### 5.5 Migration
 Clone + flag flip: clone canonical onto the new location (drive or the Mac itself), verify completely, then designate the new location canonical. When adopting a drive on a fresh Mac, the app imports the drive's catalog snapshot as the starting live catalog, then verifies against the manifest.
