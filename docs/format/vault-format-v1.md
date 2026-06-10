@@ -164,7 +164,7 @@ Conforming software never hard-deletes. Deletion = move the file (and its sideca
 {"hash":"sha256:9f42…","path":"rome2022/IMG_4123.heic","deleted_at":"2026-06-07T20:01:00.000Z","origin":"propagated"}
 ```
 
-`origin` is `"user"` (deleted directly in this vault's UI) or `"propagated"` (a reviewed deletion synced from the user's catalog). Restore = the reverse move + manifest line re-added.
+`origin` is `"user"` (deleted directly in this vault's UI), `"propagated"` (a reviewed deletion synced from the user's catalog), or `"repaired"` (a corrupt/bit-rot file quarantined when its slot was repaired from a verified-good copy during Verify Integrity). Restore = the reverse move + manifest line re-added. A `"repaired"` entry is **not a deletion**: only the damaged bytes move to the bin (recoverable) — its **manifest line is kept** (re-recorded with the verified replacement's size/mtime, the hash unchanged) and its **sidecar stays at the live location** with the repaired file. A `"repaired"` entry is never propagated and is never a pending deletion.
 
 A *vault's* propagated deletions therefore land in that vault's own `.openphoto/bin/` (the same mechanism as a local deletion), tagged `origin:"propagated"`. The volume-root `.openphoto-trash/` directory of §12 is used **only** for deletions on removable *non-vault* volumes (e.g. an SD card during import), which have no `.openphoto/` vault to host a bin.
 
