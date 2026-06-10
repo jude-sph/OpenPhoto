@@ -57,3 +57,48 @@ public enum CatalogSnapshot {
         }
     }
 }
+
+public struct AdoptionImport: Sendable, Equatable {
+    public var assets: Int      // assets read from the snapshot
+    public var present: Int     // this-drive presence rows seeded
+    public init(assets: Int, present: Int) { self.assets = assets; self.present = present }
+}
+
+extension CatalogSnapshot {
+    /// Seed the live catalog from a drive's snapshot for instant drive-only browse. Reads ONLY the
+    /// portable parts (assets + this drive's vault_presence) from a READ-ONLY open of the snapshot DB
+    /// (never writes to the drive). Assets are inserted-if-absent (never clobber local metadata).
+    public static func `import`(from drive: Vault, into catalog: Catalog,
+                                thumbnails: ThumbnailStore) throws -> AdoptionImport {
+        let snapDir = drive.stateDirURL.appendingPathComponent(dirName)
+        let dbURL = snapDir.appendingPathComponent("catalog.sqlite")
+        var cfg = Configuration(); cfg.readonly = true
+        let snap = try DatabaseQueue(path: dbURL.path, configuration: cfg)
+
+        let assets = try snap.read { db in try AssetRecord.fetchAll(db) }
+        let presence: [VaultPresenceEntry] = try snap.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT hash, relPath, dirPath, size, driveRelPath FROM vault_presence WHERE vaultID = ?
+                """, arguments: [drive.descriptor.vaultID]).map {
+                VaultPresenceEntry(hash: $0["hash"], relPath: $0["relPath"], dirPath: $0["dirPath"],
+                                   size: $0["size"], driveRelPath: $0["driveRelPath"])
+            }
+        }
+
+        try catalog.insertAssetsIfAbsent(assets)
+        try catalog.replaceVaultPresence(vaultID: drive.descriptor.vaultID, entries: presence)
+
+        let fm = FileManager.default
+        let thumbsDir = snapDir.appendingPathComponent("thumbs")
+        if let en = fm.enumerator(at: thumbsDir, includingPropertiesForKeys: nil) {
+            for case let u as URL in en where u.pathExtension == "jpg" {
+                let stem = u.deletingPathExtension().lastPathComponent
+                let dst = thumbnails.cacheURL(for: ContentHash(stringValue: "sha256:" + stem))
+                guard !fm.fileExists(atPath: dst.path) else { continue }
+                try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.copyItem(at: u, to: dst)
+            }
+        }
+        return AdoptionImport(assets: assets.count, present: presence.count)
+    }
+}

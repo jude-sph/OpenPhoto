@@ -58,3 +58,47 @@ private func snapshotFixture(_ t: TestDirs) throws
     #expect(!fm.fileExists(atPath: drive.stateDirURL.appendingPathComponent("catalog-snapshot.tmp").path))
     #expect(fm.fileExists(atPath: dbURL.path))
 }
+
+@Test func importSeedsAFreshCatalogForDriveOnlyBrowse() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (catalog, thumbs, drive, driveHash, _) = try snapshotFixture(t)
+    try catalog.replaceVaultPresence(vaultID: drive.descriptor.vaultID, entries: [
+        VaultPresenceEntry(hash: driveHash, relPath: "rome/IMG_1.jpg", dirPath: "rome",
+                           size: 3, driveRelPath: "Pictures/rome/IMG_1.jpg")])
+    try CatalogSnapshot.write(catalog: catalog, thumbnails: thumbs, drive: drive)
+
+    let fresh = try Catalog(at: t.root.appendingPathComponent("fresh.sqlite"))
+    let freshThumbs = ThumbnailStore(cacheDir: try t.sub("fresh-thumbs"))
+    let result = try CatalogSnapshot.import(from: drive, into: fresh, thumbnails: freshThumbs)
+
+    #expect(result.assets >= 1)
+    let items = try fresh.timelineItems()
+    #expect(items.contains { $0.hash == driveHash && $0.driveRelPath != nil })
+    #expect(FileManager.default.fileExists(
+        atPath: freshThumbs.cacheURL(for: ContentHash(stringValue: driveHash)).path))
+}
+
+@Test func importNeverClobbersLocalHumanMetadata() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (catalog, thumbs, drive, driveHash, _) = try snapshotFixture(t)
+    try catalog.replaceVaultPresence(vaultID: drive.descriptor.vaultID, entries: [
+        VaultPresenceEntry(hash: driveHash, relPath: "rome/IMG_1.jpg", dirPath: "rome",
+                           size: 3, driveRelPath: "Pictures/rome/IMG_1.jpg")])
+    try catalog.replaceVaultPresence(vaultID: "other-vault", entries: [
+        VaultPresenceEntry(hash: "sha256:" + String(repeating: "c", count: 64), relPath: "x", dirPath: "x",
+                           size: 1, driveRelPath: "x")])
+    try CatalogSnapshot.write(catalog: catalog, thumbnails: thumbs, drive: drive)
+
+    let live = try Catalog(at: t.root.appendingPathComponent("live.sqlite"))
+    try live.upsert(assets: [AssetRecord(hash: driveHash, kind: "photo", takenAtMs: 1,
+        pixelWidth: nil, pixelHeight: nil, latitude: nil, longitude: nil, cameraModel: nil,
+        lensModel: nil, durationSeconds: nil, livePairHash: nil, isLivePairedVideo: false,
+        favorite: true, rating: 5, caption: "mine", tagsJSON: "[]")])
+
+    _ = try CatalogSnapshot.import(from: drive, into: live, thumbnails: ThumbnailStore(cacheDir: try t.sub("lt")))
+
+    let fav = try live.dbQueue.read { db in
+        try Bool.fetchOne(db, sql: "SELECT favorite FROM assets WHERE hash = ?", arguments: [driveHash]) }
+    #expect(fav == true)
+    #expect(try live.vaultPresenceRows(forVault: "other-vault").isEmpty)
+}

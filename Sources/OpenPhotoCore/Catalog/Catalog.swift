@@ -240,6 +240,14 @@ public final class Catalog: Sendable {
         try dbQueue.write { db in for a in assets { try a.upsert(db) } }
     }
 
+    /// Insert assets that don't already exist; never overwrite an existing row (so a snapshot
+    /// import can't clobber the Mac's authoritative human metadata).
+    public func insertAssetsIfAbsent(_ assets: [AssetRecord]) throws {
+        try dbQueue.write { db in
+            for a in assets { try a.insert(db, onConflict: .ignore) }
+        }
+    }
+
     public func upsert(instances: [InstanceRecord]) throws {
         try dbQueue.write { db in for i in instances { try i.upsert(db) } }
     }
