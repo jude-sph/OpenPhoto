@@ -181,6 +181,29 @@ final class AppState {
                             macLocalHashes: macLocalHashes)
     }
 
+    /// A connected drive whose on-disk vault.json says it's canonical but which ISN'T the registered
+    /// canonical -- a leftover from a recovery (the old drive turned up) or a partial flip. Surfaced to
+    /// the user for confirmed resolution; the catalog's registered canonical stays authoritative.
+    var conflictingCanonical: VaultRecord? {
+        durableVaults.first { vr in
+            driveIsPresent(vr) && vr.id != canonicalVault?.id
+            && (openVault(for: vr)?.descriptor.role == .canonical)
+        }
+    }
+
+    /// Resolve a canonical conflict: demote the stray drive to a backup (reconcile catalog + vault.json),
+    /// or forget it. Never leaves two canonicals.
+    func resolveCanonicalConflict(_ vr: VaultRecord, makeBackup: Bool) {
+        guard let lib = library else { return }
+        if makeBackup {
+            try? lib.catalog.registerVault(id: vr.id, role: "backup", rootPath: vr.rootPath)
+            _ = try? openVault(for: vr)?.writingRole(.backup)
+            reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
+        } else {
+            forgetDrive(vr)
+        }
+    }
+
     /// Recovery: promote backup `vr` to canonical when the old canonical is absent (acknowledged by
     /// the caller). Flip the catalog roles (the absent old → backup in the catalog; its vault.json is
     /// reconciled on reconnect by the conflict detector), then SALVAGE everything the Mac still holds

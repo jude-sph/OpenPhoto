@@ -18,8 +18,72 @@ struct DrivesView: View {
     @State private var cloningDriveIDs: Set<String> = []
     @State private var adoptTarget: VaultRecord?
     @State private var adoptDismissed: Set<String> = []
+    // Promotion / recovery
+    @State private var promoteTarget: VaultRecord?
+    @State private var recoverTarget: VaultRecord?
+    @State private var promoteInfo: String?           // non-nil -> show "not exact copy" info alert
+    @State private var guidedPlugInTarget: VaultRecord?  // canonical absent -> show plug-in prompt
+    // Conflict resolution
+    @State private var canonicalConflict: VaultRecord?
+    @State private var conflictDismissed: Set<String> = []
 
     var body: some View {
+        mainContent
+            .sheet(item: $syncDrive) { drive in SyncPlanSheet(state: state, drive: drive) }
+            .sheet(item: $drift) { d in DriftReviewSheet(state: state, drive: d.drive, verify: d.verify) }
+            .sheet(item: $deletionDrive) { d in DeletionReviewSheet(state: state, drive: d) }
+            .alert("Forget \u{201c}\(forgetTarget.map { ($0.rootPath as NSString).lastPathComponent } ?? "")\u{201d}?",
+                   isPresented: Binding(get: { forgetTarget != nil },
+                                        set: { if !$0 { forgetTarget = nil } }),
+                   presenting: forgetTarget) { vr in
+                Button("Cancel", role: .cancel) { forgetTarget = nil }
+                Button("Forget", role: .destructive) { state.forgetDrive(vr); forgetTarget = nil }
+            } message: { _ in
+                Text("Removes this drive from OpenPhoto. The files on the drive are not deleted \u{2014} you can add it again later. Photos that exist only on this drive will stop appearing.")
+            }
+            .alert(adoptTarget.map { vr in
+                let name = (vr.rootPath as NSString).lastPathComponent
+                let count = state.adoptablePhotoCount(vr)
+                return "\u{201c}\(name)\u{201d} carries a photo library (\(count) photos). Adopt it so you can browse it here?"
+            } ?? "",
+                   isPresented: Binding(get: { adoptTarget != nil },
+                                        set: { if !$0 { adoptTarget = nil } }),
+                   presenting: adoptTarget) { vr in
+                Button("Adopt") {
+                    let vaultRecord = vr
+                    adoptTarget = nil
+                    Task { await state.adoptDrive(vaultRecord) }
+                }
+                Button("Not now", role: .cancel) {
+                    adoptDismissed.insert(vr.id)
+                    adoptTarget = nil
+                }
+            } message: { _ in
+                Text("OpenPhoto will import the drive\u{2019}s photo index so you can browse its contents immediately. This only reads the drive\u{2019}s catalog \u{2014} your original files are never modified.")
+            }
+            .onChange(of: state.adoptableDrive?.id) { _, _ in
+                if let vr = state.adoptableDrive, !adoptDismissed.contains(vr.id) { adoptTarget = vr }
+            }
+            .onAppear {
+                if let vr = state.adoptableDrive, !adoptDismissed.contains(vr.id) { adoptTarget = vr }
+                if let vr = state.conflictingCanonical, !conflictDismissed.contains(vr.id) { canonicalConflict = vr }
+            }
+            .modifier(PromoteAlerts(state: state,
+                                    promoteTarget: $promoteTarget,
+                                    promoteInfo: $promoteInfo,
+                                    guidedPlugInTarget: $guidedPlugInTarget,
+                                    recoverTarget: $recoverTarget))
+            .modifier(ConflictAlert(state: state,
+                                    canonicalConflict: $canonicalConflict,
+                                    conflictDismissed: $conflictDismissed))
+            .onChange(of: state.conflictingCanonical?.id) { _, _ in
+                if let vr = state.conflictingCanonical, !conflictDismissed.contains(vr.id) { canonicalConflict = vr }
+            }
+    }
+
+    // MARK: - Main content (broken out to keep body type-checkable)
+
+    @ViewBuilder private var mainContent: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Drives").font(.system(size: 15, weight: .semibold))
@@ -37,48 +101,6 @@ struct DrivesView: View {
                 List(state.durableVaults, id: \.id) { vr in row(vr) }.listStyle(.inset)
             }
         }
-        .sheet(item: $syncDrive) { drive in SyncPlanSheet(state: state, drive: drive) }
-        .sheet(item: $drift) { d in DriftReviewSheet(state: state, drive: d.drive, verify: d.verify) }
-        .sheet(item: $deletionDrive) { d in DeletionReviewSheet(state: state, drive: d) }
-        .alert("Forget \u{201c}\(forgetTarget.map { ($0.rootPath as NSString).lastPathComponent } ?? "")\u{201d}?",
-               isPresented: Binding(get: { forgetTarget != nil },
-                                    set: { if !$0 { forgetTarget = nil } }),
-               presenting: forgetTarget) { vr in
-            Button("Cancel", role: .cancel) { forgetTarget = nil }
-            Button("Forget", role: .destructive) { state.forgetDrive(vr); forgetTarget = nil }
-        } message: { _ in
-            Text("Removes this drive from OpenPhoto. The files on the drive are not deleted \u{2014} you can add it again later. Photos that exist only on this drive will stop appearing.")
-        }
-        .alert(adoptTarget.map { vr in
-            let name = (vr.rootPath as NSString).lastPathComponent
-            let count = state.adoptablePhotoCount(vr)
-            return "\u{201c}\(name)\u{201d} carries a photo library (\(count) photos). Adopt it so you can browse it here?"
-        } ?? "",
-               isPresented: Binding(get: { adoptTarget != nil },
-                                    set: { if !$0 { adoptTarget = nil } }),
-               presenting: adoptTarget) { vr in
-            Button("Adopt") {
-                let vaultRecord = vr
-                adoptTarget = nil
-                Task { await state.adoptDrive(vaultRecord) }
-            }
-            Button("Not now", role: .cancel) {
-                adoptDismissed.insert(vr.id)
-                adoptTarget = nil
-            }
-        } message: { _ in
-            Text("OpenPhoto will import the drive\u{2019}s photo index so you can browse its contents immediately. This only reads the drive\u{2019}s catalog \u{2014} your original files are never modified.")
-        }
-        .onChange(of: state.adoptableDrive?.id) { _, _ in
-            if let vr = state.adoptableDrive, !adoptDismissed.contains(vr.id) {
-                adoptTarget = vr
-            }
-        }
-        .onAppear {
-            if let vr = state.adoptableDrive, !adoptDismissed.contains(vr.id) {
-                adoptTarget = vr
-            }
-        }
     }
 
     @ViewBuilder private func row(_ vr: VaultRecord) -> some View {
@@ -94,9 +116,23 @@ struct DrivesView: View {
                 pendingDeletionsLine(vr)
             }
             Spacer()
+            if vr.role == "backup", !ejected {
+                // "Make this the canonical" -- three branches based on canonical state
+                Button("Make this the canonical") {
+                    if state.isPromotable(vr) {
+                        promoteTarget = vr
+                    } else if state.canonicalVault.map({ !state.driveIsPresent($0) }) ?? false {
+                        guidedPlugInTarget = vr
+                    } else {
+                        promoteInfo = "This backup isn't an exact copy of the canonical yet -- Update backup first."
+                    }
+                }
+                .controlSize(.small)
+                .disabled(!present)
+            }
             if vr.id != state.canonicalVault?.id,
                let canon = state.canonicalVault, state.driveIsPresent(canon),
-               !state.driveIsEjected(vr) {
+               !ejected {
                 let behind = state.backupBehindCount(vr)
                 let cloning = cloningDriveIDs.contains(vr.id)
                 Button(vr.role == "backup" ? (behind > 0 ? "Update backup (\(behind))" : "Up to date")
@@ -182,6 +218,126 @@ struct DrivesView: View {
                 }.buttonStyle(.plain)
             }
         }
+    }
+}
+
+// MARK: - Promotion / Recovery alerts (extracted ViewModifier to keep body type-checkable)
+
+private struct PromoteAlerts: ViewModifier {
+    let state: AppState
+    @Binding var promoteTarget: VaultRecord?
+    @Binding var promoteInfo: String?
+    @Binding var guidedPlugInTarget: VaultRecord?
+    @Binding var recoverTarget: VaultRecord?
+
+    private var promoteTitle: String {
+        promoteTarget.map { "Make \"\(($0.rootPath as NSString).lastPathComponent)\" the canonical?" } ?? ""
+    }
+    private var recoveryMessage: String {
+        guard let vr = recoverTarget else { return "" }
+        if let r = state.recoveryAcknowledgment(vr) {
+            return "\(r.recoverableFromMac) photo(s) will be copied from this Mac onto the new canonical; \(r.lost) exist nowhere reachable and will be lost."
+        }
+        return "OpenPhoto can't verify this backup against your lost canonical. It will become the new canonical as-is."
+    }
+    private var canonName: String {
+        state.canonicalVault.map { ($0.rootPath as NSString).lastPathComponent } ?? "your canonical"
+    }
+
+    func body(content: Content) -> some View {
+        content
+            // --- Promote confirm ---
+            .alert(promoteTitle,
+                   isPresented: Binding(get: { promoteTarget != nil },
+                                        set: { if !$0 { promoteTarget = nil } }),
+                   presenting: promoteTarget) { vr in
+                Button("Make Canonical") {
+                    let target = vr
+                    promoteTarget = nil
+                    Task {
+                        if await state.promoteToCanonical(target) == false {
+                            promoteInfo = "This backup is no longer an exact copy of the canonical -- run Update backup first."
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { promoteTarget = nil }
+            } message: { _ in
+                Text("Your current canonical will become a backup.")
+            }
+            // --- Promote failed info alert ---
+            .alert("Cannot promote yet",
+                   isPresented: Binding(get: { promoteInfo != nil },
+                                        set: { if !$0 { promoteInfo = nil } })) {
+                Button("OK") { promoteInfo = nil }
+            } message: {
+                Text(promoteInfo ?? "")
+            }
+            // --- Guided plug-in prompt (canonical absent) ---
+            .confirmationDialog(
+                "Plug in your canonical",
+                isPresented: Binding(get: { guidedPlugInTarget != nil },
+                                     set: { if !$0 { guidedPlugInTarget = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Recover\u{2026}") {
+                    let target = guidedPlugInTarget
+                    guidedPlugInTarget = nil
+                    recoverTarget = target
+                }
+                Button("Cancel", role: .cancel) { guidedPlugInTarget = nil }
+            } message: {
+                Text("Plug in your current canonical (\"\(canonName)\") so OpenPhoto can confirm this backup is a complete, current copy before switching -- or, if your canonical is lost, recover from this backup instead.")
+            }
+            // --- Recovery confirm ---
+            .alert("Recover from this backup?",
+                   isPresented: Binding(get: { recoverTarget != nil },
+                                        set: { if !$0 { recoverTarget = nil } }),
+                   presenting: recoverTarget) { vr in
+                Button("Recover", role: .destructive) {
+                    let target = vr
+                    recoverTarget = nil
+                    Task { await state.recoverCanonical(target) }
+                }
+                Button("Cancel", role: .cancel) { recoverTarget = nil }
+            } message: { _ in Text(recoveryMessage) }
+    }
+}
+
+// MARK: - Conflict alert (extracted ViewModifier to keep body type-checkable)
+
+private struct ConflictAlert: ViewModifier {
+    let state: AppState
+    @Binding var canonicalConflict: VaultRecord?
+    @Binding var conflictDismissed: Set<String>
+
+    private var conflictMessage: String {
+        guard let vr = canonicalConflict else { return "" }
+        let name = (vr.rootPath as NSString).lastPathComponent
+        let currentName = state.canonicalVault.map { ($0.rootPath as NSString).lastPathComponent } ?? "another drive"
+        return "\"\(name)\" was your previous canonical; \"\(currentName)\" is canonical now. Make it a backup (it'll need updating), or Forget it?"
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Canonical changed",
+                   isPresented: Binding(get: { canonicalConflict != nil },
+                                        set: { if !$0 { canonicalConflict = nil } }),
+                   presenting: canonicalConflict) { vr in
+                Button("Make a Backup") {
+                    state.resolveCanonicalConflict(vr, makeBackup: true)
+                    canonicalConflict = nil
+                }
+                Button("Forget", role: .destructive) {
+                    state.resolveCanonicalConflict(vr, makeBackup: false)
+                    canonicalConflict = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    conflictDismissed.insert(vr.id)
+                    canonicalConflict = nil
+                }
+            } message: { _ in
+                Text(conflictMessage)
+            }
     }
 }
 
