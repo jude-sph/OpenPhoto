@@ -61,7 +61,7 @@ struct PeekView: View {
 
     @State private var openedPeek: PeekItem?
 
-    private let columns = [GridItem(.adaptive(minimum: 120, maximum: 200), spacing: 2)]
+    private let columns = [GridItem(.adaptive(minimum: 120), spacing: Theme.gridGap)]
 
     var body: some View {
         ZStack {
@@ -81,16 +81,21 @@ struct PeekView: View {
                     ContentUnavailableView("No photos here", systemImage: "photo.on.rectangle")
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: columns, spacing: 2) {
+                        LazyVGrid(columns: columns, spacing: Theme.gridGap) {
                             ForEach(context.items) { item in
-                                PeekGridCell(item: item, thumbnails: context.thumbnails)
-                                    .aspectRatio(1, contentMode: .fill)
+                                // Same technique as TimelineView.cell: a uniform clear square
+                                // (sized by the column) with the thumbnail as a clipped overlay,
+                                // so every cell is an identical cropped square regardless of the
+                                // image's aspect ratio.
+                                Color.clear
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .overlay { PeekGridCell(item: item, thumbnails: context.thumbnails) }
                                     .clipped()
                                     .contentShape(Rectangle())
                                     .onTapGesture { openedPeek = item }
                             }
                         }
-                        .padding(2)
+                        .padding(Theme.gridGap)
                     }
                 }
             }
