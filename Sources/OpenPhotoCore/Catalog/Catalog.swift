@@ -181,6 +181,21 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// Clear a pending deletion only once NO vault still holds the hash in presence — i.e. it has
+    /// been binned on every copy. A drive that still holds it (e.g. a disconnected backup whose
+    /// presence row persists) keeps the deletion pending until it too is propagated.
+    public func clearPendingDeletionsWithoutPresence(hashes: [String]) throws {
+        guard !hashes.isEmpty else { return }
+        try dbQueue.write { db in
+            let marks = databaseQuestionMarks(count: hashes.count)
+            try db.execute(sql: """
+                DELETE FROM pending_deletions
+                WHERE hash IN (\(marks))
+                  AND NOT EXISTS (SELECT 1 FROM vault_presence vp WHERE vp.hash = pending_deletions.hash)
+                """, arguments: StatementArguments(hashes))
+        }
+    }
+
     public func pendingDeletions() throws -> [PendingDeletionRecord] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """

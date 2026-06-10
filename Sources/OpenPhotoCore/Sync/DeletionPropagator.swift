@@ -77,7 +77,10 @@ public struct DeletionPropagator: Sendable {
         try Manifest.write(remaining, to: drive.manifestURL)
 
         try catalog.removeVaultPresence(vaultID: drive.descriptor.vaultID, hashes: clearedHashes)
-        try catalog.clearPendingDeletions(hashes: clearedHashes)
+        // Clear the queue entry only for hashes no drive holds anymore — this drive's presence was
+        // just removed above, so a deletion stays pending while any OTHER drive (e.g. an unplugged
+        // backup) still has it, and applies when that drive next connects.
+        try catalog.clearPendingDeletionsWithoutPresence(hashes: clearedHashes)
 
         if moved > 0 {
             SyncLog.append(event: "delete", summary: "\(moved) propagated to drive bin",
