@@ -60,16 +60,10 @@ struct TimelineTileBadges: View {
     var body: some View {
         ZStack {
             kindGlyph.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            if item.driveRelPath != nil {
-                glyph("externaldrive.fill", size: 9, opacity: 0.70)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
-            if backedUp {
-                glyph("externaldrive.fill.badge.checkmark", size: 10, opacity: 0.92)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            }
+            presenceGlyph
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             if item.favorite {
-                glyph("heart.fill", size: 10, opacity: 0.92)
+                glyph("heart.fill", size: 10, color: .white.opacity(0.92))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
         }
@@ -88,9 +82,26 @@ struct TimelineTileBadges: View {
         return String(format: "%d:%02d", Int(s) / 60, Int(s) % 60)
     }
 
-    private func glyph(_ symbol: String, size: CGFloat, opacity: Double) -> some View {
+    /// One presence badge, by priority — shown only when there's something to know.
+    /// On-Mac + on-canonical (the safe, common case) shows nothing.
+    @ViewBuilder private var presenceGlyph: some View {
+        if item.driveRelPath != nil {
+            if backedUp {
+                glyph("externaldrive.fill", size: 10, color: .white.opacity(0.92))
+                    .help("On the canonical drive \u{2014} connect it for full-res")
+            } else {
+                glyph("externaldrive.badge.exclamationmark", size: 10, color: Theme.amber)
+                    .help("On a drive, not the canonical")
+            }
+        } else if !backedUp {
+            glyph("exclamationmark.triangle.fill", size: 10, color: Theme.amber)
+                .help("Not backed up to the canonical drive")
+        }
+    }
+
+    private func glyph(_ symbol: String, size: CGFloat, color: Color) -> some View {
         Image(systemName: symbol).font(.system(size: size))
-            .foregroundStyle(.white.opacity(opacity)).shadow(radius: 2).padding(6)
+            .foregroundStyle(color).shadow(radius: 2).padding(6)
     }
 
     private func capsule(symbol: String, text: String? = nil) -> some View {
