@@ -66,7 +66,59 @@ public struct SyncEngine: Sendable {
         return plan
     }
 
+    /// Plan a canonical→backup mirror: diff the source drive's manifest against the destination's,
+    /// queueing every source file (and sidecar) missing from the destination, IDENTITY-mapped
+    /// (destRelPath == source manifest path — the source drive's paths are already in drive layout,
+    /// so there is no root-basename re-prefix). Additive: a destination path with the same hash is
+    /// skipped; with a different hash (or unreadable) it is a conflict, never overwritten.
+    public func planClone(source: Vault, destinationVault dest: Vault) throws -> SyncPlan {
+        let fm = FileManager.default
+        let destEntries = try Manifest.read(from: dest.manifestURL)
+        var destByPath: [String: String] = [:]
+        for e in destEntries { destByPath[e.path] = e.hash.stringValue }
+
+        var plan = SyncPlan()
+        for e in try Manifest.read(from: source.manifestURL) {
+            let path = e.path                                   // identity map — a mirror
+            let srcURL = source.absoluteURL(forRelativePath: path)
+            let destURL = dest.rootURL.appendingPathComponent(path)
+
+            if let known = destByPath[path] {
+                if known != e.hash.stringValue {
+                    plan.conflicts.append(PlanItem(hash: e.hash.stringValue, sourceURL: srcURL,
+                                                   destRelPath: path, size: e.size))
+                } // same hash → already present, skip
+            } else if fm.fileExists(atPath: destURL.path) {
+                let onDisk = try? ContentHash.ofFile(at: destURL).stringValue
+                if onDisk != e.hash.stringValue {
+                    plan.conflicts.append(PlanItem(hash: e.hash.stringValue, sourceURL: srcURL,
+                                                   destRelPath: path, size: e.size))
+                }
+            } else {
+                plan.copies.append(PlanItem(hash: e.hash.stringValue, sourceURL: srcURL,
+                                            destRelPath: path, size: e.size))
+                plan.totalCopyBytes += e.size
+            }
+
+            // Sidecar: mirror identically (source drive's sidecar lives at <dir>/.openphoto/<file>.xmp).
+            let dir = (path as NSString).deletingLastPathComponent
+            let fileName = (path as NSString).lastPathComponent
+            let sidecarRel = dir.isEmpty ? ".openphoto/\(fileName).xmp"
+                                         : "\(dir)/.openphoto/\(fileName).xmp"
+            let srcSidecar = source.rootURL.appendingPathComponent(sidecarRel)
+            guard fm.fileExists(atPath: srcSidecar.path),
+                  let srcData = try? Data(contentsOf: srcSidecar), !srcData.isEmpty else { continue }
+            let destSidecar = dest.rootURL.appendingPathComponent(sidecarRel)
+            if (try? Data(contentsOf: destSidecar)) != srcData {
+                plan.sidecarUpdates.append(PlanItem(hash: "", sourceURL: srcSidecar,
+                                                    destRelPath: sidecarRel, size: Int64(srcData.count)))
+            }
+        }
+        return plan
+    }
+
     public func apply(_ plan: SyncPlan, destinationVault drive: Vault, volume: DriveVolume,
+                      event: String = "sync", counterpartyVaultID: String? = nil,
                       progress: (@Sendable (SyncProgress) -> Void)? = nil) async -> SyncResult {
         let fm = FileManager.default
         var result = SyncResult()
@@ -138,11 +190,18 @@ public struct SyncEngine: Sendable {
         let summary = "\(result.copied) copied, \(result.skipped) skipped, " +
                       "\(result.sidecarsWritten) sidecars, \(result.conflicts) conflicts, " +
                       "\(result.failed.count) failed"
-        library.appendSyncLog(vault: drive, event: "sync", summary: summary,
-                              counterpartyKey: library.vaults.first?.descriptor.vaultID ?? "")
-        if let mac = library.vaults.first {
-            library.appendSyncLog(vault: mac, event: "sync", summary: summary,
-                                  counterpartyKey: drive.descriptor.vaultID)
+        // Sync-log. Mac→drive sync logs both ends; a drive→drive op (clone) logs only the
+        // destination drive with the supplied counterparty.
+        if event == "sync" {
+            library.appendSyncLog(vault: drive, event: "sync", summary: summary,
+                                  counterpartyKey: library.vaults.first?.descriptor.vaultID ?? "")
+            if let mac = library.vaults.first {
+                library.appendSyncLog(vault: mac, event: "sync", summary: summary,
+                                      counterpartyKey: drive.descriptor.vaultID)
+            }
+        } else {
+            library.appendSyncLog(vault: drive, event: event, summary: summary,
+                                  counterpartyKey: counterpartyVaultID ?? "")
         }
         return result
     }
