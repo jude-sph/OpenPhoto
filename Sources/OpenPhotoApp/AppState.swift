@@ -169,6 +169,39 @@ final class AppState {
         return true
     }
 
+    /// When the registered canonical is NOT connected (lost/failed but not yet forgotten), the
+    /// precise data-loss picture of recovering from backup `vr`: how many at-risk photos the Mac can
+    /// still supply vs how many are lost. nil if there is no registered canonical (already forgotten).
+    func recoveryAcknowledgment(_ vr: VaultRecord) -> RecoveryLoss? {
+        guard let lib = library, let lostCanon = canonicalVault, !driveIsPresent(lostCanon) else { return nil }
+        let lostHashes = (try? lib.catalog.vaultPresenceHashes(forVault: lostCanon.id)) ?? []
+        let backupHashes = (try? lib.catalog.vaultPresenceHashes(forVault: vr.id)) ?? []
+        let macLocalHashes = (try? lib.catalog.instanceHashes()) ?? []
+        return recoveryLoss(lostCanonicalHashes: lostHashes, backupHashes: backupHashes,
+                            macLocalHashes: macLocalHashes)
+    }
+
+    /// Recovery: promote backup `vr` to canonical when the old canonical is absent (acknowledged by
+    /// the caller). Flip the catalog roles (the absent old → backup in the catalog; its vault.json is
+    /// reconciled on reconnect by the conflict detector), then SALVAGE everything the Mac still holds
+    /// via the existing one-way Mac→canonical sync.
+    func recoverCanonical(_ vr: VaultRecord) async {
+        guard let lib = library, let newVault = openVault(for: vr) else { return }
+        let lostID = canonicalVault?.id
+        try? lib.catalog.setCanonical(vr.id, demoting: lostID)
+        _ = try? newVault.writingRole(.canonical)
+        await Task.detached(priority: .userInitiated) {
+            let engine = SyncEngine(library: lib)
+            let plan = (try? engine.plan(sources: lib.vaults, destinationVault: newVault)) ?? SyncPlan()
+            _ = await engine.apply(plan, destinationVault: newVault,
+                                   volume: FileSystemVolume(rootURL: newVault.rootURL))
+        }.value
+        try? refreshCanonicalPresence(driveVault: newVault)
+        let cat = lib.catalog, thumbs = lib.thumbnails
+        await Task.detached(priority: .utility) { try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: newVault) }.value
+        reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
+    }
+
     /// Clone the canonical onto `vr` (both must be connected): copy the diff hash-verified, then
     /// mark `vr` a backup in the catalog and refresh its presence. Off-main for the copy.
     @discardableResult
