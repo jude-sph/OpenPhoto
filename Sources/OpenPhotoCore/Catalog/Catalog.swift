@@ -112,6 +112,19 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// Atomically designate `newID` the canonical and (if given) demote `oldID` to backup — one
+    /// transaction, so the catalog never momentarily has zero or two canonicals. The drives'
+    /// `vault.json` self-descriptions are reconciled separately (best-effort); the catalog role is
+    /// authoritative for "which drive is THE canonical".
+    public func setCanonical(_ newID: String, demoting oldID: String?) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE vaults SET role = 'canonical' WHERE id = ?", arguments: [newID])
+            if let oldID {
+                try db.execute(sql: "UPDATE vaults SET role = 'backup' WHERE id = ?", arguments: [oldID])
+            }
+        }
+    }
+
     /// Forget a vault: drop its registration + its presence rows. Files on disk are untouched;
     /// the catalog is rebuildable, so any drive-only AssetRecords it left become harmless orphans.
     public func unregisterVault(id: String) throws {
