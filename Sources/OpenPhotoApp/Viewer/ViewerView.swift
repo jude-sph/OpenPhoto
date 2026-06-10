@@ -61,18 +61,18 @@ struct ViewerView: View {
                 // Video fills the whole stage — over the top bar, under the gallery — matching the
                 // immersive full-window look of a zoomed photo (the gallery is the only overlay).
                 // Back: Esc; toggle inspector: i.
-                ZStack {
-                    PlayerView(player: player)
-                        .ignoresSafeArea(.container, edges: .top)   // fill to the very top edge
-                    VStack(spacing: 0) {
-                        // Float the bar over the video (back + inspector stay reachable); a subtle
-                        // gradient keeps the white controls legible over bright frames.
+                VStack(spacing: 0) {
+                    // Video fills from the top edge down to JUST ABOVE the gallery — so the player's
+                    // own controls sit above the gallery (like a photo rests above it), not hidden
+                    // under it — with the top bar floating over the video.
+                    ZStack(alignment: .top) {
+                        PlayerView(player: player)
+                            .ignoresSafeArea(.container, edges: .top)   // still reaches the top edge
                         topBar.background(
                             LinearGradient(colors: [.black.opacity(0.5), .clear],
                                            startPoint: .top, endPoint: .bottom))
-                        Spacer()
-                        galleryBar
                     }
+                    galleryBar
                 }
             } else {
                 VStack(spacing: 0) {
