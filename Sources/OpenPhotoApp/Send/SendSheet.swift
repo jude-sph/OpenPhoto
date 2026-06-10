@@ -15,6 +15,7 @@ struct SendSheet: View {
     @State private var result: SendEngine.Result?
     @State private var running = false
     @State private var sending = false   // user dismissed the warning and started the send
+    @State private var sendFailed = false   // state.send returned nil — couldn't start (device not ready)
 
     /// Title count: what's actually about to be sent. Before the plan loads, or when nothing is
     /// reachable, fall back to the full selection so the header never reads "Send 0".
@@ -35,7 +36,9 @@ struct SendSheet: View {
             Divider().overlay(Theme.hairline)
 
             Group {
-                if let result {
+                if sendFailed {
+                    failedToStartView
+                } else if let result {
                     resultView(result)
                 } else if let plan, !plan.unreachable.isEmpty, !sending {
                     warningView(plan)
@@ -132,6 +135,26 @@ struct SendSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading).padding(24)
     }
 
+    /// `state.send` returned nil — the send couldn't even start (e.g. the device just connected,
+    /// is locked, or its session isn't ready). Distinct from a completed send that had nothing new,
+    /// so a transient hiccup reads as actionable (Try Again) rather than a silent "nothing sent".
+    private var failedToStartView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Couldn't start the send to \(device.name)", systemImage: "exclamationmark.triangle")
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.amber)
+            Text("\(device.name) may not be ready — just connected, locked, or busy. "
+                 + "Make sure it's unlocked and connected, then try again.")
+                .font(.system(size: 12)).foregroundStyle(Theme.textDim)
+            Spacer(minLength: 0)
+            HStack {
+                Spacer()
+                Button("Try Again") { sendFailed = false; Task { await run(plan?.sendable ?? []) } }
+                    .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(24)
+    }
+
     /// Compute the plan once. If nothing is unreachable, send immediately (today's flow);
     /// otherwise wait — `warningView` drives the send when the user confirms.
     private func prepareThenMaybeSend() async {
@@ -147,10 +170,14 @@ struct SendSheet: View {
     private func run(_ sendItems: [SendItem]) async {
         guard !running, result == nil else { return }
         running = true
+        sendFailed = false
+        progress = nil
         let r = await state.send(sendItems, to: device) { p in
             Task { @MainActor in progress = p }
         }
-        result = r ?? SendEngine.Result()
+        // nil = the send couldn't start (a precondition/device-session failure) → surface it as an
+        // actionable error; a non-nil empty Result is a real "nothing new to send".
+        if let r { result = r } else { sendFailed = true }
         running = false
     }
 }
