@@ -216,7 +216,7 @@ struct ViewerView: View {
 /// GPU-composited zoomable/pannable image. The CGImage is uploaded once as a
 /// CALayer's contents; pinch/scroll/double-click only adjust the layer's frame
 /// (a GPU transform), so there is no per-frame rasterization or SwiftUI re-render.
-private struct ZoomableImageView: NSViewRepresentable {
+struct ZoomableImageView: NSViewRepresentable {
     let image: NSImage
     func makeNSView(context: Context) -> ZoomPanLayerView {
         let v = ZoomPanLayerView()
