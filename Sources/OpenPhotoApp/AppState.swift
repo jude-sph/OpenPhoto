@@ -338,11 +338,16 @@ final class AppState {
     /// Full-res URL for an item: local file, or the drive file when the drive is connected.
     func fullResURL(for item: TimelineItem) -> URL? {
         if item.driveRelPath == nil { return library?.absoluteURL(for: item) }
-        guard let vr = durableVaults.first(where: { $0.id == item.vaultID }),
-              driveIsPresent(vr),
-              let drive = openVault(for: vr) else { return nil }
-        let url = drive.absoluteURL(forRelativePath: item.driveRelPath!)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        // Drive-only: source from any connected durable drive holding the hash (canonical preferred),
+        // not only the pinned vault — so a backup serves when the canonical is unplugged. Skip a drive
+        // whose recorded copy is missing on disk and try the next.
+        for drive in connectedDrivesCanonicalFirst() {
+            guard let row = (try? library?.catalog.vaultPresenceRows(forVault: drive.descriptor.vaultID))?
+                    .first(where: { $0.hash == item.hash }) else { continue }
+            let url = drive.absoluteURL(forRelativePath: row.driveRelPath)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
     }
 
     func isDriveOnly(_ item: TimelineItem) -> Bool { item.driveRelPath != nil }

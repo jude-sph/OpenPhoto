@@ -25,16 +25,12 @@ extension LibraryService {
     /// - Local item (`driveRelPath == nil`): sourced from its local vault file. Dropped if the
     ///   vault is unknown (matches the prior `compactMap` behavior); a present-but-vanished file is
     ///   NOT dropped here — the destination reports it failed, exactly as before.
-    /// - Drive-only item whose `vaultID` is among `connectedDrives` (keyed by `descriptor.vaultID`):
-    ///   sourced directly from the drive file — no staging.
+    /// - Drive-only item: sourced from any connected durable drive holding the hash (canonical-first),
+    ///   so a backup serves when the canonical is unplugged — no staging.
     /// - Drive-only item whose drive is absent: `unreachable`, named via `driveNames[vaultID]`.
-    ///
-    /// Pure: builds URLs and value structs only; does not read the filesystem.
     public func resolveSendSources(_ items: [TimelineItem],
                                    connectedDrives: [Vault],
                                    driveNames: [String: String]) -> SendSourcePlan {
-        let drivesByID = Dictionary(connectedDrives.map { ($0.descriptor.vaultID, $0) },
-                                    uniquingKeysWith: { first, _ in first })
         var sendable: [SendItem] = []
         var unreachable: [UnreachableSendItem] = []
         for item in items {
@@ -45,8 +41,8 @@ extension LibraryService {
                 guard let url = absoluteURL(for: item) else { continue }
                 sendable.append(SendItem(hash: item.hash, originalURL: url,
                                          fingerprint: fingerprint, displayName: name))
-            } else if let drive = drivesByID[item.vaultID] {
-                let url = drive.absoluteURL(forRelativePath: item.driveRelPath!)
+            } else if let (drive, row) = driveSource(forHash: item.hash, among: connectedDrives) {
+                let url = drive.absoluteURL(forRelativePath: row.driveRelPath)
                 sendable.append(SendItem(hash: item.hash, originalURL: url,
                                          fingerprint: fingerprint, displayName: name))
             } else {

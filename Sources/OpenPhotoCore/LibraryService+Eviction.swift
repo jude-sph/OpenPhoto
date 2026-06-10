@@ -76,10 +76,13 @@ extension LibraryService {
         var outcome = RehydrateOutcome()
         var restoredPerVault: [String: Int] = [:]   // vaultID → count restored (sync-log + rescan)
         for item in items where item.driveRelPath != nil {
-            guard let drive = connectedCanonical.first(where: { $0.descriptor.vaultID == item.vaultID })
+            // Source from ANY connected drive that holds the still (passed canonical-first), not only
+            // the pinned vault — so a backup serves when the canonical is unplugged. The chosen drive's
+            // presence row carries the path (correct even if a non-mirror backup uses a different one).
+            guard let (drive, stillRow) = driveSource(forHash: item.hash, among: connectedCanonical)
             else { outcome.failed += 1; continue }
             var halves: [(hash: String, driveRelPath: String, relPath: String)] =
-                [(item.hash, item.driveRelPath!, item.relPath)]
+                [(item.hash, stillRow.driveRelPath, item.relPath)]
             if let pairHash = item.livePairHash,
                let row = (try? catalog.vaultPresenceRows(forVault: drive.descriptor.vaultID))?
                     .first(where: { $0.hash == pairHash }) {
