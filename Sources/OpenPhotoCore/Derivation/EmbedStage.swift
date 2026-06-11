@@ -203,6 +203,14 @@ public final class EmbedStage: @unchecked Sendable {
 extension EmbedStage: DerivationStage {
     public var id: String { "embed" }
     public var eligibleKind: String { "photo" }
+    /// True iff the image model package exists on disk. This is a cheap file-existence check —
+    /// the model is NOT compiled just to determine availability. When false the runner skips the
+    /// embed stage entirely (jobs stay pending) rather than driving them to the failure cap.
+    public var isAvailable: Bool {
+        guard let dir = modelDirectory else { return false }
+        return FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("mobileclip_s2_image.mlpackage").path)
+    }
     public func run(hash: String, url: URL, catalog: Catalog) async -> Bool {
         guard let v = embedImage(at: url) else { return false }
         try? catalog.upsertEmbedding(hash: hash, model: modelID, dim: dim, vector: v)

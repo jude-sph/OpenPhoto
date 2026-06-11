@@ -10,10 +10,15 @@ public final class SemanticIndex: @unchecked Sendable {
 
     public init(catalog: Catalog, model: String) throws {
         let rows = try catalog.allEmbeddings(model: model)
-        self.dim = rows.first?.dim ?? 0
-        self.hashes = rows.map(\.hash)
-        var m = [Float](); m.reserveCapacity(rows.count * dim)
-        for r in rows where r.dim == dim { m.append(contentsOf: r.vector) }
+        let dim = rows.first?.dim ?? 0
+        // Filter once so both `hashes` and `matrix` are built from the same usable rows.
+        // Rows whose stored dim differs from the leading dim are silently dropped — they came
+        // from a model version mismatch and would cause vDSP_mmul to read out-of-bounds.
+        let usable = rows.filter { $0.dim == dim }
+        self.dim = dim
+        self.hashes = usable.map(\.hash)
+        var m = [Float](); m.reserveCapacity(usable.count * dim)
+        for r in usable { m.append(contentsOf: r.vector) }
         self.matrix = m
     }
 

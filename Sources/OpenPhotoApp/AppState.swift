@@ -92,14 +92,17 @@ final class AppState {
         let currentIndex = semanticIndex
         Task {
             // Run all heavy work (SQL + Accelerate + Core ML) off the main actor.
-            let (hashes, freshIndex): ([String], SemanticIndex?) = await Task.detached(priority: .userInitiated) {
+            let (items, freshIndex): ([TimelineItem], SemanticIndex?) = await Task.detached(priority: .userInitiated) {
                 let structured: [String]
                 if filters.isEmpty {
                     structured = q.isEmpty ? [] : (try? lib.catalog.allHashesNewestFirst()) ?? []
                 } else {
                     structured = (try? lib.catalog.structuredFilter(filters)) ?? []
                 }
-                guard !q.isEmpty else { return (structured, nil) }
+                guard !q.isEmpty else {
+                    let its = (try? lib.catalog.items(forHashes: structured, preservingOrder: true)) ?? []
+                    return (its, nil)
+                }
                 let text = (try? lib.catalog.textMatches(q)) ?? []
                 // Rebuild semantic index if dirty.
                 let idx: SemanticIndex?
@@ -119,9 +122,9 @@ final class AppState {
                 }
                 let ranked = SearchRanker.combine(structured: structured, text: text,
                                                   semantic: semantic, hasText: true)
-                return (ranked, builtFresh)
+                let its = (try? lib.catalog.items(forHashes: ranked, preservingOrder: true)) ?? []
+                return (its, builtFresh)
             }.value
-            let items = (try? lib.catalog.items(forHashes: hashes, preservingOrder: true)) ?? []
             // Publish results + store fresh index (if rebuilt) back on the main actor.
             self.searchResults = items
             self.searching = false
@@ -960,6 +963,10 @@ final class AppState {
         guard let lib = library else { return }
         for stage in derivationStages {
             if Task.isCancelled { break }
+            // If the stage's backing resources (e.g. the embed model package) are absent on this
+            // machine, skip the whole stage — leave its jobs pending so they resume once the model
+            // ships. Do NOT mark anything failed; that would permanently exclude jobs from retries.
+            guard stage.isAvailable else { continue }
             let pending = (try? lib.catalog.pendingDerivation(stage: stage.id)) ?? []
             guard !pending.isEmpty else { continue }
             // Seed the progress line from the catalog so it appears immediately, then advance it
@@ -990,10 +997,12 @@ final class AppState {
     }
 
     /// Combined remaining work across all stages (sidebar shows the sum).
+    /// Only includes stages whose backing resources are available — unavailable stages are skipped
+    /// by the runner and their pending jobs won't move, so adding them would inflate the total.
     private func combinedProgress() -> (done: Int, total: Int)? {
         guard let lib = library else { return nil }
         var done = 0, total = 0
-        for stage in derivationStages {
+        for stage in derivationStages where stage.isAvailable {
             if let p = try? lib.catalog.derivationProgress(stage: stage.id) {
                 done += p.done; total += p.total
             }
