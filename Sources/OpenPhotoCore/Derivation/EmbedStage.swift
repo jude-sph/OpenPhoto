@@ -195,3 +195,17 @@ public final class EmbedStage: @unchecked Sendable {
         return buffer
     }
 }
+
+// MARK: - DerivationStage conformance
+// Image side feeds the background pipeline; text side (embedText) is query-time only.
+// `EmbedStage` is `@unchecked Sendable`; `hash`/`url` are value types; `catalog` is Sendable.
+// The runner calls this inside `Task.detached(.utility)`, keeping inference off the main actor.
+extension EmbedStage: DerivationStage {
+    public var id: String { "embed" }
+    public var eligibleKind: String { "photo" }
+    public func run(hash: String, url: URL, catalog: Catalog) async -> Bool {
+        guard let v = embedImage(at: url) else { return false }
+        try? catalog.upsertEmbedding(hash: hash, model: modelID, dim: dim, vector: v)
+        return true
+    }
+}

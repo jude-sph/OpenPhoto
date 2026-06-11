@@ -834,6 +834,7 @@ final class AppState {
             deviceWatcher.openedDeviceRemoved = { [weak self] id in
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
             }
+            try? library?.catalog.reconcileEmbeddingModel(current: EmbedStage().modelID)
             Task { await rescan(); pokeDerivation() }
             // Load drives + badge presence from the persisted catalog, then auto-scan connected
             // drives so badges + status reflect reality without a manual Check. Re-scan on any
@@ -875,6 +876,9 @@ final class AppState {
     }
 
     private var derivationTask: Task<Void, Never>?
+    /// Stage registry: each stage's whole pending set is drained in order. Inference runs off-main
+    /// via `Task.detached(.utility)` inside `drainDerivation`. Add stages here as they are implemented.
+    private let derivationStages: [any DerivationStage] = [OCRDerivationStage(), EmbedStage()]
 
     /// Kick the background derivation runner if it isn't already draining. Called at library-open
     /// and after anything that adds assets (scan/ingest). Cheap + idempotent.
@@ -886,35 +890,52 @@ final class AppState {
         }
     }
 
-    /// Drain every pending OCR job once (low priority, off-main Vision, yielding between items).
-    /// Pulls the WHOLE pending set up front so an unreachable newest asset can't block older
-    /// reachable ones behind a fixed window. Unreachable assets are skipped (retried on the next
-    /// poke, e.g. when their drive connects), not marked failed.
+    /// Drain every pending job for each stage in the registry (low priority, inference off-main,
+    /// yielding between items). Pulls each stage's WHOLE pending set up front so an unreachable
+    /// newest asset can't block older reachable ones (the 4.1 starvation lesson). Unreachable
+    /// assets are skipped (retried on the next poke when their drive connects), not marked failed.
     private func drainDerivation() async {
         guard let lib = library else { return }
-        let pending = (try? lib.catalog.pendingDerivation(stage: OCRStage.id)) ?? []
-        guard !pending.isEmpty else { derivationProgress = nil; return }
-        // Seed the progress line from the catalog so it appears immediately, then advance it
-        // locally per successful item — Vision dominates the per-item cost, so a published
-        // increment each item is cheap and keeps the count climbing smoothly with no DB read.
-        var progress = (try? lib.catalog.derivationProgress(stage: OCRStage.id)) ?? (done: 0, total: pending.count)
-        derivationProgress = progress
-        for hash in pending {
+        for stage in derivationStages {
             if Task.isCancelled { break }
-            // "" excludes no vault — any reachable copy (Mac-local or a connected drive) is fine.
-            guard let url = goodCopyURL(forHash: hash, excluding: "") else { continue }  // unreachable → skip
-            let text = await Task.detached(priority: .utility) { OCRStage.recognizeText(in: url) }.value
-            if let text {
-                try? lib.catalog.upsertOCR(hash: hash, text: text)
-                try? lib.catalog.markDerived(hash: hash, stage: OCRStage.id)
-                progress.done += 1
-                derivationProgress = progress
-            } else {
-                try? lib.catalog.markDerivationFailed(hash: hash, stage: OCRStage.id)
+            let pending = (try? lib.catalog.pendingDerivation(stage: stage.id)) ?? []
+            guard !pending.isEmpty else { continue }
+            // Seed the progress line from the catalog so it appears immediately, then advance it
+            // locally per successful item — inference dominates the per-item cost, so a published
+            // increment each item is cheap and keeps the count climbing smoothly with no DB read.
+            var progress = (try? lib.catalog.derivationProgress(stage: stage.id))
+                ?? (done: 0, total: pending.count)
+            derivationProgress = combinedProgress()
+            for hash in pending {
+                if Task.isCancelled { break }
+                // "" excludes no vault — any reachable copy (Mac-local or a connected drive) is fine.
+                guard let url = goodCopyURL(forHash: hash, excluding: "") else { continue }  // unreachable → skip
+                let ok = await Task.detached(priority: .utility) {
+                    await stage.run(hash: hash, url: url, catalog: lib.catalog)
+                }.value
+                if ok {
+                    try? lib.catalog.markDerived(hash: hash, stage: stage.id)
+                    progress.done += 1
+                } else {
+                    try? lib.catalog.markDerivationFailed(hash: hash, stage: stage.id)
+                }
+                derivationProgress = combinedProgress()
+                await Task.yield()
             }
-            await Task.yield()
         }
         derivationProgress = nil
+    }
+
+    /// Combined remaining work across all stages (sidebar shows the sum).
+    private func combinedProgress() -> (done: Int, total: Int)? {
+        guard let lib = library else { return nil }
+        var done = 0, total = 0
+        for stage in derivationStages {
+            if let p = try? lib.catalog.derivationProgress(stage: stage.id) {
+                done += p.done; total += p.total
+            }
+        }
+        return total > 0 ? (done, total) : nil
     }
 
     func refreshQueries() throws {
