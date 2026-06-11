@@ -9,7 +9,6 @@ extension Catalog {
     /// tags are AND-ed: an asset must carry every requested tag (json_each approach).
     public func structuredFilter(_ filters: SearchFilters) throws -> [String] {
         try dbQueue.read { db in
-            // Build WHERE clauses over the timeline union.
             var conditions: [String] = []
             var args: [DatabaseValueConvertible] = []
 
@@ -18,48 +17,83 @@ extension Catalog {
                 args.append(Int64(range.lowerBound.timeIntervalSince1970 * 1000))
                 args.append(Int64(range.upperBound.timeIntervalSince1970 * 1000))
             }
-            if let camera = filters.includeCameras.first {
-                conditions.append("cameraModel = ?")
-                args.append(camera)
-            }
             if let minRating = filters.minRating, minRating > 0 {
-                conditions.append("rating >= ?")
-                args.append(minRating)
+                conditions.append("rating >= ?"); args.append(minRating)
             }
-            if filters.favoritesOnly {
-                conditions.append("favorite = 1")
+            if filters.favoritesOnly { conditions.append("favorite = 1") }
+            if let kind = filters.kind {
+                switch kind {
+                case .photo: conditions.append("kind = 'photo' AND livePairHash IS NULL")
+                case .video: conditions.append("kind = 'video'")
+                case .live:  conditions.append("livePairHash IS NOT NULL")
+                }
             }
-            if filters.kind == .video {
-                conditions.append("kind = 'video'")
+            if !filters.includeCameras.isEmpty {
+                let marks = databaseQuestionMarks(count: filters.includeCameras.count)
+                conditions.append("cameraModel IN (\(marks))")
+                args.append(contentsOf: filters.includeCameras as [DatabaseValueConvertible])
             }
-
-            // Tags AND: use json_each to check every requested tag is present in tagsJSON.
-            // We need the asset to contain ALL requested tags.
-            // Strategy: for each required tag, the asset's tagsJSON must include it.
-            // Use subquery: every tag must match at least one json_each value.
+            if !filters.excludeCameras.isEmpty {
+                let marks = databaseQuestionMarks(count: filters.excludeCameras.count)
+                conditions.append("(cameraModel IS NULL OR cameraModel NOT IN (\(marks)))")
+                args.append(contentsOf: filters.excludeCameras as [DatabaseValueConvertible])
+            }
+            func folderClause(_ folder: String) -> (sql: String, args: [DatabaseValueConvertible]) {
+                let f = folder.precomposedStringWithCanonicalMapping
+                return filters.foldersRecursive
+                    ? ("(dirPath = ? OR dirPath GLOB ?)", [f, f + "/*"])
+                    : ("dirPath = ?", [f])
+            }
+            if !filters.includeFolders.isEmpty {
+                var ors: [String] = []
+                for f in filters.includeFolders {
+                    let c = folderClause(f); ors.append(c.sql); args.append(contentsOf: c.args)
+                }
+                conditions.append("(" + ors.joined(separator: " OR ") + ")")
+            }
+            for f in filters.excludeFolders {
+                let c = folderClause(f); conditions.append("NOT \(c.sql)"); args.append(contentsOf: c.args)
+            }
             for tag in filters.includeTags {
-                conditions.append("""
-                    EXISTS (SELECT 1 FROM json_each(tagsJSON) WHERE json_each.value = ?)
-                    """)
+                conditions.append("EXISTS (SELECT 1 FROM json_each(tagsJSON) WHERE json_each.value = ?)")
                 args.append(tag)
             }
-
-            // Person filter: restrict to assets that have a confirmed face row for that personID.
-            if let person = filters.includePeople.first {
-                conditions.append("hash IN (SELECT hash FROM faces WHERE personID = ?)")
-                args.append(person)
+            for tag in filters.excludeTags {
+                conditions.append("NOT EXISTS (SELECT 1 FROM json_each(tagsJSON) WHERE json_each.value = ?)")
+                args.append(tag)
             }
-
-            // Place filter: restrict to assets with a geocode row matching the country/city.
-            if let place = filters.includePlaces.first {
-                switch place {
-                case .country(let cc):
-                    conditions.append("hash IN (SELECT hash FROM geocode WHERE countryCode = ?)")
-                    args.append(cc)
-                case .city(let cc, let city):
-                    conditions.append("hash IN (SELECT hash FROM geocode WHERE countryCode = ? AND city = ?)")
-                    args.append(cc); args.append(city)
+            for p in filters.includePeople {
+                conditions.append("hash IN (SELECT hash FROM faces WHERE personID = ?)")
+                args.append(p)
+            }
+            if !filters.excludePeople.isEmpty {
+                let marks = databaseQuestionMarks(count: filters.excludePeople.count)
+                conditions.append("hash NOT IN (SELECT hash FROM faces WHERE personID IN (\(marks)))")
+                args.append(contentsOf: filters.excludePeople as [DatabaseValueConvertible])
+            }
+            switch filters.peoplePresence {
+            case .has?:     conditions.append("hash IN (SELECT hash FROM faces)")
+            case .without?: conditions.append("hash NOT IN (SELECT hash FROM faces)")
+            case nil:       break
+            }
+            func placePredicate(_ p: PlaceFilter) -> (sql: String, args: [DatabaseValueConvertible]) {
+                switch p {
+                case .country(let cc):        return ("countryCode = ?", [cc])
+                case .city(let cc, let city): return ("(countryCode = ? AND city = ?)", [cc, city])
                 }
+            }
+            if !filters.includePlaces.isEmpty {
+                var ors: [String] = []
+                for p in filters.includePlaces { let c = placePredicate(p); ors.append(c.sql); args.append(contentsOf: c.args) }
+                conditions.append("hash IN (SELECT hash FROM geocode WHERE \(ors.joined(separator: " OR ")))")
+            }
+            if !filters.excludePlaces.isEmpty {
+                var ors: [String] = []
+                for p in filters.excludePlaces { let c = placePredicate(p); ors.append(c.sql); args.append(contentsOf: c.args) }
+                conditions.append("hash NOT IN (SELECT hash FROM geocode WHERE \(ors.joined(separator: " OR ")))")
+            }
+            if filters.hasText {
+                conditions.append("hash IN (SELECT hash FROM ocr WHERE text <> '')")
             }
 
             let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
