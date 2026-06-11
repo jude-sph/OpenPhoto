@@ -21,7 +21,7 @@ public final class Catalog: Sendable {
     /// On-disk catalog schema version — the latest registered migration below. Written into a
     /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
     /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
-    public static let schemaVersion = 6
+    public static let schemaVersion = 7
 
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
@@ -123,6 +123,16 @@ public final class Catalog: Sendable {
                 t.column("srcRelPath", .text)
                 t.column("dstRelPath", .text)
                 t.column("createdAtMs", .integer).notNull()
+            }
+        }
+        migrator.registerMigration("v7") { db in
+            // Per-asset CLIP-class image embedding (rebuildable cache; machine-derived).
+            // `vector` = dim × Float16 little-endian, L2-normalized. `model` lets a swap invalidate.
+            try db.create(table: "embeddings") { t in
+                t.primaryKey("hash", .text)
+                t.column("model", .text).notNull()
+                t.column("dim", .integer).notNull()
+                t.column("vector", .blob).notNull()
             }
         }
         try migrator.migrate(dbQueue)
