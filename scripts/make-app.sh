@@ -29,9 +29,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# App icon — build OpenPhoto.icns from the 1024px source PNG if present.
+# App icon — build OpenPhoto.icns from the 1024px source PNG if present. Prefer the macOS-named
+# source; if it's absent (e.g. replaced with a freshly-exported icon under a different name), fall
+# back to the newest "OpenPhoto-*-1024x1024@1x.png" that isn't an archived "-old" copy.
 ICON_SRC="OpenPhoto-macOS-Default-1024x1024@1x.png"
-if [[ -f "$ICON_SRC" ]]; then
+if [[ ! -f "$ICON_SRC" ]]; then
+  ICON_SRC="$(ls -t OpenPhoto-*-1024x1024@1x.png 2>/dev/null | grep -v -- '-old' | head -1)"
+fi
+if [[ -n "$ICON_SRC" && -f "$ICON_SRC" ]]; then
   ICONSET="$(mktemp -d)/OpenPhoto.iconset"
   mkdir -p "$ICONSET"
   for s in 16 32 128 256 512; do
