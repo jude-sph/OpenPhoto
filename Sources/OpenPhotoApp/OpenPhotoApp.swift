@@ -65,11 +65,12 @@ struct RootView: View {
                     }
                     Divider().overlay(Theme.hairline)
                         .ignoresSafeArea(.container, edges: .top)
-                    // Match the divider: let the content (its top toolbar) reach the window top
-                    // instead of floating below the hidden-title-bar safe-area band, which left an
-                    // empty dark strip above every view's header.
+                    // Match the divider: pull the content's top toolbar up to the window top so it
+                    // doesn't float below the hidden-title-bar safe-area band (the empty strip above
+                    // every header) — but ONLY when the sidebar is shown. Collapsed, the strip is too
+                    // narrow for the traffic lights, so the toolbar must stay below the band to clear them.
                     detail
-                        .ignoresSafeArea(.container, edges: .top)
+                        .ignoresSafeArea(.container, edges: state.sidebarShown ? .top : [])
                 }
                 .animation(.easeOut(duration: 0.18), value: state.sidebarShown)
                 if state.openedItem != nil {
