@@ -15,7 +15,7 @@ import Foundation
     try Manifest.write([entry], to: drive.manifestURL)
 
     // Flip one byte in place WITHOUT changing length, then restore the mtime.
-    let fh = try FileHandle(forUpdatingAtPath: url.path)!
+    let fh = FileHandle(forUpdatingAtPath: url.path)!
     try fh.seek(toOffset: 0); let first = try fh.read(upToCount: 1) ?? Data([0])
     try fh.seek(toOffset: 0); try fh.write(contentsOf: Data([first[0] ^ 0xFF])); try fh.close()
     try FileManager.default.setAttributes([.modificationDate: savedMtime], ofItemAtPath: url.path)
