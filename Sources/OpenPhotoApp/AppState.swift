@@ -25,6 +25,15 @@ enum SidebarItem: String, Hashable, CaseIterable {
     }
 }
 
+/// A suggested group of look-alike faces produced by FaceClusterer — not yet named as a Person.
+/// Used by the People view to show unnamed clusters the user can confirm / name.
+struct FaceCluster: Identifiable, Sendable {
+    let faceIDs: [Int64]
+    let representativeFaceID: Int64
+    let count: Int
+    var id: Int64 { representativeFaceID }
+}
+
 @Observable @MainActor
 final class AppState {
     static let rootsDefaultsKey = "libraryRootPaths"
@@ -80,6 +89,41 @@ final class AppState {
     var searching = false
     private var semanticIndex: SemanticIndex?
     private var semanticIndexDirty = true     // set true after an embed drain
+
+    // MARK: — People state
+    var people: [PersonRow] = []
+    var suggestedClusters: [FaceCluster] = []
+    var facesLoading = false
+    private var facesDirty = true
+    /// Cosine-distance threshold for suggesting clusters (tuned default; an adjustable slider is
+    /// optional future polish).
+    private let faceClusterThreshold = 0.4
+
+    /// Compute named-people cards (Catalog.people()) and suggested unnamed clusters
+    /// (FaceClusterer over unassignedFacesWithEmbeddings()) off the main actor. Called when the
+    /// People view appears and re-called when facesDirty after a drain.
+    func loadPeople() {
+        guard let lib = library else { return }
+        facesLoading = true
+        let threshold = faceClusterThreshold
+        Task {
+            let (ppl, clusters): ([PersonRow], [FaceCluster]) =
+                await Task.detached(priority: .userInitiated) {
+                    let ppl = (try? lib.catalog.people()) ?? []
+                    let unassigned = (try? lib.catalog.unassignedFacesWithEmbeddings()) ?? []
+                    let groups = FaceClusterer.cluster(unassigned, threshold: threshold)
+                    let conf = groups.map { ids -> FaceCluster in
+                        FaceCluster(faceIDs: ids, representativeFaceID: ids.first ?? 0,
+                                    count: ids.count)
+                    }
+                    return (ppl, conf)
+                }.value
+            self.people = ppl
+            self.suggestedClusters = clusters
+            self.facesLoading = false
+            self.facesDirty = false
+        }
+    }
 
     func runSearch() {
         guard let lib = library else { return }
@@ -943,7 +987,8 @@ final class AppState {
     private var derivationTask: Task<Void, Never>?
     /// Stage registry: each stage's whole pending set is drained in order. Inference runs off-main
     /// via `Task.detached(.utility)` inside `drainDerivation`. Add stages here as they are implemented.
-    private let derivationStages: [any DerivationStage] = [OCRDerivationStage(), EmbedStage()]
+    private let derivationStages: [any DerivationStage] =
+        [OCRDerivationStage(), EmbedStage(), FaceDerivationStage()]
 
     /// Kick the background derivation runner if it isn't already draining. Called at library-open
     /// and after anything that adds assets (scan/ingest). Cheap + idempotent.
@@ -994,6 +1039,7 @@ final class AppState {
         }
         derivationProgress = nil
         semanticIndexDirty = true   // embeddings may have grown → refresh the in-memory index
+        facesDirty = true           // faces may have grown → refresh the People clustering
     }
 
     /// Combined remaining work across all stages (sidebar shows the sum).
