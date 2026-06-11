@@ -99,6 +99,7 @@ struct RootView: View {
             case .map: MapView(state: state)
             case .search: SearchView(state: state)
             case .drives: DrivesView(state: state)
+            case .tidyUp: CleanupView(state: state)
             case .bin: BinView(state: state)
             }
         }

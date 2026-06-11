@@ -4,7 +4,7 @@ import OpenPhotoCore
 typealias Scanner = OpenPhotoCore.Scanner   // Foundation.Scanner collision
 
 enum SidebarItem: String, Hashable, CaseIterable {
-    case timeline, folders, people, map, search, drives, bin
+    case timeline, folders, people, map, search, drives, tidyUp, bin
     var label: String {
         switch self {
         case .timeline: "Timeline"
@@ -13,6 +13,7 @@ enum SidebarItem: String, Hashable, CaseIterable {
         case .map: "Map"
         case .search: "Search"
         case .drives: "Drives"
+        case .tidyUp: "Tidy Up"
         case .bin: "Bin"
         }
     }
@@ -24,6 +25,7 @@ enum SidebarItem: String, Hashable, CaseIterable {
         case .map: "map"
         case .search: "magnifyingglass"
         case .drives: "externaldrive"
+        case .tidyUp: "square.on.square"
         case .bin: "trash"
         }
     }
@@ -158,6 +160,63 @@ final class AppState {
             self.suggestedClusters = clusters
             self.facesLoading = false
             self.facesDirty = false
+        }
+    }
+
+    // MARK: — Tidy Up (cull)
+
+    struct CullGroup: Identifiable {
+        let id: String                 // the keeper hash
+        let items: [TimelineItem]
+        let keep: String
+        let suggestedEvict: Set<String>
+    }
+    var cullMode: CullMode = .bursts
+    var cullGroups: [CullGroup] = []
+    var cullLoading = false
+
+    /// Compute redundant-photo groups off-main (the loadPeople pattern). Bursts reuse `embeddings`;
+    /// Duplicates use the `phash` table. Sharpness (bursts) is measured on-demand from cached thumbs.
+    func loadCullGroups() {
+        guard let lib = library else { return }
+        let mode = cullMode
+        cullLoading = true
+        Task {
+            let groups: [CullGroup] = await Task.detached(priority: .userInitiated) {
+                let raw: [[String]]
+                switch mode {
+                case .bursts:
+                    let items = (try? lib.catalog.embeddingsWithTakenAt(model: EmbedStage().modelID)) ?? []
+                    raw = BurstGrouper.group(items, windowMs: 60_000, cosineThreshold: 0.93)
+                case .duplicates:
+                    let rows = (try? lib.catalog.phashRowsWithDirPath()) ?? []
+                    raw = DuplicateGrouper.group(rows, hammingThreshold: 6)
+                }
+                var out: [CullGroup] = []
+                for g in raw {
+                    let items = (try? lib.catalog.items(forHashes: g, preservingOrder: true)) ?? []
+                    guard items.count >= 2 else { continue }
+                    var cands: [KeeperSelector.Candidate] = []
+                    for it in items {
+                        var sharp: Double? = nil
+                        if mode == .bursts,
+                           let img = await lib.thumbnails.cachedDisplayImage(
+                               for: ContentHash(stringValue: it.hash), maxPixel: ThumbnailStore.maxPixel) {
+                            sharp = FocusMeasure.varianceOfLaplacian(img)
+                        }
+                        cands.append(.init(hash: it.hash,
+                                           pixelCount: (it.pixelWidth ?? 0) * (it.pixelHeight ?? 0),
+                                           fileSize: it.size, favorite: it.favorite,
+                                           rating: it.rating, sharpness: sharp))
+                    }
+                    let s = KeeperSelector.suggestion(cands, mode: mode)
+                    out.append(CullGroup(id: s.keep, items: items, keep: s.keep,
+                                         suggestedEvict: Set(s.evict)))
+                }
+                return out
+            }.value
+            self.cullGroups = groups
+            self.cullLoading = false
         }
     }
 
@@ -1229,7 +1288,7 @@ final class AppState {
     /// Stage registry: each stage's whole pending set is drained in order. Inference runs off-main
     /// via `Task.detached(.utility)` inside `drainDerivation`. Add stages here as they are implemented.
     private let derivationStages: [any DerivationStage] =
-        [OCRDerivationStage(), EmbedStage(), FaceDerivationStage(), GeocodeStage()]
+        [OCRDerivationStage(), EmbedStage(), FaceDerivationStage(), GeocodeStage(), PHashStage()]
 
     /// Kick the background derivation runner if it isn't already draining. Called at library-open
     /// and after anything that adds assets (scan/ingest). Cheap + idempotent.
