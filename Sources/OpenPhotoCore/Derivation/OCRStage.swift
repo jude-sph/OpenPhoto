@@ -21,3 +21,15 @@ public enum OCRStage {
         return observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
     }
 }
+
+/// `DerivationStage` conformance for OCR — wraps the existing `OCRStage` static func.
+public struct OCRDerivationStage: DerivationStage {
+    public let id = "ocr"
+    public let eligibleKind = "photo"
+    public init() {}
+    public func run(hash: String, url: URL, catalog: Catalog) async -> Bool {
+        guard let text = OCRStage.recognizeText(in: url) else { return false }
+        try? catalog.upsertOCR(hash: hash, text: text)
+        return true
+    }
+}

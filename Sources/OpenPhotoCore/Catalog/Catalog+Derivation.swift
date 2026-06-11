@@ -8,8 +8,9 @@ extension Catalog {
     /// The asset kind a derivation stage applies to (v1: OCR → photos only).
     private static func eligibleKind(forStage stage: String) -> String {
         switch stage {
-        case "ocr": return "photo"
-        default:    return "photo"
+        case "ocr":   return "photo"
+        case "embed": return "photo"
+        default:      return "photo"
         }
     }
 

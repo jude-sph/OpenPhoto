@@ -26,7 +26,8 @@ extension Catalog {
         """
 
     // Full union: local rows (with NULL driveRelPath) UNION ALL drive-only rows.
-    private static var timelineSQL: String { "\(localSelect) UNION ALL \(driveSelect)" }
+    // Internal so that Catalog+Search.swift can reuse the union for filter/fetch queries.
+    static var timelineSQL: String { "\(localSelect) UNION ALL \(driveSelect)" }
 
     /// Whole-library browse rows, newest first. `videoOnly` restricts to videos.
     public func timelineItems(videoOnly: Bool = false) throws -> [TimelineItem] {

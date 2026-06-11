@@ -42,5 +42,20 @@ if [[ -f "$ICON_SRC" ]]; then
   rm -rf "$(dirname "$ICONSET")"
 fi
 
+# On-device ML models + CLIP vocab (gitignored, fetched into .models/Resources/). EmbedStage loads
+# them lazily from the app bundle's Resources at runtime; the build tolerates their absence, so this
+# copy is best-effort — skip silently if the models haven't been fetched on this machine.
+MODELS_SRC=".models/Resources"
+if [[ -d "$MODELS_SRC" ]]; then
+  for f in "$MODELS_SRC"/mobileclip_s2_image.mlpackage \
+           "$MODELS_SRC"/mobileclip_s2_text.mlpackage \
+           "$MODELS_SRC"/bpe_simple_vocab_16e6.txt.gz; do
+    [[ -e "$f" ]] && cp -R "$f" "$APP/Contents/Resources/"
+  done
+  echo "Injected MobileCLIP models + vocab into $APP/Contents/Resources/"
+else
+  echo "note: $MODELS_SRC absent — shipping without semantic-search models (search degrades)"
+fi
+
 codesign --force --sign - "$APP"
 echo "Built $APP"
