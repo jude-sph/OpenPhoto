@@ -327,6 +327,9 @@ struct InspectorView: View {
         case .believed:
             Text("sent").font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(Theme.blue)
+        case .stale:
+            Text("removed").font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Theme.amber)
         case .historical:
             Text("was here").font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(Theme.textFaint)
