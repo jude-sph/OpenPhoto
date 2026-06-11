@@ -21,7 +21,7 @@ public final class Catalog: Sendable {
     /// On-disk catalog schema version — the latest registered migration below. Written into a
     /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
     /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
-    public static let schemaVersion = 5
+    public static let schemaVersion = 6
 
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
@@ -111,6 +111,18 @@ public final class Catalog: Sendable {
             try db.create(virtualTable: "ocr", using: FTS5()) { t in
                 t.column("hash").notIndexed()
                 t.column("text")
+            }
+        }
+        migrator.registerMigration("v6") { db in
+            // Structural folder ops queued for an offline durable drive — applied on reconnect
+            // before sync so the path-keyed sync doesn't duplicate files.
+            try db.create(table: "pending_folder_ops") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("vaultID", .text).notNull()
+                t.column("op", .text).notNull()          // "move" | "create" | "delete"
+                t.column("srcRelPath", .text)
+                t.column("dstRelPath", .text)
+                t.column("createdAtMs", .integer).notNull()
             }
         }
         try migrator.migrate(dbQueue)

@@ -17,7 +17,7 @@ public enum OCRStage {
         } catch {
             return nil
         }
-        let observations = (request.results as? [VNRecognizedTextObservation]) ?? []
+        let observations = request.results ?? []
         return observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
     }
 }

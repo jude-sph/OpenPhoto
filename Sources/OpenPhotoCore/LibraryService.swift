@@ -144,8 +144,37 @@ public final class LibraryService: Sendable {
 
     public func item(hash: String) throws -> TimelineItem? { try catalog.item(hash: hash) }
 
+    /// Return all relative directory paths (non-hidden, non-.openphoto) under `root`.
+    private func directoriesUnder(_ root: URL) -> [String] {
+        let fm = FileManager.default
+        let prefix = root.path + "/"
+        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]) else { return [] }
+        var dirs: [String] = []
+        for case let url as URL in en {
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                if url.lastPathComponent == ".openphoto" { en.skipDescendants(); continue }
+                // Resolve symlinks on the enumerated URL so its path uses the same
+                // prefix form as `root.path` (on macOS the enumerator may return
+                // /private/var/… while root.path is /var/…).
+                let resolved = url.resolvingSymlinksInPath().path
+                let rel = resolved.hasPrefix(prefix)
+                    ? String(resolved.dropFirst(prefix.count)).precomposedStringWithCanonicalMapping
+                    : url.lastPathComponent
+                if !rel.isEmpty { dirs.append(rel) }
+            }
+        }
+        return dirs
+    }
+
     public func folderTree() throws -> [FolderNode] {
-        let counts = try catalog.folderCounts()
+        var counts = try catalog.folderCounts()
+        // Union in real filesystem directories from the primary vault (so empty dirs appear).
+        if let primaryRoot = vaults.first?.rootURL {
+            for dir in directoriesUnder(primaryRoot) where counts[dir] == nil {
+                counts[dir] = 0
+            }
+        }
         // Materialize every path (and intermediate parents) with direct counts.
         var byPath: [String: FolderNode] = [:]
         for (path, count) in counts where !path.isEmpty {

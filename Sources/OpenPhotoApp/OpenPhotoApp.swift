@@ -57,7 +57,8 @@ struct RootView: View {
                             }
                             .buttonStyle(.plain)
                             .frame(width: 28, height: 24)
-                            .padding(.top, 8)
+                            // Below the vertically-stacked traffic lights, which occupy the strip's top.
+                            .padding(.top, 48)
                             Spacer()
                         }
                         .frame(width: 38)
@@ -65,13 +66,23 @@ struct RootView: View {
                     }
                     Divider().overlay(Theme.hairline)
                         .ignoresSafeArea(.container, edges: .top)
+                    // Match the divider: pull the content's top toolbar up to the window top so it
+                    // doesn't float below the hidden-title-bar safe-area band (the empty strip above
+                    // every header). Safe in both sidebar states — the traffic lights are kept out of
+                    // the content (horizontal over the wide sidebar; vertical inside the 38px strip).
                     detail
+                        .ignoresSafeArea(.container, edges: .top)
                 }
                 .animation(.easeOut(duration: 0.18), value: state.sidebarShown)
                 if state.openedItem != nil {
                     ViewerView(state: state)   // full-window overlay
                 }
             }
+            // Stack the traffic lights vertically when the sidebar is collapsed so they fit the
+            // narrow 38px strip; keep them horizontal when it's shown OR when the full-window viewer
+            // is open (no strip there — the lights sit over the viewer's top bar).
+            .background(VerticalTrafficLights(vertical: !state.sidebarShown && state.openedItem == nil))
+            .background(TitleBarDoubleClickZoom())
         }
     }
 

@@ -148,7 +148,7 @@ struct ImportView: View {
         HStack(spacing: 6) {
             Picker(selection: $destination) {
                 Text("Destination…").tag("")
-                ForEach(allFolders, id: \.self) { f in
+                ForEach(pickerFolders, id: \.self) { f in
                     Text(f).tag(f)
                 }
             } label: {
@@ -179,6 +179,12 @@ struct ImportView: View {
         func walk(_ nodes: [FolderNode]) { for n in nodes { paths.append(n.path); walk(n.children) } }
         walk(state.folderTree)
         return paths.sorted()
+    }
+    /// Picker options including a just-typed new folder, so selecting it never shows a blank menu.
+    private var pickerFolders: [String] {
+        var fs = allFolders
+        if !destination.isEmpty, !fs.contains(destination) { fs.insert(destination, at: 0) }
+        return fs
     }
     private var alreadyImportedCount: Int { items.filter { isImported($0) }.count }
     private var hasPreviouslyImportedOnDevice: Bool {
