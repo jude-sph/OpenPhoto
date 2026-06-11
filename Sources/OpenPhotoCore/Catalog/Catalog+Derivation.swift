@@ -12,6 +12,7 @@ extension Catalog {
         case "embed":   return "photo"
         case "faces":   return "photo"
         case "geocode": return "photo"
+        case "phash":   return "photo"
         default:        return "photo"
         }
     }

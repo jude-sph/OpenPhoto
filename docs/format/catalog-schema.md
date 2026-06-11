@@ -1,4 +1,4 @@
-# OpenPhoto Catalog Schema — Version 9
+# OpenPhoto Catalog Schema — Version 10
 
 **Status:** NORMATIVE for readers of `catalog-snapshot/catalog.sqlite` and for the Mac's live catalog database. Field names are stable from schema version 4 onward; any change bumps the version in `snapshot.json`'s `catalog_schema_version` field.
 
@@ -201,13 +201,24 @@ One row per geotagged asset that has been reverse-geocoded. Machine-derived from
 
 A reader MAY use this table for place display and filtering (e.g. filter to a country or city in a snapshot browser). It is a **droppable cache** — a reader MUST NOT rely on it being present in snapshots older than schema version 9, and MUST treat it as absent if the table is missing.
 
-`Catalog.schemaVersion` is **9** (written into `snapshot.json`'s `catalog_schema_version` field).
+### `phash` (v10, rebuildable)
+
+One row per photo that has been perceptually hashed. Machine-derived from the image bytes by the background `"phash"` derivation stage. 100% rebuildable: dropping this table and re-running the `"phash"` derivation stage re-derives all rows from the original images — no information is permanently lost. **Catalog-only: there is no sidecar write and no vault format change.** The hash is a deterministic function of the decoded image.
+
+| Column | Type | Notes |
+|---|---|---|
+| `hash` | TEXT **PK** | References `assets.hash`. |
+| `value` | INTEGER **NOT NULL** | Signed 64-bit perceptual **dHash** (difference hash) of the image, used for near-duplicate detection. |
+
+A reader MAY use this table for near-duplicate detection (e.g. grouping visually similar photos by Hamming distance over the 64-bit `value`). It is a **droppable cache** — a reader MUST treat it as an optional cache that may be absent (e.g. in snapshots from schema versions < 10), and MUST treat it as absent if the table is missing.
+
+`Catalog.schemaVersion` is **10** (written into `snapshot.json`'s `catalog_schema_version` field).
 
 ---
 
 ## Portability key
 
-> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue), and `pending_folder_ops` (the source Mac's offline-drive folder-op queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping). The v7 `embeddings` table is a droppable cache: a reader MAY use it for image similarity (dot-product over L2-normalized Float16 vectors) if it holds the same model as the `model` column, but MUST NOT rely on it being present — treat it as absent if the model doesn't match or the table is missing. The v8 `faces` and `people` tables: a reader MAY use `faces` for face grouping and `people` for named-person enumeration, but MUST treat `personID`/`people.name` as a mirror only — the durable, authoritative record of confirmed person assignments is the asset's XMP sidecar (`mwg-rs:Regions`). A reader MUST NOT rely on `faces` or `people` being present in older snapshots (schema versions below 8). The v9 `geocode` table is a droppable cache: a reader MAY use it for place display and filtering (city, region, country, countryCode per geotagged asset), but MUST NOT rely on it being present in snapshots older than schema version 9. Place data is sourced from GeoNames (CC BY 4.0) — attribution required: *"Place data © GeoNames (https://www.geonames.org), CC BY 4.0."*
+> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue), and `pending_folder_ops` (the source Mac's offline-drive folder-op queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping). The v7 `embeddings` table is a droppable cache: a reader MAY use it for image similarity (dot-product over L2-normalized Float16 vectors) if it holds the same model as the `model` column, but MUST NOT rely on it being present — treat it as absent if the model doesn't match or the table is missing. The v8 `faces` and `people` tables: a reader MAY use `faces` for face grouping and `people` for named-person enumeration, but MUST treat `personID`/`people.name` as a mirror only — the durable, authoritative record of confirmed person assignments is the asset's XMP sidecar (`mwg-rs:Regions`). A reader MUST NOT rely on `faces` or `people` being present in older snapshots (schema versions below 8). The v9 `geocode` table is a droppable cache: a reader MAY use it for place display and filtering (city, region, country, countryCode per geotagged asset), but MUST NOT rely on it being present in snapshots older than schema version 9. Place data is sourced from GeoNames (CC BY 4.0) — attribution required: *"Place data © GeoNames (https://www.geonames.org), CC BY 4.0."* The v10 `phash` table is a droppable cache: a reader MAY use it for near-duplicate detection (Hamming distance over the signed 64-bit dHash `value` per photo), but MUST treat it as an optional cache that may be absent — it MUST NOT rely on it being present in snapshots from schema versions below 10, and MUST treat it as absent if the table is missing.
 
 ---
 
