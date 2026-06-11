@@ -5,6 +5,7 @@ struct SearchView: View {
     @Bindable var state: AppState
     @State private var cameras: [String] = []
     @State private var allTags: [String] = []
+    @State private var allPeople: [PersonRow] = []
     @State private var debounceTask: Task<Void, Never>?
 
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
@@ -20,6 +21,7 @@ struct SearchView: View {
         .task {
             cameras = (try? state.library?.catalog.distinctCameras()) ?? []
             allTags = (try? state.library?.catalog.distinctTags()) ?? []
+            allPeople = (try? state.library?.catalog.people()) ?? []
         }
     }
 
@@ -152,6 +154,33 @@ struct SearchView: View {
                         }
                         .buttonStyle(.plain)
                     }
+                }
+
+                // Person picker (only when there are named people in the catalog)
+                if !allPeople.isEmpty {
+                    Divider().frame(height: 20)
+                    let activePerson = allPeople.first { $0.id == state.searchFilters.person }
+                    Menu {
+                        Button("Any person") {
+                            state.searchFilters.person = nil
+                            state.runSearch()
+                        }
+                        Divider()
+                        ForEach(allPeople, id: \.id) { person in
+                            Button(person.name) {
+                                state.searchFilters.person = person.id
+                                state.runSearch()
+                            }
+                        }
+                    } label: {
+                        filterChip(
+                            label: activePerson?.name ?? "Person",
+                            active: state.searchFilters.person != nil,
+                            symbol: "person"
+                        )
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                 }
             }
             .padding(.horizontal, 16)
