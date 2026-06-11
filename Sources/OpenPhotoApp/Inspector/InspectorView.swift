@@ -120,6 +120,16 @@ struct InspectorView: View {
                         Text(String(format: "%.4f, %.4f", lat, lon))
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Theme.textFaint)
+                        if let place = try? state.library?.catalog.geocode(forHash: item.hash) {
+                            Button {
+                                state.searchInPlace(place)
+                            } label: {
+                                Label(placeLabel(place), systemImage: "mappin.and.ellipse")
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Theme.accent)
+                        }
                     }
                 }
 
@@ -328,6 +338,15 @@ struct InspectorView: View {
     }
     private func gValue(_ s: String) -> some View {
         Text(s).font(.system(size: 12, weight: .semibold).monospacedDigit())
+    }
+
+    private func placeLabel(_ place: GeocodeRow) -> String {
+        var parts: [String] = []
+        if !place.city.isEmpty { parts.append(place.city) }
+        // Include region only when it differs from the city (avoids "Tokyo, Tokyo, Japan").
+        if !place.region.isEmpty && place.region != place.city { parts.append(place.region) }
+        if !place.country.isEmpty { parts.append(place.country) }
+        return parts.joined(separator: ", ")
     }
 
     private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {

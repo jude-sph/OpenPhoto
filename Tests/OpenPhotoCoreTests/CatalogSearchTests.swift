@@ -72,3 +72,20 @@ private let B = "sha256:" + String(repeating: "b", count: 64)
     #expect(Set(try cat.distinctCameras()) == Set(["Sony", "Canon"]))
     #expect(Set(try cat.distinctTags()) == Set(["rome", "trip"]))
 }
+
+@Test func placeFilterNarrowsAndComposes() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try seedLocal(cat, asset(A, takenAtMs: 2000))
+    try seedLocal(cat, asset(B, takenAtMs: 1000))
+    try cat.upsertGeocode(GeocodeRow(hash: A, city: "Taipei", region: "Taipei",
+                                     country: "Taiwan", countryCode: "TW"))
+    try cat.upsertGeocode(GeocodeRow(hash: B, city: "Tokyo", region: "Tokyo",
+                                     country: "Japan", countryCode: "JP"))
+    // Country facet: only A (Taiwan).
+    #expect(try cat.structuredFilter(.init(place: .country("TW"))) == [A])
+    // City facet: only B (Tokyo).
+    #expect(try cat.structuredFilter(.init(place: .city(countryCode: "JP", city: "Tokyo"))) == [B])
+    // Composes with another filter: A is not a favorite → empty.
+    #expect(try cat.structuredFilter(.init(favoritesOnly: true, place: .country("TW"))).isEmpty)
+}

@@ -9,9 +9,14 @@ public protocol DerivationStage: Sendable {
     /// A stage that returns `false` is skipped entirely — its jobs stay pending and resume once
     /// the resources become available. Defaults to `true` so existing stages need not implement it.
     var isAvailable: Bool { get }
+    /// Whether the stage needs a reachable image file to run. Defaults to `true`.
+    /// Stages that key off catalog data (e.g. GeocodeStage reads stored lat/lon) set this to
+    /// `false` so a drive-only asset with its drive unplugged is still processed.
+    var needsFile: Bool { get }
     func run(hash: String, url: URL, catalog: Catalog) async -> Bool
 }
 
 public extension DerivationStage {
     var isAvailable: Bool { true }
+    var needsFile: Bool { true }
 }

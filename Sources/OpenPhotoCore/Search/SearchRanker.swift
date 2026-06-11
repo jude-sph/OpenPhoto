@@ -1,6 +1,12 @@
 import Foundation
 
-/// Structured (click-to-narrow) filters. person live (4.3); place reserved (4.4).
+/// Place filter: restrict to a whole country (by ISO countryCode) or a specific city within one.
+public enum PlaceFilter: Sendable, Equatable {
+    case country(String)                          // countryCode
+    case city(countryCode: String, city: String)
+}
+
+/// Structured (click-to-narrow) filters. person live (4.3); place live (4.4).
 public struct SearchFilters: Sendable, Equatable {
     public var dateRange: ClosedRange<Date>?
     public var camera: String?
@@ -9,16 +15,17 @@ public struct SearchFilters: Sendable, Equatable {
     public var videoOnly: Bool
     public var tags: [String]        // AND: an asset must carry every tag
     public var person: Int64?        // nil = any person
+    public var place: PlaceFilter?   // nil = anywhere
     public init(dateRange: ClosedRange<Date>? = nil, camera: String? = nil, minRating: Int? = nil,
                 favoritesOnly: Bool = false, videoOnly: Bool = false, tags: [String] = [],
-                person: Int64? = nil) {
+                person: Int64? = nil, place: PlaceFilter? = nil) {
         self.dateRange = dateRange; self.camera = camera; self.minRating = minRating
         self.favoritesOnly = favoritesOnly; self.videoOnly = videoOnly; self.tags = tags
-        self.person = person
+        self.person = person; self.place = place
     }
     public var isEmpty: Bool {
         dateRange == nil && camera == nil && (minRating ?? 0) == 0
-            && !favoritesOnly && !videoOnly && tags.isEmpty && person == nil
+            && !favoritesOnly && !videoOnly && tags.isEmpty && person == nil && place == nil
     }
 }
 

@@ -96,6 +96,7 @@ struct RootView: View {
             case .timeline: TimelineView(state: state)
             case .folders: FoldersView(state: state)
             case .people: PeopleView(state: state)
+            case .map: MapView(state: state)
             case .search: SearchView(state: state)
             case .drives: DrivesView(state: state)
             case .bin: BinView(state: state)

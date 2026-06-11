@@ -4,12 +4,13 @@ import OpenPhotoCore
 typealias Scanner = OpenPhotoCore.Scanner   // Foundation.Scanner collision
 
 enum SidebarItem: String, Hashable, CaseIterable {
-    case timeline, folders, people, search, drives, bin
+    case timeline, folders, people, map, search, drives, bin
     var label: String {
         switch self {
         case .timeline: "Timeline"
         case .folders: "Folders"
         case .people: "People"
+        case .map: "Map"
         case .search: "Search"
         case .drives: "Drives"
         case .bin: "Bin"
@@ -20,6 +21,7 @@ enum SidebarItem: String, Hashable, CaseIterable {
         case .timeline: "photo.on.rectangle.angled"
         case .folders: "folder"
         case .people: "person.2"
+        case .map: "map"
         case .search: "magnifyingglass"
         case .drives: "externaldrive"
         case .bin: "trash"
@@ -97,6 +99,7 @@ final class AppState {
     var suggestedClusters: [FaceCluster] = []
     var facesLoading = false
     private var facesDirty = true
+    private var geocodeDirty = true
     /// Cosine-distance threshold for suggesting clusters (tuned default; an adjustable slider is
     /// optional future polish).
     private let faceClusterThreshold = 0.4
@@ -349,6 +352,21 @@ final class AppState {
                 self.semanticIndexDirty = false
             }
         }
+    }
+
+    /// Deep-link from the inspector's place label into Search, filtered to that place (city or country).
+    func searchInPlace(_ place: GeocodeRow) {
+        searchQuery = ""
+        searchFilters = SearchFilters()
+        // Set the place dimension: prefer city when available, else country.
+        if !place.city.isEmpty {
+            searchFilters.place = .city(countryCode: place.countryCode, city: place.city)
+        } else if !place.countryCode.isEmpty {
+            searchFilters.place = .country(place.countryCode)
+        }
+        selection = .search
+        openedItem = nil
+        runSearch()
     }
 
     /// Viewer: whether the bottom gallery (filmstrip) is expanded. Defaults to shown.
@@ -1160,7 +1178,7 @@ final class AppState {
     /// Stage registry: each stage's whole pending set is drained in order. Inference runs off-main
     /// via `Task.detached(.utility)` inside `drainDerivation`. Add stages here as they are implemented.
     private let derivationStages: [any DerivationStage] =
-        [OCRDerivationStage(), EmbedStage(), FaceDerivationStage()]
+        [OCRDerivationStage(), EmbedStage(), FaceDerivationStage(), GeocodeStage()]
 
     /// Kick the background derivation runner if it isn't already draining. Called at library-open
     /// and after anything that adds assets (scan/ingest). Cheap + idempotent.
@@ -1195,9 +1213,14 @@ final class AppState {
             for hash in pending {
                 if Task.isCancelled { break }
                 // "" excludes no vault — any reachable copy (Mac-local or a connected drive) is fine.
-                guard let url = goodCopyURL(forHash: hash, excluding: "") else { continue }  // unreachable → skip
+                let url = goodCopyURL(forHash: hash, excluding: "")
+                // Stages that need the image bytes are skipped when the file is unreachable
+                // (e.g. drive ejected) — they retry on the next poke. GeocodeStage reads catalog
+                // lat/lon only (needsFile == false), so a drive-only asset still gets geocoded.
+                if url == nil && stage.needsFile { continue }
+                let runURL = url ?? URL(fileURLWithPath: "/")   // geocode ignores url; pass a harmless placeholder
                 let ok = await Task.detached(priority: .utility) {
-                    await stage.run(hash: hash, url: url, catalog: lib.catalog)
+                    await stage.run(hash: hash, url: runURL, catalog: lib.catalog)
                 }.value
                 if ok {
                     try? lib.catalog.markDerived(hash: hash, stage: stage.id)
@@ -1212,6 +1235,7 @@ final class AppState {
         derivationProgress = nil
         semanticIndexDirty = true   // embeddings may have grown → refresh the in-memory index
         facesDirty = true           // faces may have grown → refresh the People clustering
+        geocodeDirty = true         // geocoded places may have grown → inspector picks up new rows
     }
 
     /// Combined remaining work across all stages (sidebar shows the sum).

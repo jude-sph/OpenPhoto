@@ -6,6 +6,7 @@ struct SearchView: View {
     @State private var cameras: [String] = []
     @State private var allTags: [String] = []
     @State private var allPeople: [PersonRow] = []
+    @State private var allPlaces: [PlaceFacet] = []
     @State private var debounceTask: Task<Void, Never>?
 
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
@@ -22,6 +23,7 @@ struct SearchView: View {
             cameras = (try? state.library?.catalog.distinctCameras()) ?? []
             allTags = (try? state.library?.catalog.distinctTags()) ?? []
             allPeople = (try? state.library?.catalog.people()) ?? []
+            allPlaces = (try? state.library?.catalog.distinctPlaces()) ?? []
         }
     }
 
@@ -182,11 +184,66 @@ struct SearchView: View {
                     .menuStyle(.borderlessButton)
                     .fixedSize()
                 }
+
+                // Place picker (only when there are geocoded places in the catalog)
+                if !allPlaces.isEmpty {
+                    Divider().frame(height: 20)
+                    let activePlaceLabel = placeLabel(for: state.searchFilters.place,
+                                                      in: allPlaces)
+                    Menu {
+                        Button("Anywhere") {
+                            state.searchFilters.place = nil
+                            state.runSearch()
+                        }
+                        Divider()
+                        // Country-level facets (city == "")
+                        let countries = allPlaces.filter { $0.city.isEmpty }
+                        ForEach(countries, id: \.self) { facet in
+                            Button("\(facet.country) (\(facet.count))") {
+                                state.searchFilters.place = .country(facet.countryCode)
+                                state.runSearch()
+                            }
+                        }
+                        if !countries.isEmpty {
+                            let cities = allPlaces.filter { !$0.city.isEmpty }
+                            if !cities.isEmpty { Divider() }
+                            ForEach(cities, id: \.self) { facet in
+                                Button("\(facet.city), \(facet.country) (\(facet.count))") {
+                                    state.searchFilters.place = .city(countryCode: facet.countryCode,
+                                                                       city: facet.city)
+                                    state.runSearch()
+                                }
+                            }
+                        }
+                    } label: {
+                        filterChip(
+                            label: activePlaceLabel ?? "Place",
+                            active: state.searchFilters.place != nil,
+                            symbol: "mappin.and.ellipse"
+                        )
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
         .frame(height: 44)
+    }
+
+    /// Build a display label for the currently active place filter.
+    private func placeLabel(for filter: PlaceFilter?, in facets: [PlaceFacet]) -> String? {
+        guard let filter else { return nil }
+        switch filter {
+        case .country(let cc):
+            return facets.first { $0.countryCode == cc && $0.city.isEmpty }?.country ?? cc
+        case .city(let cc, let city):
+            if let facet = facets.first(where: { $0.countryCode == cc && $0.city == city }) {
+                return "\(facet.city), \(facet.country)"
+            }
+            return city
+        }
     }
 
     @ViewBuilder
