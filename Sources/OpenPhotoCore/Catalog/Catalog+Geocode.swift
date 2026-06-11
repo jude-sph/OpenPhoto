@@ -20,6 +20,17 @@ public struct PlaceFacet: Sendable, Equatable, Hashable {
     public let count: Int
 }
 
+/// A lightweight geotagged-asset record for the Map surface (hash + GPS coords + timestamp).
+public struct GeoAsset: Sendable, Equatable {
+    public let hash: String
+    public let lat: Double
+    public let lon: Double
+    public let takenAtMs: Int64
+    public init(hash: String, lat: Double, lon: Double, takenAtMs: Int64) {
+        self.hash = hash; self.lat = lat; self.lon = lon; self.takenAtMs = takenAtMs
+    }
+}
+
 extension Catalog {
     /// Idempotent upsert of a resolved place for an asset.
     public func upsertGeocode(_ row: GeocodeRow) throws {
@@ -51,6 +62,18 @@ extension Catalog {
                   let lat = r["latitude"] as Double?, let lon = r["longitude"] as Double?
             else { return nil }
             return (lat, lon)
+        }
+    }
+
+    /// Every asset with a GPS fix, for the Map surface. Photos without lat/lon are excluded.
+    public func geotaggedAssets() throws -> [GeoAsset] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT hash, latitude, longitude, takenAtMs FROM assets
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL AND isLivePairedVideo = 0
+                ORDER BY takenAtMs DESC
+                """).map { GeoAsset(hash: $0["hash"], lat: $0["latitude"], lon: $0["longitude"],
+                                    takenAtMs: $0["takenAtMs"]) }
         }
     }
 

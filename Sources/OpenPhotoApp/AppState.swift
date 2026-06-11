@@ -4,12 +4,13 @@ import OpenPhotoCore
 typealias Scanner = OpenPhotoCore.Scanner   // Foundation.Scanner collision
 
 enum SidebarItem: String, Hashable, CaseIterable {
-    case timeline, folders, people, search, drives, bin
+    case timeline, folders, people, map, search, drives, bin
     var label: String {
         switch self {
         case .timeline: "Timeline"
         case .folders: "Folders"
         case .people: "People"
+        case .map: "Map"
         case .search: "Search"
         case .drives: "Drives"
         case .bin: "Bin"
@@ -20,6 +21,7 @@ enum SidebarItem: String, Hashable, CaseIterable {
         case .timeline: "photo.on.rectangle.angled"
         case .folders: "folder"
         case .people: "person.2"
+        case .map: "map"
         case .search: "magnifyingglass"
         case .drives: "externaldrive"
         case .bin: "trash"
