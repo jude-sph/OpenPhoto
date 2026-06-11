@@ -16,6 +16,8 @@ struct InspectorView: View {
     @State private var filenameHovered = false
     @State private var showDelete = false
     @State private var showEvict = false
+    @State private var imageFaces: [FaceRow] = []
+    @State private var peopleByID: [Int64: PersonRow] = [:]
     @FocusState private var renameFocused: Bool
 
     var body: some View {
@@ -99,6 +101,10 @@ struct InspectorView: View {
                     }
                 }
                 .disabled(state.isDriveOnly(item))
+
+                if !imageFaces.isEmpty {
+                    inThisImageSection
+                }
 
                 Divider().overlay(Theme.hairline)
 
@@ -222,7 +228,7 @@ struct InspectorView: View {
             .padding(16)
         }
         .background(Theme.bg2)
-        .task(id: item.hash) { load() }
+        .task(id: item.hash) { load(); loadFaces() }
         .alert("Delete this photo?", isPresented: $showDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
@@ -266,6 +272,35 @@ struct InspectorView: View {
                     Label("Rehydrate", systemImage: "arrow.down.circle.dotted")
                 }.controlSize(.small)
                 Spacer()
+            }
+        }
+    }
+
+    /// Faces detected in this photo, as chips: a circular crop + the person's name. Named faces are
+    /// tappable (jump to that person in People); unconfirmed faces read "Unknown".
+    private var inThisImageSection: some View {
+        section("In this image") {
+            FlowLayoutLite(spacing: 8) {
+                ForEach(imageFaces, id: \.id) { face in
+                    let person = face.personID.flatMap { peopleByID[$0] }
+                    Button {
+                        if let person { state.openPerson(person) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            FaceCropView(state: state, faceID: face.id, hash: face.hash,
+                                         rect: face.rect, size: 30)
+                                .frame(width: 30, height: 30)
+                                .clipShape(Circle())
+                            Text(person?.name ?? "Unknown")
+                                .font(.system(size: 12, weight: person != nil ? .medium : .regular))
+                                .foregroundStyle(person != nil ? Theme.accent : Theme.textDim)
+                        }
+                        .padding(.leading, 3).padding(.trailing, 9).padding(.vertical, 3)
+                        .background(person != nil ? Theme.accentDim : Theme.elevated, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(person == nil)
+                }
             }
         }
     }
@@ -367,6 +402,18 @@ struct InspectorView: View {
         favorite = item.favorite
         tags = (try? JSONDecoder().decode([String].self,
                                           from: Data(item.tagsJSON.utf8))) ?? []
+    }
+
+    /// Load the faces detected in this photo + a person lookup, newest-named first then by confidence.
+    private func loadFaces() {
+        let faces = (try? state.library?.catalog.faces(forHash: item.hash)) ?? []
+        let ppl = (try? state.library?.catalog.people()) ?? []
+        peopleByID = Dictionary(uniqueKeysWithValues: ppl.map { ($0.id, $0) })
+        imageFaces = faces.sorted {
+            let an = $0.personID != nil, bn = $1.personID != nil
+            if an != bn { return an }                 // named chips first
+            return $0.confidence > $1.confidence
+        }
     }
 
     private func save() {

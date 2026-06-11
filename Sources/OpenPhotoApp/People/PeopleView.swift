@@ -6,16 +6,21 @@ import OpenPhotoCore
 
 struct PeopleView: View {
     @Bindable var state: AppState
-    /// nil = overview; non-nil = detail for a named person
-    @State private var selectedPerson: PersonRow?
+    /// nil = overview; non-nil = drill into an unnamed cluster to see its photos before naming it.
+    @State private var selectedCluster: FaceCluster?
 
     var body: some View {
-        if let person = selectedPerson {
+        if let cluster = selectedCluster {
+            ClusterDetailView(state: state, cluster: cluster,
+                              onBack: { selectedCluster = nil })
+        } else if let person = state.openedPerson {
+            // Person-detail navigation lives on AppState so the inspector can deep-link here.
             PersonDetailView(state: state, person: person,
-                             onBack: { selectedPerson = nil })
+                             onBack: { state.openedPerson = nil })
         } else {
             PeopleOverviewView(state: state,
-                               onSelectPerson: { selectedPerson = $0 })
+                               onSelectPerson: { state.openedPerson = $0 },
+                               onOpenCluster: { selectedCluster = $0 })
         }
     }
 }
@@ -25,12 +30,12 @@ struct PeopleView: View {
 struct PeopleOverviewView: View {
     @Bindable var state: AppState
     var onSelectPerson: (PersonRow) -> Void
+    var onOpenCluster: (FaceCluster) -> Void
 
     // Merge-selection state (select two named people to merge).
     @State private var mergeSelection: Set<Int64> = []
     @State private var showMergeAlert = false
 
-    private let cardSize: CGFloat = 120
     private let columns = [GridItem(.adaptive(minimum: 108), spacing: 12)]
 
     var body: some View {
@@ -140,13 +145,14 @@ struct PeopleOverviewView: View {
     private var suggestedSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader("Suggested", count: state.suggestedClusters.count)
-            Text("Name a group to add it to People.")
+            Text("Open a group to see its photos, then name it to add it to People.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.textDim)
                 .padding(.bottom, 2)
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(state.suggestedClusters) { cluster in
-                    ClusterCard(state: state, cluster: cluster)
+                    ClusterCard(state: state, cluster: cluster,
+                                onOpen: { onOpenCluster(cluster) })
                 }
             }
         }
@@ -273,31 +279,35 @@ struct PersonCard: View {
 struct ClusterCard: View {
     @Bindable var state: AppState
     let cluster: FaceCluster
+    var onOpen: () -> Void
     @State private var nameField = ""
-    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(spacing: 6) {
-            ZStack(alignment: .bottomTrailing) {
-                FaceCropView(
-                    state: state,
-                    faceID: cluster.representativeFaceID,
-                    hash: nil,
-                    size: 90
-                )
-                .frame(width: 90, height: 90)
-                .clipShape(Circle())
-                // Show count badge if > 1 face
-                if cluster.count > 1 {
-                    Text("\(cluster.count)")
-                        .font(.system(size: 10, weight: .bold).monospacedDigit())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Theme.textDim.opacity(0.8), in: Capsule())
-                        .padding(4)
+            // Tap the face to open the group and review every photo before naming it.
+            Button(action: onOpen) {
+                ZStack(alignment: .bottomTrailing) {
+                    FaceCropView(
+                        state: state,
+                        faceID: cluster.representativeFaceID,
+                        hash: nil,
+                        size: 90
+                    )
+                    .frame(width: 90, height: 90)
+                    .clipShape(Circle())
+                    if cluster.count > 1 {
+                        Text("\(cluster.count)")
+                            .font(.system(size: 10, weight: .bold).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Theme.textDim.opacity(0.8), in: Capsule())
+                            .padding(4)
+                    }
                 }
             }
+            .buttonStyle(.plain)
+            .help("Open this group to see its photos")
             TextField("Name…", text: $nameField)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
@@ -305,7 +315,6 @@ struct ClusterCard: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .background(Theme.bg2, in: RoundedRectangle(cornerRadius: 6))
-                .focused($focused)
                 .onSubmit {
                     let name = nameField.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !name.isEmpty else { return }
@@ -318,70 +327,83 @@ struct ClusterCard: View {
     }
 }
 
-// MARK: - Person detail view (faces/photos grid)
+// MARK: - Person detail view (photos this person appears in)
 
 struct PersonDetailView: View {
     @Bindable var state: AppState
     let person: PersonRow
     var onBack: () -> Void
 
-    @State private var faces: [FaceRow] = []
-    @State private var selectedFaces: Set<Int64> = []
+    @State private var pairs: [FacePhoto] = []
     @State private var allPeople: [PersonRow] = []
+    @State private var selectMode = false
+    @State private var selection = SelectionModel()
     @State private var splitName = ""
     @State private var showSplitField = false
 
-    private let gridColumns = [GridItem(.adaptive(minimum: 88), spacing: Theme.gridGap)]
+    private let gridColumns = [GridItem(.adaptive(minimum: 108), spacing: Theme.gridGap)]
+    private let space = "persongrid"
+    private var thumbPixels: Int { gridThumbnailPixels(forCellMin: 120) }
+    private var photos: [TimelineItem] { pairs.map(\.item) }
+    private var orderedSelectable: [SelectableItem] {
+        pairs.map { SelectableItem(id: $0.id) }
+    }
+    private var selectedFaceIDs: [Int64] { selection.selected.compactMap(Int64.init) }
 
     var body: some View {
         VStack(spacing: 0) {
-            detailToolbar
+            if selectMode { selectionBar } else { detailToolbar }
             Divider().overlay(Theme.hairline)
-            if !selectedFaces.isEmpty {
-                selectionBar
-                Divider().overlay(Theme.hairline)
-            }
-            if faces.isEmpty {
+            if pairs.isEmpty {
                 emptyFaces
             } else {
-                ScrollView {
-                    LazyVGrid(columns: gridColumns, spacing: Theme.gridGap) {
-                        ForEach(faces, id: \.id) { face in
-                            FaceCell(
-                                state: state,
-                                face: face,
-                                allPeople: allPeople,
-                                selected: face.id.map { selectedFaces.contains($0) } ?? false,
-                                onToggleSelect: {
-                                    guard let id = face.id else { return }
-                                    if selectedFaces.contains(id) {
-                                        selectedFaces.remove(id)
-                                    } else {
-                                        selectedFaces.insert(id)
-                                    }
-                                },
-                                onReassign: { targetPerson in
-                                    guard let id = face.id else { return }
-                                    state.reassignFace(id, to: targetPerson?.id,
-                                                       fromPerson: person.id)
-                                    reloadFaces()
-                                },
-                                onUnassign: {
-                                    guard let id = face.id else { return }
-                                    state.reassignFace(id, to: nil, fromPerson: person.id)
-                                    reloadFaces()
-                                }
-                            )
-                        }
-                    }
-                    .padding(Theme.gridGap)
-                }
+                grid
             }
         }
-        .onAppear { reloadFaces(); loadAllPeople() }
+        .onAppear { reload() }
     }
 
-    // MARK: Detail toolbar
+    private var grid: some View {
+        ScrollView {
+            LazyVGrid(columns: gridColumns, spacing: Theme.gridGap) {
+                ForEach(pairs) { pair in
+                    FacePhotoTile(
+                        state: state,
+                        face: pair.face,
+                        item: pair.item,
+                        allPeople: allPeople,
+                        selectMode: selectMode,
+                        selected: selection.contains(pair.id),
+                        space: space,
+                        thumbPixels: thumbPixels,
+                        onTap: { tap(pair) },
+                        onReassign: { target in
+                            guard let id = pair.face.id else { return }
+                            state.reassignFace(id, to: target?.id, fromPerson: person.id)
+                            reload()
+                        }
+                    )
+                }
+            }
+            .padding(Theme.gridGap)
+        }
+        .coordinateSpace(name: space)
+        .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
+                                     space: space, enabled: selectMode))
+    }
+
+    private func tap(_ pair: FacePhoto) {
+        if selectMode {
+            if let idx = orderedSelectable.firstIndex(where: { $0.id == pair.id }) {
+                selection.tap(index: idx, items: orderedSelectable,
+                              extendingRange: NSEvent.modifierFlags.contains(.shift))
+            }
+        } else {
+            state.openViewer(pair.item, within: photos)
+        }
+    }
+
+    // MARK: Toolbars
 
     private var detailToolbar: some View {
         HStack(spacing: 10) {
@@ -399,70 +421,63 @@ struct PersonDetailView: View {
             Text(person.name)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.text)
-            Text("\(faces.count) \(faces.count == 1 ? "face" : "faces")")
+            Text("\(pairs.count) \(pairs.count == 1 ? "photo" : "photos")")
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundStyle(Theme.textDim)
             Spacer()
-            if !selectedFaces.isEmpty {
-                Text("\(selectedFaces.count) selected")
-                    .font(.system(size: 12).monospacedDigit())
-                    .foregroundStyle(Theme.textDim)
+            if !pairs.isEmpty {
+                Button("Select") { selectMode = true }.controlSize(.small)
             }
         }
         .padding(.horizontal, 16)
         .frame(height: Theme.toolbarHeight)
     }
 
-    // MARK: Selection action bar
-
     private var selectionBar: some View {
         HStack(spacing: 12) {
-            Button("Clear") { selectedFaces = [] }
-                .buttonStyle(.plain)
-                .font(.system(size: 12))
+            Text("\(selection.count) selected")
+                .font(.system(size: 13, weight: .medium).monospacedDigit())
                 .foregroundStyle(Theme.textDim)
             Spacer()
+            Button("Deselect") { selection.clear() }
+                .controlSize(.small)
+                .disabled(selection.count == 0)
             Button("Remove from person") {
-                for id in selectedFaces {
+                for id in selectedFaceIDs {
                     state.reassignFace(id, to: nil, fromPerson: person.id)
                 }
-                selectedFaces = []
-                reloadFaces()
+                selection.clear()
+                reload()
             }
-            .buttonStyle(.plain)
-            .font(.system(size: 12))
-            .foregroundStyle(Theme.accent)
+            .controlSize(.small)
+            .disabled(selection.count == 0)
 
             if showSplitField {
                 TextField("New person name…", text: $splitName)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
                     .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 6))
                     .frame(width: 160)
                     .onSubmit {
                         let name = splitName.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !name.isEmpty else { showSplitField = false; return }
-                        state.splitFaces(Array(selectedFaces), fromPerson: person.id,
-                                         toNewPerson: name)
-                        selectedFaces = []; splitName = ""; showSplitField = false
-                        reloadFaces()
+                        state.splitFaces(selectedFaceIDs, fromPerson: person.id, toNewPerson: name)
+                        selection.clear(); splitName = ""; showSplitField = false
+                        reload()
                     }
                 Button("Cancel") { showSplitField = false; splitName = "" }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textDim)
+                    .controlSize(.small)
             } else {
                 Button("Split to new person…") { showSplitField = true }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
+                    .controlSize(.small)
+                    .disabled(selection.count == 0)
             }
+            Button("Done") { selection.clear(); selectMode = false; showSplitField = false }
+                .controlSize(.small)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 6)
-        .background(Theme.bg2)
+        .frame(height: Theme.toolbarHeight)
     }
 
     private var emptyFaces: some View {
@@ -471,7 +486,7 @@ struct PersonDetailView: View {
             Image(systemName: "face.smiling")
                 .font(.system(size: 36))
                 .foregroundStyle(Theme.textFaint)
-            Text("No faces")
+            Text("No photos")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.textDim)
             Spacer()
@@ -479,72 +494,184 @@ struct PersonDetailView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func reloadFaces() {
-        faces = (try? state.library?.catalog.faces(forPerson: person.id)) ?? []
-    }
-
-    private func loadAllPeople() {
+    private func reload() {
+        let faces = (try? state.library?.catalog.faces(forPerson: person.id)) ?? []
+        pairs = state.facePhotos(for: faces)
         allPeople = (try? state.library?.catalog.people()) ?? []
+        // Drop selection entries whose face no longer belongs to this person.
+        if pairs.isEmpty { selection.clear() }
     }
 }
 
-// MARK: - Individual face cell (in person detail)
+// MARK: - Cluster detail view (drill into an unnamed group to name it)
 
-struct FaceCell: View {
+struct ClusterDetailView: View {
     @Bindable var state: AppState
-    let face: FaceRow
-    let allPeople: [PersonRow]
-    var selected: Bool
-    var onToggleSelect: () -> Void
-    var onReassign: (PersonRow?) -> Void
-    var onUnassign: () -> Void
+    let cluster: FaceCluster
+    var onBack: () -> Void
+
+    @State private var pairs: [FacePhoto] = []
+    @State private var nameField = ""
+
+    private let gridColumns = [GridItem(.adaptive(minimum: 108), spacing: Theme.gridGap)]
+    private var thumbPixels: Int { gridThumbnailPixels(forCellMin: 120) }
+    private var photos: [TimelineItem] { pairs.map(\.item) }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            FaceCropView(
-                state: state,
-                faceID: face.id,
-                hash: face.hash,
-                rect: face.rect,
-                size: 88
-            )
-            .frame(width: 88, height: 88)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.cellRadius))
-            .overlay {
-                if selected {
-                    RoundedRectangle(cornerRadius: Theme.cellRadius)
-                        .strokeBorder(Theme.accent, lineWidth: 3)
+        VStack(spacing: 0) {
+            toolbar
+            Divider().overlay(Theme.hairline)
+            if pairs.isEmpty {
+                empty
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: gridColumns, spacing: Theme.gridGap) {
+                        ForEach(pairs) { pair in
+                            FacePhotoTile(
+                                state: state,
+                                face: pair.face,
+                                item: pair.item,
+                                allPeople: [],
+                                selectMode: false,
+                                selected: false,
+                                space: "clustergrid",
+                                thumbPixels: thumbPixels,
+                                onTap: { state.openViewer(pair.item, within: photos) },
+                                onReassign: nil
+                            )
+                        }
+                    }
+                    .padding(Theme.gridGap)
                 }
             }
-            // Confidence label (bottom-left overlay)
-            Text("\(Int(face.confidence * 100))%")
-                .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                .foregroundStyle(.white)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
-                .background(.black.opacity(0.45), in: Capsule())
-                .padding(4)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { onToggleSelect() }
-        .contextMenu {
-            Button {
-                onToggleSelect()
-            } label: {
-                Label(selected ? "Deselect" : "Select", systemImage: selected ? "checkmark.circle" : "circle")
+        .onAppear { reload() }
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 10) {
+            Button(action: onBack) {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
+                    Text("People").font(.system(size: 13))
+                }
+                .foregroundStyle(Theme.accent)
             }
-            Divider()
-            // Move to another person
-            if !allPeople.isEmpty {
-                Menu("Move to person…") {
-                    ForEach(allPeople.filter { $0.id != face.personID }, id: \.id) { p in
-                        Button(p.name) { onReassign(p) }
+            .buttonStyle(.plain)
+            Divider().frame(height: 16)
+            Text("Unnamed group")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.text)
+            Text("\(pairs.count) \(pairs.count == 1 ? "photo" : "photos")")
+                .font(.system(size: 12).monospacedDigit())
+                .foregroundStyle(Theme.textDim)
+            Spacer()
+            TextField("Name this person…", text: $nameField)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 6))
+                .frame(width: 170)
+                .onSubmit(name)
+            Button("Name", action: name)
+                .controlSize(.small)
+                .disabled(nameField.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: Theme.toolbarHeight)
+    }
+
+    private var empty: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "person.crop.circle.badge.questionmark")
+                .font(.system(size: 36)).foregroundStyle(Theme.textFaint)
+            Text("No photos").font(.system(size: 14)).foregroundStyle(Theme.textDim)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func name() {
+        let n = nameField.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty else { return }
+        state.nameCluster(cluster.faceIDs, as: n)
+        nameField = ""
+        onBack()   // the group becomes a named person; return to the overview.
+    }
+
+    private func reload() {
+        let faces: [FaceRow] = cluster.faceIDs.compactMap { id in
+            (try? state.library?.catalog.face(forID: id)) ?? nil
+        }
+        pairs = state.facePhotos(for: faces)
+    }
+}
+
+// MARK: - One photo tile in a person/cluster grid (full photo, opens the viewer on tap)
+
+struct FacePhotoTile: View {
+    @Bindable var state: AppState
+    let face: FaceRow
+    let item: TimelineItem
+    let allPeople: [PersonRow]
+    var selectMode: Bool
+    var selected: Bool
+    var space: String
+    var thumbPixels: Int
+    var onTap: () -> Void
+    /// nil → no per-face management menu (cluster grid). non-nil(person) reassigns, non-nil(nil) unassigns.
+    var onReassign: ((PersonRow?) -> Void)?
+
+    private var tileID: String { face.id.map(String.init) ?? face.hash }
+
+    var body: some View {
+        MediaTile(
+            id: tileID,
+            selectMode: selectMode,
+            selected: selected,
+            rubberBandSpace: space,
+            thumbnail: ThumbnailImage(timelineItem: item, library: state.library!,
+                                      targetPixel: thumbPixels),
+            badges: { confidenceBadge },
+            onTap: onTap
+        )
+        .modifier(FaceTileMenu(face: face, allPeople: allPeople, onReassign: onReassign))
+    }
+
+    private var confidenceBadge: some View {
+        Text("\(Int(face.confidence * 100))%")
+            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4).padding(.vertical, 2)
+            .background(.black.opacity(0.45), in: Capsule())
+            .padding(5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    }
+}
+
+/// Adds the per-face management context menu only in the person grid (onReassign set).
+private struct FaceTileMenu: ViewModifier {
+    let face: FaceRow
+    let allPeople: [PersonRow]
+    let onReassign: ((PersonRow?) -> Void)?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let onReassign {
+            content.contextMenu {
+                if !allPeople.isEmpty {
+                    Menu("Move to person…") {
+                        ForEach(allPeople.filter { $0.id != face.personID }, id: \.id) { p in
+                            Button(p.name) { onReassign(p) }
+                        }
                     }
                 }
+                Button(role: .destructive) { onReassign(nil) } label: {
+                    Label("Remove from person", systemImage: "person.badge.minus")
+                }
             }
-            Button(role: .destructive) { onUnassign() } label: {
-                Label("Remove from person", systemImage: "person.badge.minus")
-            }
+        } else {
+            content
         }
     }
 }
