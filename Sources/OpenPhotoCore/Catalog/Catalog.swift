@@ -21,7 +21,7 @@ public final class Catalog: Sendable {
     /// On-disk catalog schema version — the latest registered migration below. Written into a
     /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
     /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
-    public static let schemaVersion = 9
+    public static let schemaVersion = 10
 
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
@@ -170,6 +170,15 @@ public final class Catalog: Sendable {
                 t.column("countryCode", .text).indexed()
             }
             try db.create(index: "idx_geocode_city", on: "geocode", columns: ["city"])
+        }
+        migrator.registerMigration("v10") { db in
+            // Perceptual image hash (dHash) per photo — rebuildable cache, 100% machine-derived
+            // (a deterministic function of the image bytes). Catalog-only: NO sidecar, NO format
+            // change. Dropping it re-derives by re-running PHashStage.
+            try db.create(table: "phash") { t in
+                t.primaryKey("hash", .text)            // → assets.hash
+                t.column("value", .integer).notNull()  // 64-bit dHash, stored as signed Int64
+            }
         }
         try migrator.migrate(dbQueue)
     }

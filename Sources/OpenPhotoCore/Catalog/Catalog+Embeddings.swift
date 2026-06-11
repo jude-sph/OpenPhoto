@@ -54,6 +54,20 @@ extension Catalog {
         }
     }
 
+    /// (hash, takenAtMs, vector) for `model` — embeddings joined to assets. Feeds BurstGrouper.
+    public func embeddingsWithTakenAt(model: String) throws -> [(hash: String, takenAtMs: Int64, vector: [Float])] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT e.hash AS hash, a.takenAtMs AS takenAtMs, e.dim AS dim, e.vector AS vector
+                FROM embeddings e JOIN assets a ON a.hash = e.hash
+                WHERE e.model = ?
+                """, arguments: [model]).map { row in
+                let dim: Int = row["dim"]
+                return (row["hash"], row["takenAtMs"], Self.unpackFloat16(row["vector"], dim: dim))
+            }
+        }
+    }
+
     /// On a model swap, drop stale-model embeddings + their `embed` jobs so the pipeline re-derives.
     /// No-op in v1's single-model world, but the mechanism must exist.
     public func reconcileEmbeddingModel(current: String) throws {
