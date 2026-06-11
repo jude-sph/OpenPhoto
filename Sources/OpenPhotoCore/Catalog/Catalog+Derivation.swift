@@ -8,10 +8,11 @@ extension Catalog {
     /// The asset kind a derivation stage applies to (v1: OCR → photos only).
     private static func eligibleKind(forStage stage: String) -> String {
         switch stage {
-        case "ocr":   return "photo"
-        case "embed": return "photo"
-        case "faces": return "photo"
-        default:      return "photo"
+        case "ocr":     return "photo"
+        case "embed":   return "photo"
+        case "faces":   return "photo"
+        case "geocode": return "photo"
+        default:        return "photo"
         }
     }
 
@@ -26,8 +27,9 @@ extension Catalog {
                 LEFT JOIN derivation_jobs j ON j.hash = a.hash AND j.stage = ?
                 WHERE a.kind = ? AND a.isLivePairedVideo = 0
                   AND (j.hash IS NULL OR (j.status = 'failed' AND j.attempts < ?))
-                ORDER BY a.takenAtMs DESC
                 """
+            if stage == "geocode" { sql += " AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL" }
+            sql += " ORDER BY a.takenAtMs DESC"
             if let limit { sql += " LIMIT \(limit)" }
             return try String.fetchAll(db, sql: sql,
                 arguments: [stage, kind, Self.maxDerivationAttempts])
@@ -64,8 +66,9 @@ extension Catalog {
     public func derivationProgress(stage: String) throws -> (done: Int, total: Int) {
         let kind = Self.eligibleKind(forStage: stage)
         return try dbQueue.read { db in
+            let gps = stage == "geocode" ? " AND latitude IS NOT NULL AND longitude IS NOT NULL" : ""
             let total = try Int.fetchOne(db, sql:
-                "SELECT COUNT(*) FROM assets WHERE kind = ? AND isLivePairedVideo = 0",
+                "SELECT COUNT(*) FROM assets WHERE kind = ? AND isLivePairedVideo = 0\(gps)",
                 arguments: [kind]) ?? 0
             let done = try Int.fetchOne(db, sql:
                 "SELECT COUNT(*) FROM derivation_jobs WHERE stage = ? AND status = 'done'",

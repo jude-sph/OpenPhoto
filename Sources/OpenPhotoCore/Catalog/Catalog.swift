@@ -21,7 +21,7 @@ public final class Catalog: Sendable {
     /// On-disk catalog schema version — the latest registered migration below. Written into a
     /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
     /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
-    public static let schemaVersion = 8
+    public static let schemaVersion = 9
 
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
@@ -157,6 +157,19 @@ public final class Catalog: Sendable {
                 t.column("confidence", .double).notNull()
                 t.column("source", .text).notNull()              // "auto" | "confirmed"
             }
+        }
+        migrator.registerMigration("v9") { db in
+            // Reverse-geocoded place per geotagged asset (rebuildable cache; 100% machine-derived —
+            // a deterministic function of assets.latitude/longitude + the bundled GeoNames dataset).
+            // Catalog-only: NO sidecar, NO format change. Dropping it re-derives from lat/lon.
+            try db.create(table: "geocode") { t in
+                t.primaryKey("hash", .text)              // → assets.hash
+                t.column("city", .text)
+                t.column("region", .text)
+                t.column("country", .text)
+                t.column("countryCode", .text).indexed()
+            }
+            try db.create(index: "idx_geocode_city", on: "geocode", columns: ["city"])
         }
         try migrator.migrate(dbQueue)
     }
