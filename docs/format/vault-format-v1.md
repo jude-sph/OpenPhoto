@@ -114,6 +114,63 @@ Notes:
 - Sidecar association is by filename. After an outside rename, OpenPhoto self-heals the association via content hash; third-party writers renaming media SHOULD rename the sidecar in the same operation.
 - Only *human-confirmed* people appear in sidecars. Machine guesses (unconfirmed clusters) never leave the catalog.
 
+### MWG face regions — normative shape
+
+Named/confirmed faces are written as an `mwg-rs:Regions` block inside `rdf:Description`. One `rdf:li` per face, inside `mwg-rs:RegionList/rdf:Bag`:
+
+```xml
+<mwg-rs:Regions rdf:parseType="Resource">
+  <mwg-rs:RegionList><rdf:Bag>
+    <rdf:li rdf:parseType="Resource">
+      <mwg-rs:Name>Alice</mwg-rs:Name>
+      <mwg-rs:Type>Face</mwg-rs:Type>
+      <mwg-rs:Area stArea:x="0.490000" stArea:y="0.330000"
+                   stArea:w="0.180000" stArea:h="0.240000"
+                   stArea:unit="normalized"/>
+    </rdf:li>
+  </rdf:Bag></mwg-rs:RegionList>
+</mwg-rs:Regions>
+```
+
+Namespaces used (declared on `rdf:Description`):
+
+| Prefix | URI |
+|---|---|
+| `mwg-rs` | `http://www.metadataworkinggroup.com/schemas/regions/` |
+| `stArea` | `http://ns.adobe.com/xmp/sType/Area#` |
+
+**`mwg-rs:Area` fields** (all normalized 0–1):
+
+| Attribute | Meaning |
+|---|---|
+| `stArea:x` | Center x of the face region (top-left origin, x increases rightward) |
+| `stArea:y` | Center y of the face region (top-left origin, y increases downward) |
+| `stArea:w` | Width of the region |
+| `stArea:h` | Height of the region |
+| `stArea:unit` | Always `"normalized"` |
+
+**Vision ↔ MWG coordinate convention:**
+
+Apple Vision's `VNFaceObservation.boundingBox` uses a **bottom-left origin** (y increases upward), and `x`/`y` refer to the **lower-left corner** of the bounding box. The MWG `stArea` format uses a **top-left origin** (y increases downward), and `x`/`y` refer to the region **center point**.
+
+Conversion (both directions):
+
+```
+Vision → MWG:
+  stArea:x = vision.midX
+  stArea:y = 1 − vision.midY          // flip y; midY = minY + h/2
+
+MWG → Vision:
+  vision.origin.x = stArea:x − stArea:w / 2
+  vision.origin.y = (1 − stArea:y) − stArea:h / 2   // flip y back; bottom-left corner
+  vision.width  = stArea:w
+  vision.height = stArea:h
+```
+
+All coordinates are normalized (image-size-independent). Readers MUST skip `rdf:li` elements whose `mwg-rs:Type` is not `"Face"`.
+
+**Sovereignty rule:** only **human-confirmed** person assignments are written to sidecars. Auto-detected unnamed faces, and all face feature-print embeddings, stay in the rebuildable catalog only (see `catalog-schema.md §faces`). The sidecar is the durable, portable record of a name assignment; the catalog mirrors it and may be rebuilt from it.
+
 ## 6. Live Photos
 
 A Live Photo is one logical asset made of two files (e.g. `IMG_4123.heic` + `IMG_4123.mov`), each with its own hash and manifest line. Pairing is determined by Apple's content identifier (`com.apple.quicktime.content.identifier` in the MOV; the corresponding Maker Apple key in the HEIC). Fallback heuristic when stripped: same basename in the same folder with capture timestamps within 2 seconds. Sidecar metadata attaches to the still image's sidecar; the video carries none.

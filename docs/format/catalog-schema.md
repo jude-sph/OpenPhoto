@@ -1,4 +1,4 @@
-# OpenPhoto Catalog Schema — Version 7
+# OpenPhoto Catalog Schema — Version 8
 
 **Status:** NORMATIVE for readers of `catalog-snapshot/catalog.sqlite` and for the Mac's live catalog database. Field names are stable from schema version 4 onward; any change bumps the version in `snapshot.json`'s `catalog_schema_version` field.
 
@@ -151,13 +151,47 @@ Per-asset CLIP-class image embedding produced by the background derivation pipel
 
 Machine-derived and keyed by content hash. A reader **MAY** use this table for image similarity search if it has access to the same model (embed a query → dot-product against stored vectors, descending order); it MUST verify that the `model` column matches the model it is using. It is a **droppable cache** — dropping the table causes the pipeline to re-derive embeddings from originals; no information is permanently lost. External readers MUST ignore it for anything other than read-only similarity queries.
 
-`Catalog.schemaVersion` is **7** (written into `snapshot.json`'s `catalog_schema_version` field).
+### `people` (v8, rebuildable mirror of XMP sidecars)
+
+Named people created by the user in the People view. A `people` row is created when a user assigns a name to a face cluster; it is a **mirror** of the human-authored person decisions whose durable, portable record is the asset's XMP sidecar (`mwg-rs:Regions` — see `vault-format-v1.md §5`). The catalog `people` table is rebuildable by re-ingesting confirmed face regions from sidecars.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER **PK** | Auto-incremented. Referenced by `faces.personID`. |
+| `name` | TEXT | Person's name as entered by the user. Not nullable. |
+| `createdAtMs` | INTEGER | Epoch milliseconds when the person was first named. |
+
+External readers MAY use this table to enumerate named people and count their face appearances (join with `faces` on `personID`). **The sidecars are the durable source of truth for names and confirmed assignments; the catalog is a rebuildable mirror.**
+
+### `faces` (v8, rebuildable machine cache)
+
+One row per detected human face across the library, produced by the background `"faces"` derivation stage (Apple Vision `VNDetectFaceRectanglesRequest` + `VNGenerateImageFeaturePrint`). This table is the primary machine-derived/rebuildable cache. The `personID` and `source = 'confirmed'` rows also mirror human decisions recorded durably in XMP sidecars; the sidecars govern on any conflict.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER **PK** | Auto-incremented. |
+| `hash` | TEXT | References `assets.hash` (indexed). |
+| `rectX` | REAL | Vision normalized `boundingBox` **minX** (left edge). Bottom-left origin, range 0–1. |
+| `rectY` | REAL | Vision normalized `boundingBox` **minY** (bottom edge). Bottom-left origin, range 0–1. |
+| `rectW` | REAL | Vision normalized `boundingBox` width (range 0–1). |
+| `rectH` | REAL | Vision normalized `boundingBox` height (range 0–1). |
+| `embedding` | BLOB | `dim × Float16` little-endian feature-print vector (from `VNGenerateImageFeaturePrint`, stored as Float16 to halve disk cost; loaded as `Float32` in memory). |
+| `dim` | INTEGER | Vector dimensionality — required to interpret the `embedding` blob. |
+| `personID` | INTEGER? | References `people.id`; `NULL` = unassigned / not yet named (indexed). |
+| `confidence` | REAL | Detection confidence reported by `VNFaceObservation` (0–1). |
+| `source` | TEXT | `"auto"` — machine-detected, not yet confirmed by the user; `"confirmed"` — user has assigned this face to a person (mirrored from the XMP sidecar). |
+
+**Coordinate convention:** `rectX`/`rectY`/`rectW`/`rectH` are stored in Vision's native frame — `boundingBox` with **bottom-left origin**, y increasing upward. This is the *opposite* of the MWG `stArea` convention (top-left origin, center point); see `vault-format-v1.md §5` for the conversion used when writing/reading sidecars.
+
+**Sovereignty split:** `source = 'auto'` rows are machine-derived and rebuildable at any time (re-detect from the original). `source = 'confirmed'` rows and `personID`/`people.name` mirror **human decisions** — these are durably recorded in the asset's XMP sidecar as `mwg-rs:Regions` entries. On a rebuild, confirmed assignments are reconstituted by re-ingesting sidecars. The machine **never overwrites confirmed rows** — `replaceFaces` (re-detection) deletes only `source = 'auto'` rows, leaving confirmed rows intact.
+
+`Catalog.schemaVersion` is **8** (written into `snapshot.json`'s `catalog_schema_version` field).
 
 ---
 
 ## Portability key
 
-> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue), and `pending_folder_ops` (the source Mac's offline-drive folder-op queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping). The v7 `embeddings` table is a droppable cache: a reader MAY use it for image similarity (dot-product over L2-normalized Float16 vectors) if it holds the same model as the `model` column, but MUST NOT rely on it being present — treat it as absent if the model doesn't match or the table is missing.
+> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue), and `pending_folder_ops` (the source Mac's offline-drive folder-op queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping). The v7 `embeddings` table is a droppable cache: a reader MAY use it for image similarity (dot-product over L2-normalized Float16 vectors) if it holds the same model as the `model` column, but MUST NOT rely on it being present — treat it as absent if the model doesn't match or the table is missing. The v8 `faces` and `people` tables: a reader MAY use `faces` for face grouping and `people` for named-person enumeration, but MUST treat `personID`/`people.name` as a mirror only — the durable, authoritative record of confirmed person assignments is the asset's XMP sidecar (`mwg-rs:Regions`). A reader MUST NOT rely on `faces` or `people` being present in older snapshots (schema versions below 8).
 
 ---
 
