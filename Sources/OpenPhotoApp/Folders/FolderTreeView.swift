@@ -7,6 +7,7 @@ struct FolderTreeView: View {
     @State private var showNewRootFolder = false
     @State private var newRootFolderName = ""
     @State private var rootDropTargeted = false
+    @State private var scrollViewportH: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -17,8 +18,18 @@ struct FolderTreeView: View {
                         FolderRow(node: node, state: state, depth: 0)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(8)
+                // Fill the viewport so the empty area below the last folder is itself a drop target
+                // for un-nesting. Drops landing on a folder row are handled by that row (nest); drops
+                // in the empty space fall through to here → move to the library root.
+                .frame(minHeight: scrollViewportH, alignment: .top)
+                .contentShape(Rectangle())
+                .dropDestination(for: String.self) { items, _ in
+                    moveToRoot(items.first)
+                } isTargeted: { rootDropTargeted = $0 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { scrollViewportH = $0 }
         }
         .background(Theme.bg2.opacity(0.5))
         .alert("New Folder", isPresented: $showNewRootFolder) {
@@ -65,12 +76,18 @@ struct FolderTreeView: View {
         .overlay(alignment: .bottom) { Divider().overlay(Theme.hairline) }
         .contentShape(Rectangle())
         .dropDestination(for: String.self) { items, _ in
-            // Reject a folder already at the root (its parent path is empty) — nothing to un-nest.
-            guard let src = items.first, !src.isEmpty,
-                  !(src as NSString).deletingLastPathComponent.isEmpty else { return false }
-            Task { await state.moveFolder(from: src, into: "") }
-            return true
+            moveToRoot(items.first)
         } isTargeted: { rootDropTargeted = $0 }
+    }
+
+    /// Move a dragged folder to the library root (un-nest). Rejects (returns false) a folder that is
+    /// already at the root — its parent path is empty, so there is nothing to un-nest. Shared by the
+    /// pinned header and the empty-space-below drop targets.
+    private func moveToRoot(_ src: String?) -> Bool {
+        guard let src, !src.isEmpty,
+              !(src as NSString).deletingLastPathComponent.isEmpty else { return false }
+        Task { await state.moveFolder(from: src, into: "") }
+        return true
     }
 }
 
