@@ -14,6 +14,7 @@ enum Theme {
     static let textFaint = Color(light: 0x9A958D, dark: 0x726D66)
     static let tile = Color(light: 0xE7E3DD, dark: 0x2C2926)
     static let green = Color(light: 0x3F9D5F, dark: 0x5FB47A)
+    static let red = Color(light: 0xC0463E, dark: 0xD86A62)
     static let amber = Color(light: 0xB9852A, dark: 0xD8A23E)
     static let blue = Color(light: 0x3F7FBF, dark: 0x6AA3D8)
     static var hairline: Color { Color.primary.opacity(0.09) }

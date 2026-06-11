@@ -38,6 +38,14 @@ struct FaceCluster: Identifiable, Sendable {
     var id: Int64 { representativeFaceID }
 }
 
+/// One face paired with the photo it appears in, for the person/cluster photo grids. `id` keys both
+/// the grid (ForEach) and rubber-band selection, so it matches `FacePhotoTile`'s tile id.
+struct FacePhoto: Identifiable, Sendable {
+    let face: FaceRow
+    let item: TimelineItem
+    var id: String { face.id.map(String.init) ?? face.hash }
+}
+
 @Observable @MainActor
 final class AppState {
     static let rootsDefaultsKey = "libraryRootPaths"
@@ -87,6 +95,26 @@ final class AppState {
     }
 
     // MARK: — Search state
+    enum SearchMode: String { case simple, pro }
+    var searchMode: SearchMode =
+        SearchMode(rawValue: UserDefaults.standard.string(forKey: "searchMode") ?? "") ?? .simple {
+        didSet { UserDefaults.standard.set(searchMode.rawValue, forKey: "searchMode") }
+    }
+
+    /// Count of currently-active filters that the Simple editor can't represent (≥2 of an OR/AND
+    /// facet, any exclusion, has-text, or a people-presence constraint). Drives the
+    /// "+N Pro filters active" hint shown in Simple mode.
+    var proOnlyFilterCount: Int {
+        let f = searchFilters
+        return max(0, f.includePeople.count - 1) + f.excludePeople.count
+            + max(0, f.includeFolders.count - 1) + f.excludeFolders.count
+            + max(0, f.includePlaces.count - 1) + f.excludePlaces.count
+            + max(0, f.includeCameras.count - 1) + f.excludeCameras.count
+            + f.excludeTags.count
+            + (f.hasText ? 1 : 0)
+            + (f.peoplePresence != nil ? 1 : 0)
+    }
+
     var searchQuery: String = ""
     var searchFilters = SearchFilters()
     var searchResults: [TimelineItem] = []
@@ -97,6 +125,9 @@ final class AppState {
     // MARK: — People state
     var people: [PersonRow] = []
     var suggestedClusters: [FaceCluster] = []
+    /// Non-nil → the People view shows this person's detail grid. Lifted out of the view so the
+    /// inspector's "In this image" section can deep-link straight to a person.
+    var openedPerson: PersonRow?
     var facesLoading = false
     private var facesDirty = true
     private var geocodeDirty = true
@@ -359,11 +390,9 @@ final class AppState {
         searchQuery = ""
         searchFilters = SearchFilters()
         // Set the place dimension: prefer city when available, else country.
-        if !place.city.isEmpty {
-            searchFilters.place = .city(countryCode: place.countryCode, city: place.city)
-        } else if !place.countryCode.isEmpty {
-            searchFilters.place = .country(place.countryCode)
-        }
+        searchFilters.includePlaces = [place.city.isEmpty
+            ? .country(place.countryCode)
+            : .city(countryCode: place.countryCode, city: place.city)]
         selection = .search
         openedItem = nil
         runSearch()
@@ -409,6 +438,22 @@ final class AppState {
     func openViewer(_ item: TimelineItem, within items: [TimelineItem]) {
         viewerItems = items
         openedItem = item
+    }
+
+    /// Jump to a person's detail grid in the People view (used by the inspector's "In this image").
+    func openPerson(_ person: PersonRow) {
+        openedItem = nil
+        openedPerson = person
+        selection = .people
+    }
+
+    /// Resolve the photos a set of faces appear in, paired with each face, preserving the face order
+    /// and dropping faces whose asset can't be resolved. Shared by the person + cluster detail grids.
+    func facePhotos(for faces: [FaceRow]) -> [FacePhoto] {
+        guard let lib = library else { return [] }
+        return faces.compactMap { face in
+            (try? lib.item(hash: face.hash)).flatMap { $0 }.map { FacePhoto(face: face, item: $0) }
+        }
     }
 
     /// Prompt for a folder and add it as an import source, then open it.

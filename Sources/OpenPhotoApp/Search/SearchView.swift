@@ -3,10 +3,6 @@ import OpenPhotoCore
 
 struct SearchView: View {
     @Bindable var state: AppState
-    @State private var cameras: [String] = []
-    @State private var allTags: [String] = []
-    @State private var allPeople: [PersonRow] = []
-    @State private var allPlaces: [PlaceFacet] = []
     @State private var debounceTask: Task<Void, Never>?
 
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
@@ -15,16 +11,33 @@ struct SearchView: View {
         VStack(spacing: 0) {
             toolbar
             Divider().overlay(Theme.hairline)
-            filterBar
+            if state.searchMode == .pro {
+                ProFilterBar(state: state)
+            } else {
+                SimpleFilterBar(state: state)
+                if state.proOnlyFilterCount > 0 { proFiltersHint }
+            }
             Divider().overlay(Theme.hairline)
             resultGrid
         }
-        .task {
-            cameras = (try? state.library?.catalog.distinctCameras()) ?? []
-            allTags = (try? state.library?.catalog.distinctTags()) ?? []
-            allPeople = (try? state.library?.catalog.people()) ?? []
-            allPlaces = (try? state.library?.catalog.distinctPlaces()) ?? []
+    }
+
+    /// Shown in Simple mode when the active filters include things Simple can't display
+    /// (exclusions, ≥2 of a facet, has-text, people-presence). Tapping flips to Pro.
+    private var proFiltersHint: some View {
+        HStack(spacing: 6) {
+            Button {
+                state.searchMode = .pro
+            } label: {
+                Text("+\(state.proOnlyFilterCount) Pro filters active")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            Spacer()
         }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
     }
 
     // MARK: — Toolbar (text box + result count)
@@ -35,7 +48,7 @@ struct SearchView: View {
                 .foregroundStyle(Theme.textDim)
                 .font(.system(size: 14))
 
-            TextField("Search photos…", text: $state.searchQuery)
+            TextField("Describe a photo, or find text in it…", text: $state.searchQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
                 .onSubmit { state.runSearch() }
@@ -44,6 +57,14 @@ struct SearchView: View {
             if state.searching {
                 ProgressView().controlSize(.small)
             }
+
+            Picker("", selection: $state.searchMode) {
+                Text("Simple").tag(AppState.SearchMode.simple)
+                Text("Pro").tag(AppState.SearchMode.pro)
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .labelsHidden()
 
             if !state.searchQuery.isEmpty || !state.searchFilters.isEmpty {
                 Text(resultCountLabel)
@@ -71,215 +92,13 @@ struct SearchView: View {
         return n == 1 ? "1 result" : "\(n) results"
     }
 
-    // MARK: — Filter bar
-
-    private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                // Camera picker
-                if !cameras.isEmpty {
-                    Menu {
-                        Button("Any camera") {
-                            state.searchFilters.camera = nil
-                            state.runSearch()
-                        }
-                        Divider()
-                        ForEach(cameras, id: \.self) { cam in
-                            Button(cam) {
-                                state.searchFilters.camera = cam
-                                state.runSearch()
-                            }
-                        }
-                    } label: {
-                        filterChip(
-                            label: state.searchFilters.camera ?? "Camera",
-                            active: state.searchFilters.camera != nil,
-                            symbol: "camera"
-                        )
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                }
-
-                // Rating picker
-                Menu {
-                    Button("Any rating") {
-                        state.searchFilters.minRating = nil
-                        state.runSearch()
-                    }
-                    Divider()
-                    ForEach([1, 2, 3, 4, 5], id: \.self) { r in
-                        Button("\(r)+ stars") {
-                            state.searchFilters.minRating = r
-                            state.runSearch()
-                        }
-                    }
-                } label: {
-                    let minR = state.searchFilters.minRating
-                    filterChip(
-                        label: minR.map { "\($0)+ stars" } ?? "Rating",
-                        active: minR != nil,
-                        symbol: "star"
-                    )
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-
-                // Favorites toggle
-                filterToggle(label: "Favorites", symbol: "heart",
-                             active: state.searchFilters.favoritesOnly) {
-                    state.searchFilters.favoritesOnly.toggle()
-                    state.runSearch()
-                }
-
-                // Video only toggle
-                filterToggle(label: "Videos", symbol: "video",
-                             active: state.searchFilters.videoOnly) {
-                    state.searchFilters.videoOnly.toggle()
-                    state.runSearch()
-                }
-
-                // Tag chips
-                if !allTags.isEmpty {
-                    Divider().frame(height: 20)
-                    ForEach(allTags, id: \.self) { tag in
-                        let active = state.searchFilters.tags.contains(tag)
-                        Button {
-                            if active {
-                                state.searchFilters.tags.removeAll { $0 == tag }
-                            } else {
-                                state.searchFilters.tags.append(tag)
-                            }
-                            state.runSearch()
-                        } label: {
-                            filterChip(label: tag, active: active, symbol: nil)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                // Person picker (only when there are named people in the catalog)
-                if !allPeople.isEmpty {
-                    Divider().frame(height: 20)
-                    let activePerson = allPeople.first { $0.id == state.searchFilters.person }
-                    Menu {
-                        Button("Any person") {
-                            state.searchFilters.person = nil
-                            state.runSearch()
-                        }
-                        Divider()
-                        ForEach(allPeople, id: \.id) { person in
-                            Button(person.name) {
-                                state.searchFilters.person = person.id
-                                state.runSearch()
-                            }
-                        }
-                    } label: {
-                        filterChip(
-                            label: activePerson?.name ?? "Person",
-                            active: state.searchFilters.person != nil,
-                            symbol: "person"
-                        )
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                }
-
-                // Place picker (only when there are geocoded places in the catalog)
-                if !allPlaces.isEmpty {
-                    Divider().frame(height: 20)
-                    let activePlaceLabel = placeLabel(for: state.searchFilters.place,
-                                                      in: allPlaces)
-                    Menu {
-                        Button("Anywhere") {
-                            state.searchFilters.place = nil
-                            state.runSearch()
-                        }
-                        Divider()
-                        // Country-level facets (city == "")
-                        let countries = allPlaces.filter { $0.city.isEmpty }
-                        ForEach(countries, id: \.self) { facet in
-                            Button("\(facet.country) (\(facet.count))") {
-                                state.searchFilters.place = .country(facet.countryCode)
-                                state.runSearch()
-                            }
-                        }
-                        if !countries.isEmpty {
-                            let cities = allPlaces.filter { !$0.city.isEmpty }
-                            if !cities.isEmpty { Divider() }
-                            ForEach(cities, id: \.self) { facet in
-                                Button("\(facet.city), \(facet.country) (\(facet.count))") {
-                                    state.searchFilters.place = .city(countryCode: facet.countryCode,
-                                                                       city: facet.city)
-                                    state.runSearch()
-                                }
-                            }
-                        }
-                    } label: {
-                        filterChip(
-                            label: activePlaceLabel ?? "Place",
-                            active: state.searchFilters.place != nil,
-                            symbol: "mappin.and.ellipse"
-                        )
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-        }
-        .frame(height: 44)
-    }
-
-    /// Build a display label for the currently active place filter.
-    private func placeLabel(for filter: PlaceFilter?, in facets: [PlaceFacet]) -> String? {
-        guard let filter else { return nil }
-        switch filter {
-        case .country(let cc):
-            return facets.first { $0.countryCode == cc && $0.city.isEmpty }?.country ?? cc
-        case .city(let cc, let city):
-            if let facet = facets.first(where: { $0.countryCode == cc && $0.city == city }) {
-                return "\(facet.city), \(facet.country)"
-            }
-            return city
-        }
-    }
-
-    @ViewBuilder
-    private func filterChip(label: String, active: Bool, symbol: String?) -> some View {
-        HStack(spacing: 4) {
-            if let symbol {
-                Image(systemName: symbol)
-                    .font(.system(size: 10))
-            }
-            Text(label)
-                .font(.system(size: 12))
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(active ? Theme.accentDim : Theme.elevated,
-                    in: RoundedRectangle(cornerRadius: 7))
-        .foregroundStyle(active ? Theme.accent : Theme.textDim)
-        .overlay(RoundedRectangle(cornerRadius: 7)
-            .strokeBorder(active ? Theme.accent.opacity(0.4) : Theme.hairline, lineWidth: 1))
-    }
-
-    @ViewBuilder
-    private func filterToggle(label: String, symbol: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            filterChip(label: label, active: active, symbol: symbol)
-        }
-        .buttonStyle(.plain)
-    }
-
     // MARK: — Result grid
 
     @ViewBuilder
     private var resultGrid: some View {
         if state.searchQuery.isEmpty && state.searchFilters.isEmpty {
-            emptyState("magnifyingglass", "Type to search\u{2026}",
-                       "Enter text or select filters to find photos.")
+            emptyState("magnifyingglass", "Search your library",
+                       "Type to match how a photo looks or text in it — and use filters for people, places, dates, and folders.")
         } else if state.searchResults.isEmpty && !state.searching {
             emptyState("photo.on.rectangle.angled", "No matches",
                        "Try different keywords or adjust the filters.")

@@ -84,6 +84,15 @@ extension AppState {
             _ = try? library.catalog.enqueueFolderOp(vaultID: driveID, op: "move", src: src, dst: newPath)
         }
 
+        // Re-key cached drive presence onto the new path (every drive, connected or offline). The Mac
+        // move + the connected-drive manifest rewrites above keep disk/manifests aligned, but the
+        // drive-presence CACHE (vault_presence) is keyed by the Mac-aligned dirPath and isn't touched
+        // by either. Without this, a folder holding drive-only originals (kept on a drive, freed from
+        // the Mac) would still be counted under the old dirPath and re-appear as a phantom that errors
+        // (`.missing`) if dragged again. Pure catalog op; must run BEFORE rescan rebuilds folderTree.
+        try? library.catalog.rewriteVaultPresencePaths(fromDir: src, toDir: newPath)
+        reloadCanonicalPresence()
+
         await rescan()
         remapUIPaths(from: src, to: newPath)
     }

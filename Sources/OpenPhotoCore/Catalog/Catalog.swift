@@ -328,6 +328,43 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// Re-key cached drive presence after a Mac folder move (`fromDir` → `toDir`, both Mac-aligned
+    /// dir paths). Every `vault_presence` row whose Mac-aligned path sits under `fromDir/` has its
+    /// `relPath`, `dirPath`, and (basename-prefixed) `driveRelPath` rewritten onto the new location —
+    /// across EVERY drive, connected or not. Without this, drive-only originals (kept on a drive,
+    /// freed from the Mac) keep counting under the old `dirPath` and the moved folder lingers as a
+    /// phantom in `folderCounts` (re-dragging it then fails because the directory is gone on disk).
+    /// Pure catalog op (no disk access); the on-disk mirror of this is `VaultReorganizer`'s manifest
+    /// prefix-rewrite, applied to the connected drive during the same move.
+    public func rewriteVaultPresencePaths(fromDir: String, toDir: String) throws {
+        let from = fromDir.precomposedStringWithCanonicalMapping
+        let to = toDir.precomposedStringWithCanonicalMapping
+        guard !from.isEmpty, from != to else { return }
+        try dbQueue.write { db in
+            // GLOB '<from>/*' matches any depth (SQLite GLOB '*' spans '/'), same idiom as
+            // items(inDir:recursive:). The Swift-side hasPrefix guard keeps it exact.
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT rowid AS rid, relPath, driveRelPath FROM vault_presence WHERE relPath GLOB ?
+                """, arguments: [from + "/*"])
+            for row in rows {
+                let rid: Int64 = row["rid"]
+                let oldRel: String = row["relPath"]
+                let oldDriveRel: String = row["driveRelPath"]
+                guard oldRel.hasPrefix(from + "/") else { continue }
+                let newRel = to + oldRel.dropFirst(from.count)
+                let newDir = (newRel as NSString).deletingLastPathComponent
+                // driveRelPath = <optional drive basename> + "/" + <Mac relPath>; the Mac relPath is
+                // always a suffix, so swap only that suffix (handles prefixed + unprefixed shapes).
+                let newDriveRel = oldDriveRel.hasSuffix(oldRel)
+                    ? String(oldDriveRel.dropLast(oldRel.count)) + newRel
+                    : oldDriveRel
+                try db.execute(sql: """
+                    UPDATE vault_presence SET relPath = ?, dirPath = ?, driveRelPath = ? WHERE rowid = ?
+                    """, arguments: [newRel, newDir, newDriveRel, rid])
+            }
+        }
+    }
+
     public func upsert(assets: [AssetRecord]) throws {
         try dbQueue.write { db in for a in assets { try a.upsert(db) } }
     }
