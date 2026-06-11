@@ -96,6 +96,61 @@ final class AppState {
         didSet { UserDefaults.standard.set(foldersRecursive, forKey: "foldersRecursive") }
     }
 
+    // MARK: — Metadata interop
+
+    var finderTagSyncEnabled: Bool = UserDefaults.standard.bool(forKey: "finderTagSync") {
+        didSet {
+            UserDefaults.standard.set(finderTagSyncEnabled, forKey: "finderTagSync")
+            if finderTagSyncEnabled { syncFinderTagsNow() }   // push existing tags + pull Finder edits
+        }
+    }
+
+    /// When Finder sync is on, reconcile a tag edit with Finder (writes Finder + baseline) and return
+    /// the merged set to persist; otherwise return the user's set unchanged.
+    func tagsForSave(item: TimelineItem, proposed: [String]) -> [String] {
+        guard finderTagSyncEnabled, let lib = library else { return proposed }
+        return (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: proposed)) ?? proposed
+    }
+
+    /// Full reconcile pass over every asset (off-main). Picks up Finder-side edits and pushes
+    /// OpenPhoto tags to Finder; persists the merged set to the sidecar + catalog when it changed.
+    /// No-op when the toggle is off.
+    func syncFinderTagsNow() {
+        guard finderTagSyncEnabled, let lib = library else { return }
+        Task.detached(priority: .utility) {
+            let items = (try? lib.catalog.timelineItems()) ?? []
+            var seen = Set<String>()
+            for item in items where seen.insert(item.hash).inserted {
+                let current = (try? JSONDecoder().decode([String].self, from: Data(item.tagsJSON.utf8))) ?? []
+                let merged = (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: current)) ?? current
+                if Set(merged) != Set(current) {
+                    try? lib.updateMetadata(for: item, rating: item.rating, favorite: item.favorite,
+                                            caption: item.caption, tags: merged)
+                }
+            }
+            await MainActor.run { [weak self] in try? self?.refreshQueries() }
+        }
+    }
+
+    /// Export human-metadata sidecars to a user-chosen folder (a portable XMP snapshot).
+    func exportSidecars() {
+        guard let lib = library else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false; panel.prompt = "Export Here"
+        panel.message = "Choose a folder for the exported .xmp metadata sidecars."
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        Task {
+            let n = await Task.detached(priority: .userInitiated) {
+                (try? SidecarExporter.export(library: lib, to: dest)) ?? 0
+            }.value
+            let alert = NSAlert()
+            alert.messageText = "Exported \(n) sidecar\(n == 1 ? "" : "s")"
+            alert.informativeText = "Standard .xmp metadata files were written to the chosen folder."
+            alert.runModal()
+        }
+    }
+
     // MARK: — Search state
     enum SearchMode: String { case simple, pro }
     var searchMode: SearchMode =
@@ -1249,6 +1304,7 @@ final class AppState {
             // volume mount/unmount too.
             reloadDrives()
             reloadCanonicalPresence()
+            if finderTagSyncEnabled { syncFinderTagsNow() }   // initial Finder-tag reconcile pass
             deviceWatcher.onVolumesChanged = { [weak self] in
                 Task { @MainActor in
                     guard let self else { return }

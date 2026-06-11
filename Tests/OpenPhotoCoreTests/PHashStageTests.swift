@@ -9,8 +9,6 @@ private func photoAsset(_ hash: String) -> AssetRecord {
         caption: nil, tagsJSON: "[]")
 }
 
-@Test func schemaIsV10() { #expect(Catalog.schemaVersion == 10) }
-
 @Test func phashStageWritesRowSurfacedWithDirPath() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))

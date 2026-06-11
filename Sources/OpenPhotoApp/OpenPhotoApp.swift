@@ -31,8 +31,13 @@ struct OpenPhotoApp: App {
                 Button("Quick View Folder\u{2026}") {
                     MainActor.assumeIsolated { state.quickViewFolderViaPanel() }
                 }
+                Button("Export Metadata Sidecars\u{2026}") {
+                    MainActor.assumeIsolated { state.exportSidecars() }
+                }
             }
         }
+
+        Settings { SettingsView(state: state) }
     }
 }
 

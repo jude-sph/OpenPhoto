@@ -21,7 +21,7 @@ public final class Catalog: Sendable {
     /// On-disk catalog schema version — the latest registered migration below. Written into a
     /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
     /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
-    public static let schemaVersion = 10
+    public static let schemaVersion = 11
 
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
@@ -178,6 +178,15 @@ public final class Catalog: Sendable {
             try db.create(table: "phash") { t in
                 t.primaryKey("hash", .text)            // → assets.hash
                 t.column("value", .integer).notNull()  // 64-bit dHash, stored as signed Int64
+            }
+        }
+        migrator.registerMigration("v11") { db in
+            // Per-photo last-synced tag set — the 3-way-merge baseline for Finder-tag sync. Rebuildable
+            // sync-state, machine-derived. Catalog-only: NO sidecar, NO format change. Dropping it makes
+            // the next sync additive for one cycle, then re-seeds.
+            try db.create(table: "finder_tag_sync") { t in
+                t.primaryKey("hash", .text)             // → assets.hash
+                t.column("baseline", .text).notNull()   // JSON array of tag strings
             }
         }
         try migrator.migrate(dbQueue)
