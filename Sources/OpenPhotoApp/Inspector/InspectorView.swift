@@ -420,7 +420,8 @@ struct InspectorView: View {
         guard let lib = state.library else { return }
         try? lib.updateMetadata(for: item,
                                 rating: rating, favorite: favorite,
-                                caption: caption.isEmpty ? nil : caption, tags: tags)
+                                caption: caption.isEmpty ? nil : caption,
+                                tags: state.tagsForSave(item: item, proposed: tags))
         try? state.refreshQueries()
         if let updated = try? lib.item(hash: item.hash) { state.openedItem = updated }
     }
