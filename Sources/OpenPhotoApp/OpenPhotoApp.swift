@@ -65,7 +65,11 @@ struct RootView: View {
                     }
                     Divider().overlay(Theme.hairline)
                         .ignoresSafeArea(.container, edges: .top)
+                    // Match the divider: let the content (its top toolbar) reach the window top
+                    // instead of floating below the hidden-title-bar safe-area band, which left an
+                    // empty dark strip above every view's header.
                     detail
+                        .ignoresSafeArea(.container, edges: .top)
                 }
                 .animation(.easeOut(duration: 0.18), value: state.sidebarShown)
                 if state.openedItem != nil {
