@@ -15,3 +15,8 @@ xcuserdata/
 fixtures-library/
 fixtures-card/
 spike-download/
+
+# On-device ML models + datasets (downloaded via tools/ fetch scripts, never committed;
+# make-app.sh injects them into the built .app, the build tolerates their absence)
+.models/
+Sources/OpenPhotoCore/Resources/*.mlpackage/
