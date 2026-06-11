@@ -35,6 +35,16 @@ features land.
 - [ ] **Delete from iPhone** after a verified import (ImageCaptureCore `requestDeleteFiles`) — confirm it removes the imported originals; per-item failures surface gracefully (locked-phone retry).
 - [ ] **Send to iPhone via AirDrop** — photos land at their original capture date and round-trip byte-for-byte; the send is verified by re-enumeration and journaled.
 
+## Re-verify "sent to device" Locations on connect
+*Needs a physical iPhone (or an SD card / USB volume) you've previously **Sent** photos to.
+Read-only on the device — the connect re-verify only re-enumerates (`enumeratePresent()`),
+never writes to the device.*
+
+- [ ] **Send** a few photos to the device, confirm the inspector **Locations** shows "sent <date>".
+- [ ] **Disconnect, then reconnect** the device — for photos still present, the indicator upgrades to **"on this device, confirmed <date>"** (green check).
+- [ ] **Delete one of those photos off the device**, then reconnect — its indicator **downgrades to "sent <date> — no longer on the device"** (muted/orange), while still-present ones stay **"on this device (confirmed)"**; and if the deleted one was the only backup, the photo reverts to only-on-this-Mac (the only-copy warning returns).
+- [ ] Confirm **nothing is written to the device** during re-verify (read-only re-enumeration) and that an **unconnected** device's indicator is unchanged ("sent <date>").
+
 ---
 
 *Notes:* the Phase 3.5 video-player overhaul, folder toggles, dividers, and tile/badge

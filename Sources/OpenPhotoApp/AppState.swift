@@ -1133,6 +1133,11 @@ final class AppState {
             deviceWatcher.openedDeviceRemoved = { [weak self] id in
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
             }
+            // Phones (ImageCaptureCore): re-verify prior sends READ-ONLY when a camera connects.
+            // Volumes/SD re-verify via onVolumesChanged below (beside autoScanConnectedDrives).
+            deviceWatcher.deviceConnected = { [weak self] _ in
+                Task { @MainActor in await self?.reverifySentToConnectedDevices() }
+            }
             try? library?.catalog.reconcileEmbeddingModel(current: EmbedStage().modelID)
             Task { await rescan(); pokeDerivation() }
             // Load drives + badge presence from the persisted catalog, then auto-scan connected
@@ -1151,9 +1156,10 @@ final class AppState {
                         self.endQuickView()
                     }
                     await self.autoScanConnectedDrives()
+                    await self.reverifySentToConnectedDevices()
                 }
             }
-            Task { await autoScanConnectedDrives() }
+            Task { await autoScanConnectedDrives(); await reverifySentToConnectedDevices() }
         } catch {
             NSAlert(error: error).runModal()
         }
@@ -1274,7 +1280,8 @@ final class AppState {
     private func presenceService() -> PresenceService? {
         guard let library, let imports = importRegistry,
               let sends = sendRegistry, let devices = deviceRegistry else { return nil }
-        return PresenceService(catalog: library.catalog, imports: imports, sends: sends, devices: devices)
+        return PresenceService(catalog: library.catalog, imports: imports, sends: sends,
+                               devices: devices, reverified: reverified)
     }
 
     /// Known locations of a photo (This Mac / phones / SD cards) for the inspector.
@@ -1371,6 +1378,32 @@ final class AppState {
     /// All connected devices that can receive a send (phones via AirDrop, volumes via copy).
     func connectedSendTargets() -> [ConnectedDevice] {
         deviceWatcher.devices.filter { sendDestination(for: $0) != nil }
+    }
+
+    /// On-connect re-verify verdicts, keyed "<destinationKey>|<hash>". Rebuildable in-memory cache
+    /// (re-derived on every device connect) — never persisted, no catalog table.
+    private var reverified: [String: ReverifyVerdict] = [:]
+
+    /// On device/volume connect, re-enumerate each connected SEND target READ-ONLY and reconcile its
+    /// sends.jsonl entries against what's actually there now — so the inspector Locations "sent to
+    /// <device>" indicator becomes "on this device (confirmed)" or downgrades to "no longer on the
+    /// device". Never writes to the device (only enumeratePresent(), never send()).
+    func reverifySentToConnectedDevices() async {
+        guard let sends = sendRegistry else { return }
+        for device in connectedSendTargets() {
+            guard let dest = sendDestination(for: device) else { continue }
+            let entries = sends.entries(forDestinationKey: dest.destinationKey)
+            guard !entries.isEmpty else { continue }   // nothing was ever sent here → skip
+            // Heavy/IO enumeration off the @MainActor. Distinguish "couldn't enumerate" (throw →
+            // leave prior verdicts) from a real empty device (legitimately marks sends .gone).
+            let enumeration = await Task.detached(priority: .utility) {
+                try await dest.enumeratePresent()   // READ-ONLY — never send()
+            }.result
+            guard let present = try? enumeration.get() else { continue }
+            let verdicts = SendReverifier().reconcile(entries: entries, present: present)
+            for (hash, verdict) in verdicts { reverified["\(dest.destinationKey)|\(hash)"] = verdict }
+        }
+        try? refreshQueries()   // re-render the inspector/panel against the updated cache
     }
 
     /// Build a SendDestination for a connected device: AirDrop for an iPhone,

@@ -6,10 +6,11 @@ public struct Location: Sendable, Equatable, Identifiable {
         case thisMac
         case device(key: String, name: String, kind: DeviceKind)
     }
-    /// confirmed = present right here / seen on connect; believed = we sent it and
-    /// verified it landed but haven't re-checked since; historical = it was once on
-    /// a device (e.g. imported from) — may be gone now.
-    public enum Confidence: String, Sendable { case confirmed, believed, historical }
+    /// confirmed = present right here / re-enumerated on connect; believed = we sent it and
+    /// verified it landed but haven't re-checked since; stale = we sent it but a re-enumeration
+    /// on connect found it gone (user deleted it); historical = it was once on a device
+    /// (e.g. imported from) — may be gone now.
+    public enum Confidence: String, Sendable { case confirmed, believed, stale, historical }
     public let place: Place
     public let confidence: Confidence
     public let detail: String
@@ -32,9 +33,12 @@ public struct PresenceService: Sendable {
     private let imports: ImportRegistry
     private let sends: SendRegistry
     private let devices: DeviceRegistry
+    private let reverified: [String: ReverifyVerdict]   // "<destKey>|<hash>" → verdict (in-memory, rebuildable)
 
-    public init(catalog: Catalog, imports: ImportRegistry, sends: SendRegistry, devices: DeviceRegistry) {
+    public init(catalog: Catalog, imports: ImportRegistry, sends: SendRegistry, devices: DeviceRegistry,
+                reverified: [String: ReverifyVerdict] = [:]) {   // defaulted → existing callers unchanged
         self.catalog = catalog; self.imports = imports; self.sends = sends; self.devices = devices
+        self.reverified = reverified
     }
 
     /// All known locations of an asset, This-Mac first, then sent-to, then came-from.
@@ -61,13 +65,23 @@ public struct PresenceService: Sendable {
             }
         }
 
-        // Sent to devices (believed) — confirmed at send time, not re-checked since.
+        // Sent to devices — confirmed at send time; upgraded/downgraded by the on-connect re-verify.
         for e in sends.entries(forHash: hash) where !seenDevices.contains(e.destinationKey) {
             seenDevices.insert(e.destinationKey)
             let name = devices.name(forKey: e.destinationKey) ?? e.deviceName
-            out.append(Location(place: .device(key: e.destinationKey, name: name,
-                                               kind: DeviceKind(rawValue: e.deviceKind) ?? kind(forKey: e.destinationKey)),
-                                confidence: .believed, detail: "sent " + day(e.confirmedAt)))
+            let kindV = DeviceKind(rawValue: e.deviceKind) ?? kind(forKey: e.destinationKey)
+            let when = day(e.confirmedAt)
+            let place = Location.Place.device(key: e.destinationKey, name: name, kind: kindV)
+            switch reverified["\(e.destinationKey)|\(hash)"] {
+            case .present:
+                out.append(Location(place: place, confidence: .confirmed,
+                                    detail: "on this device, confirmed " + when))
+            case .gone:
+                out.append(Location(place: place, confidence: .stale,
+                                    detail: "sent " + when + " — no longer on the device"))
+            case nil:
+                out.append(Location(place: place, confidence: .believed, detail: "sent " + when))
+            }
         }
 
         // Imported from devices (historical) — may be gone now.

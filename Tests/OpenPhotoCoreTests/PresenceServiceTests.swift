@@ -79,3 +79,52 @@ import Foundation
     #expect(deviceLocs.count == 1)                       // the device appears exactly once...
     #expect(deviceLocs.first?.confidence == .believed)   // ...as believed (sent-to wins over historical)
 }
+
+@Test func reverifyPresentUpgradesToConfirmed() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vault = try Vault.openOrCreate(at: try t.sub("Pictures"), role: .local)
+    let imports = ImportRegistry(vault: vault), sends = SendRegistry(vault: vault)
+    let devices = DeviceRegistry(vault: vault)
+    let catalog = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    let h = "sha256:" + String(repeating: "a", count: 64)
+    try sends.append(SendRegistry.Entry(hash: h, destinationKey: "cam-Z", deviceName: "iPhone",
+        deviceKind: "phone", sentAt: "2026-06-08T01:00:00.000Z", confirmedAt: "2026-06-08T01:01:00.000Z",
+        fpSize: 1, fpCaptureDateMs: 0))
+    let svc = PresenceService(catalog: catalog, imports: imports, sends: sends, devices: devices,
+                              reverified: ["cam-Z|\(h)": .present])
+    #expect(svc.locations(forHash: h).contains {
+        if case .device = $0.place { return $0.confidence == .confirmed } else { return false } })
+    #expect(svc.isOnlyOnThisMac(hash: h) == false)        // .confirmed counts as backed up
+}
+
+@Test func reverifyGoneDowngradesToStaleAndUnmasksOnlyCopy() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vault = try Vault.openOrCreate(at: try t.sub("Pictures"), role: .local)
+    let imports = ImportRegistry(vault: vault), sends = SendRegistry(vault: vault)
+    let devices = DeviceRegistry(vault: vault)
+    let catalog = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    let h = "sha256:" + String(repeating: "a", count: 64)
+    try sends.append(SendRegistry.Entry(hash: h, destinationKey: "cam-Z", deviceName: "iPhone",
+        deviceKind: "phone", sentAt: "2026-06-08T01:00:00.000Z", confirmedAt: "2026-06-08T01:01:00.000Z",
+        fpSize: 1, fpCaptureDateMs: 0))
+    let svc = PresenceService(catalog: catalog, imports: imports, sends: sends, devices: devices,
+                              reverified: ["cam-Z|\(h)": .gone])
+    #expect(svc.locations(forHash: h).contains {
+        if case .device = $0.place { return $0.confidence == .stale } else { return false } })
+    #expect(svc.isOnlyOnThisMac(hash: h) == true)         // gone → no longer a backup
+}
+
+@Test func defaultReverifyKeepsBelievedUnchanged() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vault = try Vault.openOrCreate(at: try t.sub("Pictures"), role: .local)
+    let imports = ImportRegistry(vault: vault), sends = SendRegistry(vault: vault)
+    let devices = DeviceRegistry(vault: vault)
+    let catalog = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    let h = "sha256:" + String(repeating: "a", count: 64)
+    try sends.append(SendRegistry.Entry(hash: h, destinationKey: "cam-Z", deviceName: "iPhone",
+        deviceKind: "phone", sentAt: "2026-06-08T01:00:00.000Z", confirmedAt: "2026-06-08T01:01:00.000Z",
+        fpSize: 1, fpCaptureDateMs: 0))
+    let svc = PresenceService(catalog: catalog, imports: imports, sends: sends, devices: devices)  // no reverified
+    #expect(svc.locations(forHash: h).contains {
+        if case .device = $0.place { return $0.confidence == .believed } else { return false } })
+}
