@@ -219,6 +219,27 @@ public final class LibraryService: Sendable {
                                         rating: rating, caption: caption, tagsJSON: tagsJSON)
     }
 
+    /// Reconcile an asset's tags with macOS Finder tags on its local files via a 3-way merge against the
+    /// stored baseline. Reads the UNION of all local instance files' Finder tags, merges with
+    /// `proposedTags` + the baseline, writes the merged set to EVERY local file, and stores the new
+    /// baseline. Returns the merged set (the caller persists it to the XMP sidecar + catalog). A
+    /// drive-only asset (no reachable local file) returns `proposedTags` unchanged and writes nothing.
+    public func reconcileFinderTags(forHash hash: String, proposedTags: [String]) throws -> [String] {
+        let urls: [URL] = ((try? catalog.instances(forHash: hash)) ?? []).compactMap { inst in
+            guard let v = vault(id: inst.vaultID) else { return nil }
+            let u = v.absoluteURL(forRelativePath: inst.relPath)
+            return FileManager.default.fileExists(atPath: u.path) ? u : nil
+        }
+        guard !urls.isEmpty else { return proposedTags }
+        let finder = Set(urls.flatMap { FinderTags.read($0) })
+        let baseline = Set((try? catalog.finderTagBaseline(forHash: hash)) ?? [])
+        let merged = TagMerge.merge(baseline: baseline, openphoto: Set(proposedTags), finder: finder)
+        let mergedArr = merged.sorted()
+        for u in urls { try? FinderTags.write(mergedArr, to: u) }
+        try? catalog.setFinderTagBaseline(hash: hash, tags: mergedArr)
+        return mergedArr
+    }
+
     /// Rename a file on disk (explicit user action). Sidecar moves with it.
     public func rename(_ item: TimelineItem, to newFileName: String) async throws {
         guard let vault = vault(id: item.vaultID) else { return }
