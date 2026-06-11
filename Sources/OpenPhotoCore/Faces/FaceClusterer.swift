@@ -59,10 +59,15 @@ public enum FaceClusterer {
             }
         }
 
-        // Map back to ids; sort clusters largest-first (ties: preserved by stable partition).
+        // Map back to ids; sort clusters largest-first with an explicit tiebreaker on the smallest
+        // member id so output is fully deterministic regardless of input order or sort algorithm
+        // stability (Array.sorted is NOT guaranteed stable).
         return clusters
             .map { idxs in idxs.map { normalized[$0].id } }
-            .sorted { $0.count > $1.count }
+            .sorted {
+                if $0.count != $1.count { return $0.count > $1.count }
+                return ($0.min() ?? Int64.max) < ($1.min() ?? Int64.max)
+            }
     }
 
     // MARK: - Private math

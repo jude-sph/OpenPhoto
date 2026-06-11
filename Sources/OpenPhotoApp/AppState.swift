@@ -251,19 +251,12 @@ final class AppState {
     }
 
     /// Clear the sidecar region for a single face that has been unassigned (no person).
-    /// Reads the asset's current sidecar, removes any region for the given face by rect proximity,
-    /// and rewrites. Best-effort.
+    /// Resolves the face's asset hash via Catalog.face(forID:), then rewrites the sidecar from
+    /// the current confirmed catalog state — the now-unassigned face is source='auto'/personID=nil
+    /// so it is excluded, dropping the stale <mwg-rs:Name> region. Best-effort.
     nonisolated private func clearSidecarRegion(forFaceID faceID: Int64, lib: LibraryService) {
-        // We don't know which hash this face belongs to without a query.
-        // Instead, rewrite-all-confirmed for the asset (the face is now unassigned, so it won't appear).
-        // A targeted remove would need to know the hash — just re-derive from catalog state.
-        // Note: the face is now 'auto'/unassigned so it won't appear in any confirmed query.
-        // We can't rewrite by person (there is none), so we must find the hash via a direct query.
-        guard let faceRows = try? lib.catalog.faces(forHash: "") else { return }
-        // We can't get the hash without knowing it — this path is safe to skip since the face
-        // is simply not confirmed and the region was never written as confirmed.
-        // TODO(4.3): targeted single-face region removal requires a faces(forID:) lookup.
-        _ = faceRows  // suppress unused warning
+        guard let row = try? lib.catalog.face(forID: faceID) else { return }
+        rewriteSidecarForHash(row.hash, lib: lib)   // full rewrite from current confirmed state → stale region dropped
     }
 
     /// Rewrite the sidecar for `hash` so it contains exactly the confirmed face regions that
