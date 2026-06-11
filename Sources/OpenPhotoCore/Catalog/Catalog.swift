@@ -21,7 +21,7 @@ public final class Catalog: Sendable {
     /// On-disk catalog schema version — the latest registered migration below. Written into a
     /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
     /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
-    public static let schemaVersion = 7
+    public static let schemaVersion = 8
 
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
@@ -133,6 +133,29 @@ public final class Catalog: Sendable {
                 t.column("model", .text).notNull()
                 t.column("dim", .integer).notNull()
                 t.column("vector", .blob).notNull()
+            }
+        }
+        migrator.registerMigration("v8") { db in
+            // Detected faces (rebuildable cache; machine-derived) + named people. `personID`/the
+            // people `name` MIRROR human decisions recorded as MWG regions in XMP sidecars; the
+            // sidecars are authoritative and reconstitute confirmed rows on rebuild.
+            try db.create(table: "people") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull()
+                t.column("createdAtMs", .integer).notNull()
+            }
+            try db.create(table: "faces") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("hash", .text).notNull().indexed()      // → assets.hash
+                t.column("rectX", .double).notNull()             // Vision normalized boundingBox
+                t.column("rectY", .double).notNull()
+                t.column("rectW", .double).notNull()
+                t.column("rectH", .double).notNull()
+                t.column("embedding", .blob).notNull()           // dim × Float16 LE feature-print
+                t.column("dim", .integer).notNull()
+                t.column("personID", .integer).indexed()         // NULL = unassigned
+                t.column("confidence", .double).notNull()
+                t.column("source", .text).notNull()              // "auto" | "confirmed"
             }
         }
         try migrator.migrate(dbQueue)
