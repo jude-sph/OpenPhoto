@@ -722,6 +722,10 @@ final class AppState {
         for vr in durableVaults where driveIsPresent(vr) {
             cacheDriveKind(vr)
             guard let drive = openVault(for: vr) else { continue }
+            // Reconcile any structural folder ops queued while this drive was offline BEFORE the
+            // drift scan reads its (path-keyed) structure — so a folder that moved/was created on
+            // the Mac is mirrored here first and the comparison never sees it as drift/duplication.
+            await applyPendingFolderOps(forDriveID: vr.id, driveVault: drive)
             let scanned = await Task.detached(priority: .utility) {
                 (try? DriftReconciler().scan(drive: drive)) ?? DriftReport()
             }.value

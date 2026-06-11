@@ -114,6 +114,9 @@ struct SidebarView: View {
         }
         .frame(width: Theme.sidebarWidth)
         .background(.ultraThinMaterial)
+        // Pull the sidebar content up under the traffic lights (no empty band above LIBRARY): the
+        // collapse button lands in line with the lights, LIBRARY just below them.
+        .ignoresSafeArea(.container, edges: .top)
     }
 }
 

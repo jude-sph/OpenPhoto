@@ -1,4 +1,4 @@
-# OpenPhoto Catalog Schema — Version 5
+# OpenPhoto Catalog Schema — Version 6
 
 **Status:** NORMATIVE for readers of `catalog-snapshot/catalog.sqlite` and for the Mac's live catalog database. Field names are stable from schema version 4 onward; any change bumps the version in `snapshot.json`'s `catalog_schema_version` field.
 
@@ -94,6 +94,23 @@ The source Mac's internal queue of assets approved for deletion but not yet prop
 
 External readers MUST ignore this table. It reflects the source Mac's private delete queue and does not represent anything that has happened (or will happen) on the drive being read.
 
+### `pending_folder_ops` (v6, Mac-internal)
+
+The source Mac's internal queue of **folder-structure operations** to apply to an offline durable drive on its next connect — applied before the path-keyed sync so that the sync never duplicates files under stale paths.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER **PK** | Auto-incremented primary key. |
+| `vaultID` | TEXT | The drive vault this op is queued for (references `vaults.id`). |
+| `op` | TEXT | `"move"` \| `"create"` \| `"delete"`. |
+| `srcRelPath` | TEXT? | Source vault-root-relative path. Required for `"move"` and `"delete"`; null for `"create"`. |
+| `dstRelPath` | TEXT? | Destination vault-root-relative path. Required for `"move"` and `"create"`; null for `"delete"`. |
+| `createdAtMs` | INTEGER | Epoch milliseconds when the op was queued. |
+
+This table is the **source Mac's private reconcile queue**. It records structural folder rearrangements (drag-drop nesting, folder creation, folder deletion) that happened on the Mac while the target drive was offline. On the drive's next connect, `applyPendingFolderOps(forDriveID:driveVault:)` applies these ops to the drive vault before the drift scan and sync — so the path-keyed sync never sees stale paths and never creates duplicate files.
+
+External readers **MUST ignore this table**. It reflects the source Mac's internal pending-ops state and does not describe anything that has already happened (or is guaranteed to happen) on the drive being read.
+
 ### `derivation_jobs` (v5, rebuildable)
 
 Per-asset, per-stage completion record for the background **derivation pipeline** — the lane that derives machine-only intelligence (OCR, and in later Phase-4 slices faces / embeddings / reverse-geocoding) from an asset's bytes after it enters the library. Resumable and retry-capped: the **absence** of a `"done"` row for a (`hash`, `stage`) pair means that stage is still pending for that asset.
@@ -125,7 +142,7 @@ Machine-derived and keyed by content hash, so it survives eviction and is portab
 
 ## Portability key
 
-> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping).
+> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue), and `pending_folder_ops` (the source Mac's offline-drive folder-op queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping).
 
 ---
 
