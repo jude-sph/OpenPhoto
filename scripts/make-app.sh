@@ -53,6 +53,8 @@ if [[ -d "$MODELS_SRC" ]]; then
     [[ -e "$f" ]] && cp -R "$f" "$APP/Contents/Resources/"
   done
   echo "Injected MobileCLIP models + vocab into $APP/Contents/Resources/"
+  [[ -d "$MODELS_SRC/geonames" ]] && cp -R "$MODELS_SRC/geonames" "$APP/Contents/Resources/" \
+    && echo "Injected GeoNames dataset into $APP/Contents/Resources/geonames/"
 else
   echo "note: $MODELS_SRC absent — shipping without semantic-search models (search degrades)"
 fi
