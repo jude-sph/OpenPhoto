@@ -25,6 +25,8 @@ public final class GeocodeStage: @unchecked Sendable {
 extension GeocodeStage: DerivationStage {
     /// True iff the GeoNames dataset loaded. Absent → stage skipped (jobs pending), like EmbedStage.
     public var isAvailable: Bool { geocoder.isLoaded }
+    /// Geocode reads catalog lat/lon, not image bytes — no file needed.
+    public var needsFile: Bool { false }
 
     public func run(hash: String, url: URL, catalog: Catalog) async -> Bool {
         // Geocode keys off the catalog's stored GPS, not the image bytes (url is ignored).
