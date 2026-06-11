@@ -1,4 +1,4 @@
-# OpenPhoto Catalog Schema — Version 8
+# OpenPhoto Catalog Schema — Version 9
 
 **Status:** NORMATIVE for readers of `catalog-snapshot/catalog.sqlite` and for the Mac's live catalog database. Field names are stable from schema version 4 onward; any change bumps the version in `snapshot.json`'s `catalog_schema_version` field.
 
@@ -185,13 +185,29 @@ One row per detected human face across the library, produced by the background `
 
 **Sovereignty split:** `source = 'auto'` rows are machine-derived and rebuildable at any time (re-detect from the original). `source = 'confirmed'` rows and `personID`/`people.name` mirror **human decisions** — these are durably recorded in the asset's XMP sidecar as `mwg-rs:Regions` entries. On a rebuild, confirmed assignments are reconstituted by re-ingesting sidecars. The machine **never overwrites confirmed rows** — `replaceFaces` (re-detection) deletes only `source = 'auto'` rows, leaving confirmed rows intact.
 
-`Catalog.schemaVersion` is **8** (written into `snapshot.json`'s `catalog_schema_version` field).
+### `geocode` (v9, rebuildable)
+
+One row per geotagged asset that has been reverse-geocoded. Machine-derived from the asset's `latitude`/`longitude` in `assets` against the **bundled offline GeoNames city-level dataset** (cities15000, CC BY 4.0). 100% rebuildable: dropping this table and re-running the `"geocode"` derivation stage re-derives all rows from the stored GPS coordinates — no information is permanently lost. **Catalog-only: there is no sidecar write and no vault format change.** A place name is a deterministic function of GPS + the dataset.
+
+| Column | Type | Notes |
+|---|---|---|
+| `hash` | TEXT **PK** | References `assets.hash`. |
+| `city` | TEXT | City or locality name (GeoNames `name` field). May be empty if the nearest city lookup produced no result within the search radius. |
+| `region` | TEXT | Admin-1 region / state / province (GeoNames `admin1CodesASCII` lookup). |
+| `country` | TEXT | Full country name (GeoNames `countryInfo` lookup). |
+| `countryCode` | TEXT | ISO 3166-1 alpha-2 country code (indexed). |
+
+**Data attribution:** Place data is sourced from [GeoNames](https://www.geonames.org), licensed **CC BY 4.0** — redistribution is allowed but **attribution is required**. Attribution string: *"Place data © GeoNames (https://www.geonames.org), CC BY 4.0."* This must be surfaced in the app's About / credits screen.
+
+A reader MAY use this table for place display and filtering (e.g. filter to a country or city in a snapshot browser). It is a **droppable cache** — a reader MUST NOT rely on it being present in snapshots older than schema version 9, and MUST treat it as absent if the table is missing.
+
+`Catalog.schemaVersion` is **9** (written into `snapshot.json`'s `catalog_schema_version` field).
 
 ---
 
 ## Portability key
 
-> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue), and `pending_folder_ops` (the source Mac's offline-drive folder-op queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping). The v7 `embeddings` table is a droppable cache: a reader MAY use it for image similarity (dot-product over L2-normalized Float16 vectors) if it holds the same model as the `model` column, but MUST NOT rely on it being present — treat it as absent if the model doesn't match or the table is missing. The v8 `faces` and `people` tables: a reader MAY use `faces` for face grouping and `people` for named-person enumeration, but MUST treat `personID`/`people.name` as a mirror only — the durable, authoritative record of confirmed person assignments is the asset's XMP sidecar (`mwg-rs:Regions`). A reader MUST NOT rely on `faces` or `people` being present in older snapshots (schema versions below 8).
+> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue), and `pending_folder_ops` (the source Mac's offline-drive folder-op queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping). The v7 `embeddings` table is a droppable cache: a reader MAY use it for image similarity (dot-product over L2-normalized Float16 vectors) if it holds the same model as the `model` column, but MUST NOT rely on it being present — treat it as absent if the model doesn't match or the table is missing. The v8 `faces` and `people` tables: a reader MAY use `faces` for face grouping and `people` for named-person enumeration, but MUST treat `personID`/`people.name` as a mirror only — the durable, authoritative record of confirmed person assignments is the asset's XMP sidecar (`mwg-rs:Regions`). A reader MUST NOT rely on `faces` or `people` being present in older snapshots (schema versions below 8). The v9 `geocode` table is a droppable cache: a reader MAY use it for place display and filtering (city, region, country, countryCode per geotagged asset), but MUST NOT rely on it being present in snapshots older than schema version 9. Place data is sourced from GeoNames (CC BY 4.0) — attribution required: *"Place data © GeoNames (https://www.geonames.org), CC BY 4.0."*
 
 ---
 
