@@ -36,6 +36,8 @@ struct OpenPhotoApp: App {
                 }
             }
         }
+
+        Settings { SettingsView(state: state) }
     }
 }
 
