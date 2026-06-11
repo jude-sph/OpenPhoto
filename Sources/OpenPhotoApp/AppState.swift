@@ -370,11 +370,9 @@ final class AppState {
         searchQuery = ""
         searchFilters = SearchFilters()
         // Set the place dimension: prefer city when available, else country.
-        if !place.city.isEmpty {
-            searchFilters.place = .city(countryCode: place.countryCode, city: place.city)
-        } else if !place.countryCode.isEmpty {
-            searchFilters.place = .country(place.countryCode)
-        }
+        searchFilters.includePlaces = [place.city.isEmpty
+            ? .country(place.countryCode)
+            : .city(countryCode: place.countryCode, city: place.city)]
         selection = .search
         openedItem = nil
         runSearch()

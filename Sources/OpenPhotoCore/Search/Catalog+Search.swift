@@ -18,7 +18,7 @@ extension Catalog {
                 args.append(Int64(range.lowerBound.timeIntervalSince1970 * 1000))
                 args.append(Int64(range.upperBound.timeIntervalSince1970 * 1000))
             }
-            if let camera = filters.camera {
+            if let camera = filters.includeCameras.first {
                 conditions.append("cameraModel = ?")
                 args.append(camera)
             }
@@ -29,7 +29,7 @@ extension Catalog {
             if filters.favoritesOnly {
                 conditions.append("favorite = 1")
             }
-            if filters.videoOnly {
+            if filters.kind == .video {
                 conditions.append("kind = 'video'")
             }
 
@@ -37,7 +37,7 @@ extension Catalog {
             // We need the asset to contain ALL requested tags.
             // Strategy: for each required tag, the asset's tagsJSON must include it.
             // Use subquery: every tag must match at least one json_each value.
-            for tag in filters.tags {
+            for tag in filters.includeTags {
                 conditions.append("""
                     EXISTS (SELECT 1 FROM json_each(tagsJSON) WHERE json_each.value = ?)
                     """)
@@ -45,13 +45,13 @@ extension Catalog {
             }
 
             // Person filter: restrict to assets that have a confirmed face row for that personID.
-            if let person = filters.person {
+            if let person = filters.includePeople.first {
                 conditions.append("hash IN (SELECT hash FROM faces WHERE personID = ?)")
                 args.append(person)
             }
 
             // Place filter: restrict to assets with a geocode row matching the country/city.
-            if let place = filters.place {
+            if let place = filters.includePlaces.first {
                 switch place {
                 case .country(let cc):
                     conditions.append("hash IN (SELECT hash FROM geocode WHERE countryCode = ?)")

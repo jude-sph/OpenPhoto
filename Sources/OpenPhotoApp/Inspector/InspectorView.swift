@@ -73,7 +73,7 @@ struct InspectorView: View {
                             HStack(spacing: 4) {
                                 Button {
                                     state.searchQuery = ""
-                                    state.searchFilters = SearchFilters(tags: [tag])
+                                    state.searchFilters = SearchFilters(includeTags: [tag])
                                     state.selection = .search
                                     state.openedItem = nil
                                     state.runSearch()

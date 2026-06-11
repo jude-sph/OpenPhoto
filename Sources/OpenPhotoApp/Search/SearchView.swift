@@ -80,20 +80,20 @@ struct SearchView: View {
                 if !cameras.isEmpty {
                     Menu {
                         Button("Any camera") {
-                            state.searchFilters.camera = nil
+                            state.searchFilters.includeCameras = []
                             state.runSearch()
                         }
                         Divider()
                         ForEach(cameras, id: \.self) { cam in
                             Button(cam) {
-                                state.searchFilters.camera = cam
+                                state.searchFilters.includeCameras = [cam]
                                 state.runSearch()
                             }
                         }
                     } label: {
                         filterChip(
-                            label: state.searchFilters.camera ?? "Camera",
-                            active: state.searchFilters.camera != nil,
+                            label: state.searchFilters.includeCameras.first ?? "Camera",
+                            active: state.searchFilters.includeCameras.first != nil,
                             symbol: "camera"
                         )
                     }
@@ -134,8 +134,8 @@ struct SearchView: View {
 
                 // Video only toggle
                 filterToggle(label: "Videos", symbol: "video",
-                             active: state.searchFilters.videoOnly) {
-                    state.searchFilters.videoOnly.toggle()
+                             active: state.searchFilters.kind == .video) {
+                    state.searchFilters.kind = (state.searchFilters.kind == .video) ? nil : .video
                     state.runSearch()
                 }
 
@@ -143,12 +143,12 @@ struct SearchView: View {
                 if !allTags.isEmpty {
                     Divider().frame(height: 20)
                     ForEach(allTags, id: \.self) { tag in
-                        let active = state.searchFilters.tags.contains(tag)
+                        let active = state.searchFilters.includeTags.contains(tag)
                         Button {
                             if active {
-                                state.searchFilters.tags.removeAll { $0 == tag }
+                                state.searchFilters.includeTags.removeAll { $0 == tag }
                             } else {
-                                state.searchFilters.tags.append(tag)
+                                state.searchFilters.includeTags.append(tag)
                             }
                             state.runSearch()
                         } label: {
@@ -161,23 +161,23 @@ struct SearchView: View {
                 // Person picker (only when there are named people in the catalog)
                 if !allPeople.isEmpty {
                     Divider().frame(height: 20)
-                    let activePerson = allPeople.first { $0.id == state.searchFilters.person }
+                    let activePerson = allPeople.first { $0.id == state.searchFilters.includePeople.first }
                     Menu {
                         Button("Any person") {
-                            state.searchFilters.person = nil
+                            state.searchFilters.includePeople = []
                             state.runSearch()
                         }
                         Divider()
                         ForEach(allPeople, id: \.id) { person in
                             Button(person.name) {
-                                state.searchFilters.person = person.id
+                                state.searchFilters.includePeople = [person.id]
                                 state.runSearch()
                             }
                         }
                     } label: {
                         filterChip(
                             label: activePerson?.name ?? "Person",
-                            active: state.searchFilters.person != nil,
+                            active: state.searchFilters.includePeople.first != nil,
                             symbol: "person"
                         )
                     }
@@ -188,11 +188,11 @@ struct SearchView: View {
                 // Place picker (only when there are geocoded places in the catalog)
                 if !allPlaces.isEmpty {
                     Divider().frame(height: 20)
-                    let activePlaceLabel = placeLabel(for: state.searchFilters.place,
+                    let activePlaceLabel = placeLabel(for: state.searchFilters.includePlaces.first,
                                                       in: allPlaces)
                     Menu {
                         Button("Anywhere") {
-                            state.searchFilters.place = nil
+                            state.searchFilters.includePlaces = []
                             state.runSearch()
                         }
                         Divider()
@@ -200,7 +200,7 @@ struct SearchView: View {
                         let countries = allPlaces.filter { $0.city.isEmpty }
                         ForEach(countries, id: \.self) { facet in
                             Button("\(facet.country) (\(facet.count))") {
-                                state.searchFilters.place = .country(facet.countryCode)
+                                state.searchFilters.includePlaces = [.country(facet.countryCode)]
                                 state.runSearch()
                             }
                         }
@@ -209,8 +209,8 @@ struct SearchView: View {
                             if !cities.isEmpty { Divider() }
                             ForEach(cities, id: \.self) { facet in
                                 Button("\(facet.city), \(facet.country) (\(facet.count))") {
-                                    state.searchFilters.place = .city(countryCode: facet.countryCode,
-                                                                       city: facet.city)
+                                    state.searchFilters.includePlaces = [.city(countryCode: facet.countryCode,
+                                                                               city: facet.city)]
                                     state.runSearch()
                                 }
                             }
@@ -218,7 +218,7 @@ struct SearchView: View {
                     } label: {
                         filterChip(
                             label: activePlaceLabel ?? "Place",
-                            active: state.searchFilters.place != nil,
+                            active: state.searchFilters.includePlaces.first != nil,
                             symbol: "mappin.and.ellipse"
                         )
                     }

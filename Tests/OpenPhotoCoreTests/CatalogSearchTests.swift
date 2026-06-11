@@ -23,6 +23,20 @@ private func seedLocal(_ cat: Catalog, _ a: AssetRecord) throws {
 private let A = "sha256:" + String(repeating: "a", count: 64)
 private let B = "sha256:" + String(repeating: "b", count: 64)
 
+/// Build a SearchFilters from the legacy single-value dimensions these tests exercise.
+private func filters(camera: String? = nil, minRating: Int? = nil, favoritesOnly: Bool = false,
+                     tags: [String] = [], person: Int64? = nil,
+                     place: PlaceFilter? = nil) -> SearchFilters {
+    var f = SearchFilters()
+    if let camera { f.includeCameras = [camera] }
+    f.minRating = minRating
+    f.favoritesOnly = favoritesOnly
+    f.includeTags = tags
+    if let person { f.includePeople = [person] }
+    if let place { f.includePlaces = [place] }
+    return f
+}
+
 @Test func structuredFiltersIsolateAndCombine() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
@@ -30,12 +44,12 @@ private let B = "sha256:" + String(repeating: "b", count: 64)
                              tags: ["rome", "trip"]))
     try seedLocal(cat, asset(B, takenAtMs: 1000, camera: "Canon", rating: 2, tags: ["rome"]))
 
-    #expect(try cat.structuredFilter(.init(camera: "Sony")) == [A])
-    #expect(try cat.structuredFilter(.init(minRating: 5)) == [A])
-    #expect(try cat.structuredFilter(.init(favoritesOnly: true)) == [A])
-    #expect(Set(try cat.structuredFilter(.init(tags: ["rome"]))) == Set([A, B]))
-    #expect(try cat.structuredFilter(.init(tags: ["rome", "trip"])) == [A])   // AND semantics
-    #expect(try cat.structuredFilter(.init(camera: "Sony", minRating: 5)) == [A])
+    #expect(try cat.structuredFilter(filters(camera: "Sony")) == [A])
+    #expect(try cat.structuredFilter(filters(minRating: 5)) == [A])
+    #expect(try cat.structuredFilter(filters(favoritesOnly: true)) == [A])
+    #expect(Set(try cat.structuredFilter(filters(tags: ["rome"]))) == Set([A, B]))
+    #expect(try cat.structuredFilter(filters(tags: ["rome", "trip"])) == [A])   // AND semantics
+    #expect(try cat.structuredFilter(filters(camera: "Sony", minRating: 5)) == [A])
 }
 
 @Test func itemsForHashesPreservesOrder() throws {
@@ -59,9 +73,9 @@ private let B = "sha256:" + String(repeating: "b", count: 64)
     let alice = try cat.createPerson(name: "Alice")
     try cat.assignFaces(f, to: alice)
     // Only A has Alice's face.
-    #expect(try cat.structuredFilter(.init(person: alice)) == [A])
+    #expect(try cat.structuredFilter(filters(person: alice)) == [A])
     // Composing person filter with favoritesOnly: A is not a favorite → empty.
-    #expect(try cat.structuredFilter(.init(favoritesOnly: true, person: alice)).isEmpty)
+    #expect(try cat.structuredFilter(filters(favoritesOnly: true, person: alice)).isEmpty)
 }
 
 @Test func distinctCamerasAndTags() throws {
@@ -83,9 +97,9 @@ private let B = "sha256:" + String(repeating: "b", count: 64)
     try cat.upsertGeocode(GeocodeRow(hash: B, city: "Tokyo", region: "Tokyo",
                                      country: "Japan", countryCode: "JP"))
     // Country facet: only A (Taiwan).
-    #expect(try cat.structuredFilter(.init(place: .country("TW"))) == [A])
+    #expect(try cat.structuredFilter(filters(place: .country("TW"))) == [A])
     // City facet: only B (Tokyo).
-    #expect(try cat.structuredFilter(.init(place: .city(countryCode: "JP", city: "Tokyo"))) == [B])
+    #expect(try cat.structuredFilter(filters(place: .city(countryCode: "JP", city: "Tokyo"))) == [B])
     // Composes with another filter: A is not a favorite → empty.
-    #expect(try cat.structuredFilter(.init(favoritesOnly: true, place: .country("TW"))).isEmpty)
+    #expect(try cat.structuredFilter(filters(favoritesOnly: true, place: .country("TW"))).isEmpty)
 }
