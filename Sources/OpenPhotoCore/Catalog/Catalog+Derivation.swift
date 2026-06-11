@@ -10,6 +10,7 @@ extension Catalog {
         switch stage {
         case "ocr":   return "photo"
         case "embed": return "photo"
+        case "faces": return "photo"
         default:      return "photo"
         }
     }

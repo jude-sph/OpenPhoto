@@ -44,6 +44,12 @@ extension Catalog {
                 args.append(tag)
             }
 
+            // Person filter: restrict to assets that have a confirmed face row for that personID.
+            if let person = filters.person {
+                conditions.append("hash IN (SELECT hash FROM faces WHERE personID = ?)")
+                args.append(person)
+            }
+
             let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
             let sql = """
                 SELECT hash FROM (\(Self.timelineSQL))

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Structured (click-to-narrow) filters. person/place are reserved for slices 4.3/4.4.
+/// Structured (click-to-narrow) filters. person live (4.3); place reserved (4.4).
 public struct SearchFilters: Sendable, Equatable {
     public var dateRange: ClosedRange<Date>?
     public var camera: String?
@@ -8,14 +8,17 @@ public struct SearchFilters: Sendable, Equatable {
     public var favoritesOnly: Bool
     public var videoOnly: Bool
     public var tags: [String]        // AND: an asset must carry every tag
+    public var person: Int64?        // nil = any person
     public init(dateRange: ClosedRange<Date>? = nil, camera: String? = nil, minRating: Int? = nil,
-                favoritesOnly: Bool = false, videoOnly: Bool = false, tags: [String] = []) {
+                favoritesOnly: Bool = false, videoOnly: Bool = false, tags: [String] = [],
+                person: Int64? = nil) {
         self.dateRange = dateRange; self.camera = camera; self.minRating = minRating
         self.favoritesOnly = favoritesOnly; self.videoOnly = videoOnly; self.tags = tags
+        self.person = person
     }
     public var isEmpty: Bool {
         dateRange == nil && camera == nil && (minRating ?? 0) == 0
-            && !favoritesOnly && !videoOnly && tags.isEmpty
+            && !favoritesOnly && !videoOnly && tags.isEmpty && person == nil
     }
 }
 
