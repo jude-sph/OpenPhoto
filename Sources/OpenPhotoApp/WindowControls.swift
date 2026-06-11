@@ -145,3 +145,42 @@ struct VerticalTrafficLights: NSViewRepresentable {
         deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
     }
 }
+
+/// Double-clicking the top bar zooms the window — the standard macOS title-bar behavior, which a
+/// hidden title bar + full-size content view otherwise swallows. Respects the user's
+/// "double-click a window's title bar to" system setting; ignores the traffic-light / sidebar edge.
+struct TitleBarDoubleClickZoom: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView(frame: .zero); context.coordinator.attach(v); return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private weak var view: NSView?
+        private var installed = false
+        func attach(_ v: NSView) { view = v; schedule() }
+        private func schedule() { DispatchQueue.main.async { [weak self] in self?.install() } }
+        private func install() {
+            guard let content = view?.window?.contentView else { schedule(); return }   // not ready
+            guard !installed else { return }
+            installed = true
+            let g = NSClickGestureRecognizer(target: self, action: #selector(handle(_:)))
+            g.numberOfClicksRequired = 2
+            g.delaysPrimaryMouseButtonEvents = false   // don't swallow single clicks on the toolbar
+            content.addGestureRecognizer(g)
+        }
+        @objc private func handle(_ g: NSClickGestureRecognizer) {
+            guard let window = view?.window, let content = window.contentView else { return }
+            let p = g.location(in: content)
+            let inTopBar = content.isFlipped ? p.y < 52 : p.y > content.bounds.height - 52
+            guard inTopBar, p.x > 80 else { return }   // top bar, clear of the lights / collapsed strip
+            switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+            case "Minimize": window.miniaturize(nil)
+            case "None":     break
+            default:         window.zoom(nil)          // "Maximize" (the default)
+            }
+        }
+    }
+}

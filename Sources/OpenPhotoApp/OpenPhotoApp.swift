@@ -79,8 +79,10 @@ struct RootView: View {
                 }
             }
             // Stack the traffic lights vertically when the sidebar is collapsed so they fit the
-            // narrow 38px strip; restore the standard horizontal layout when it's shown.
-            .background(VerticalTrafficLights(vertical: !state.sidebarShown))
+            // narrow 38px strip; keep them horizontal when it's shown OR when the full-window viewer
+            // is open (no strip there — the lights sit over the viewer's top bar).
+            .background(VerticalTrafficLights(vertical: !state.sidebarShown && state.openedItem == nil))
+            .background(TitleBarDoubleClickZoom())
         }
     }
 
