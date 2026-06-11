@@ -37,6 +37,10 @@ final class DeviceWatcher: NSObject {
     /// Set by AppState; called with the removed device's id.
     var openedDeviceRemoved: ((String) -> Void)?
 
+    /// Set by AppState; called with a newly-connected device's id (camera) so it can be
+    /// re-verified against sends.jsonl. Read-only — DeviceWatcher itself never enumerates.
+    var deviceConnected: ((String) -> Void)?
+
     /// Set by AppState; called whenever volumes mount/unmount (to re-scan canonical drives).
     var onVolumesChanged: (() -> Void)?
 
@@ -124,6 +128,7 @@ extension DeviceWatcher: ICDeviceBrowserDelegate {
             if !self.devices.contains(where: { $0.id == "cam-\(id)" }) {
                 self.devices.append(.camera(id: id, name: name))
             }
+            self.deviceConnected?("cam-\(id)")   // re-verify prior sends to this phone (read-only)
         }
     }
     nonisolated func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice,
