@@ -1,4 +1,4 @@
-# OpenPhoto Catalog Schema — Version 6
+# OpenPhoto Catalog Schema — Version 7
 
 **Status:** NORMATIVE for readers of `catalog-snapshot/catalog.sqlite` and for the Mac's live catalog database. Field names are stable from schema version 4 onward; any change bumps the version in `snapshot.json`'s `catalog_schema_version` field.
 
@@ -138,11 +138,26 @@ A SQLite **FTS5** full-text virtual table over text recognized in photos (on-dev
 
 Machine-derived and keyed by content hash, so it survives eviction and is portable in the same spirit as `assets`. A reader MAY full-text-search a drive's photos with it (`SELECT hash FROM ocr WHERE ocr MATCH ?`). It is a rebuildable cache (drop it → the pipeline re-derives), never a source of truth.
 
+### `embeddings` (v7, rebuildable)
+
+Per-asset CLIP-class image embedding produced by the background derivation pipeline (`"embed"` stage, `MobileCLIP-S2`). One row per photo that has been embedded.
+
+| Column | Type | Notes |
+|---|---|---|
+| `hash` | TEXT **PK** | References `assets.hash`. |
+| `model` | TEXT | Identifier of the model that produced this vector (e.g. `"mobileclip_s2"`). Allows safe invalidation when the model changes. |
+| `dim` | INTEGER | Vector dimensionality (e.g. `512`). |
+| `vector` | BLOB | `dim` × `Float16` little-endian, **L2-normalized** (so cosine similarity equals the dot product). |
+
+Machine-derived and keyed by content hash. A reader **MAY** use this table for image similarity search if it has access to the same model (embed a query → dot-product against stored vectors, descending order); it MUST verify that the `model` column matches the model it is using. It is a **droppable cache** — dropping the table causes the pipeline to re-derive embeddings from originals; no information is permanently lost. External readers MUST ignore it for anything other than read-only similarity queries.
+
+`Catalog.schemaVersion` is **7** (written into `snapshot.json`'s `catalog_schema_version` field).
+
 ---
 
 ## Portability key
 
-> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue), and `pending_folder_ops` (the source Mac's offline-drive folder-op queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping).
+> A snapshot reader uses ONLY `assets` (hash-keyed machine metadata; the human columns `favorite`/`rating`/`caption`/`tagsJSON` are mirrors of the XMP sidecars — the sidecars are authoritative and win on ingest) and this drive's `vault_presence` rows (those whose `vaultID` equals the drive's own vault id). A reader MUST ignore `vaults.rootPath`/`lastSeenMs` (the source Mac's local paths), `instances` (the source Mac's local-vault rows), `vault_presence` rows for other `vaultID`s (other drives the source Mac happens to know), and `pending_deletions` (the source Mac's delete queue), and `pending_folder_ops` (the source Mac's offline-drive folder-op queue). The drive's `manifest.jsonl` is the authoritative inventory of what the drive holds; the snapshot only accelerates browsing it. The v5 pipeline-cache tables follow the same rule: a reader MAY use `ocr` (hash-keyed machine-derived text, like `assets`) but MUST ignore `derivation_jobs` (the source Mac's internal pipeline bookkeeping). The v7 `embeddings` table is a droppable cache: a reader MAY use it for image similarity (dot-product over L2-normalized Float16 vectors) if it holds the same model as the `model` column, but MUST NOT rely on it being present — treat it as absent if the model doesn't match or the table is missing.
 
 ---
 
