@@ -356,6 +356,12 @@ final class AppState {
     func searchInPlace(_ place: GeocodeRow) {
         searchQuery = ""
         searchFilters = SearchFilters()
+        // Set the place dimension: prefer city when available, else country.
+        if !place.city.isEmpty {
+            searchFilters.place = .city(countryCode: place.countryCode, city: place.city)
+        } else if !place.countryCode.isEmpty {
+            searchFilters.place = .country(place.countryCode)
+        }
         selection = .search
         openedItem = nil
         runSearch()

@@ -50,6 +50,18 @@ extension Catalog {
                 args.append(person)
             }
 
+            // Place filter: restrict to assets with a geocode row matching the country/city.
+            if let place = filters.place {
+                switch place {
+                case .country(let cc):
+                    conditions.append("hash IN (SELECT hash FROM geocode WHERE countryCode = ?)")
+                    args.append(cc)
+                case .city(let cc, let city):
+                    conditions.append("hash IN (SELECT hash FROM geocode WHERE countryCode = ? AND city = ?)")
+                    args.append(cc); args.append(city)
+                }
+            }
+
             let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
             let sql = """
                 SELECT hash FROM (\(Self.timelineSQL))
