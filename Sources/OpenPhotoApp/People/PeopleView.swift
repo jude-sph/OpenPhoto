@@ -604,12 +604,11 @@ struct FaceCropView: View {
         if let hash {
             resolvedHash = hash
             resolvedRect = rect
-        } else if faceID != nil {
-            // faceID is present but hash is nil — we need Catalog.face(forID:) to resolve.
-            // TODO(4.3): add Catalog.face(forID:) for direct faceID→hash lookup so representative
-            // faces on PersonCards can be cropped without passing hash separately.
-            resolvedHash = nil
-            resolvedRect = .zero
+        } else if let faceID {
+            // Resolve faceID → FaceRow (hash + rect) via Catalog.face(forID:).
+            let faceRow = try? lib.catalog.face(forID: faceID)
+            resolvedHash = faceRow?.hash
+            resolvedRect = faceRow?.rect ?? .zero
         } else {
             resolvedHash = nil
             resolvedRect = .zero

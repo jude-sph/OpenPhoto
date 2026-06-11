@@ -93,3 +93,22 @@ private func face(_ hash: String, _ vec: [Float], source: String = "auto",
     try cat.upsert(assets: [photo(A)])
     #expect(try cat.pendingDerivation(stage: "faces") == [A])   // photos are faces-eligible
 }
+
+@Test func faceForIDRoundTrip() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.upsert(assets: [photo(A), photo(B)])
+    let ids = try cat.insertFaces([
+        face(A, [1, 0], conf: 0.8),
+        face(B, [0, 1], conf: 0.95)
+    ])
+    // Fetch by known id returns the right row.
+    let rowA = try cat.face(forID: ids[0])
+    let rowB = try cat.face(forID: ids[1])
+    #expect(rowA?.hash == A)
+    #expect(abs((rowA?.confidence ?? 0) - 0.8) < 0.01)
+    #expect(rowB?.hash == B)
+    #expect(abs((rowB?.confidence ?? 0) - 0.95) < 0.01)
+    // Unknown id returns nil.
+    #expect(try cat.face(forID: 9999) == nil)
+}

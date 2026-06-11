@@ -78,6 +78,20 @@ extension Catalog {
         }
     }
 
+    /// Fetch a single face row by its primary-key id.  Returns nil when the id is not found.
+    public func face(forID id: Int64) throws -> FaceRow? {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db,
+                sql: """
+                    SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim,
+                           personID, confidence, source
+                    FROM faces WHERE id = ?
+                    """,
+                arguments: [id])
+            return rows.first.map { Self.faceRow(from: $0) }
+        }
+    }
+
     public func faces(forHash hash: String) throws -> [FaceRow] {
         try dbQueue.read { db in
             try Row.fetchAll(db,
