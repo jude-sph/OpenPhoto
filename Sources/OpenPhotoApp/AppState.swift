@@ -95,6 +95,26 @@ final class AppState {
     }
 
     // MARK: — Search state
+    enum SearchMode: String { case simple, pro }
+    var searchMode: SearchMode =
+        SearchMode(rawValue: UserDefaults.standard.string(forKey: "searchMode") ?? "") ?? .simple {
+        didSet { UserDefaults.standard.set(searchMode.rawValue, forKey: "searchMode") }
+    }
+
+    /// Count of currently-active filters that the Simple editor can't represent (≥2 of an OR/AND
+    /// facet, any exclusion, has-text, or a people-presence constraint). Drives the
+    /// "+N Pro filters active" hint shown in Simple mode.
+    var proOnlyFilterCount: Int {
+        let f = searchFilters
+        return max(0, f.includePeople.count - 1) + f.excludePeople.count
+            + max(0, f.includeFolders.count - 1) + f.excludeFolders.count
+            + max(0, f.includePlaces.count - 1) + f.excludePlaces.count
+            + max(0, f.includeCameras.count - 1) + f.excludeCameras.count
+            + f.excludeTags.count
+            + (f.hasText ? 1 : 0)
+            + (f.peoplePresence != nil ? 1 : 0)
+    }
+
     var searchQuery: String = ""
     var searchFilters = SearchFilters()
     var searchResults: [TimelineItem] = []
