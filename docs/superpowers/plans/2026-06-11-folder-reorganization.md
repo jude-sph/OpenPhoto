@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`).
 
+> **As-shipped note:** An **auto-reconcile queue** was added beyond the original 5 tasks, per Jude's choice of the full queue solution over warn-on-offline. This added: a Core `pending_folder_ops` table + CRUD (catalog migration v6), and `AppState.applyPendingFolderOps(forDriveID:driveVault:)` hooked into `autoScanConnectedDrives` before the drift scan — so structural folder ops are automatically applied to offline drives on their next connect, without user intervention.
+
 **Goal:** Drag-drop nest / create / delete folders in the Folders view, moving the real vault directories on disk and keeping connected drives path-aligned.
 
 **Architecture:** A Core `VaultReorganizer` does the on-disk move/create/delete + manifest path-rewrite; `folderTree` also walks real filesystem dirs so empty folders show; `AppState` orchestrates the Mac op + propagation to connected durable drives + rescan + UI fixups; `FolderTreeView` gets drag-drop + context menus.
