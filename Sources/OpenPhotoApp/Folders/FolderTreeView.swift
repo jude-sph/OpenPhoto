@@ -6,37 +6,19 @@ struct FolderTreeView: View {
 
     @State private var showNewRootFolder = false
     @State private var newRootFolderName = ""
+    @State private var rootDropTargeted = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                // Header: New Folder at library root
-                HStack {
-                    Text("Folders")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.textFaint)
-                        .textCase(.uppercase)
-                    Spacer()
-                    Button {
-                        newRootFolderName = ""
-                        showNewRootFolder = true
-                    } label: {
-                        Image(systemName: "folder.badge.plus")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.textDim)
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(state.folderTree) { node in
+                        FolderRow(node: node, state: state, depth: 0)
                     }
-                    .buttonStyle(.plain)
-                    .help("New Folder at library root")
                 }
-                .padding(.horizontal, 6)
-                .padding(.top, 2)
-                .padding(.bottom, 4)
-
-                ForEach(state.folderTree) { node in
-                    FolderRow(node: node, state: state, depth: 0)
-                }
+                .padding(8)
             }
-            .padding(8)
         }
         .background(Theme.bg2.opacity(0.5))
         .alert("New Folder", isPresented: $showNewRootFolder) {
@@ -51,6 +33,44 @@ struct FolderTreeView: View {
         } message: {
             Text("Enter a name for the new folder at the library root.")
         }
+    }
+
+    // Pinned header that doubles as the drop target for un-nesting: drag a folder here to move it to
+    // the top level (library root). Kept outside the scroll view so it stays reachable in a long tree.
+    private var header: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "arrow.up.to.line")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .opacity(rootDropTargeted ? 1 : 0)        // reserve width so the title doesn't shift
+            Text(rootDropTargeted ? "Move to top level" : "Folders")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(rootDropTargeted ? Theme.accent : Theme.textFaint)
+                .textCase(.uppercase)
+            Spacer()
+            Button {
+                newRootFolderName = ""
+                showNewRootFolder = true
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textDim)
+            }
+            .buttonStyle(.plain)
+            .help("New Folder at library root")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(rootDropTargeted ? Theme.accent.opacity(0.16) : .clear)
+        .overlay(alignment: .bottom) { Divider().overlay(Theme.hairline) }
+        .contentShape(Rectangle())
+        .dropDestination(for: String.self) { items, _ in
+            // Reject a folder already at the root (its parent path is empty) — nothing to un-nest.
+            guard let src = items.first, !src.isEmpty,
+                  !(src as NSString).deletingLastPathComponent.isEmpty else { return false }
+            Task { await state.moveFolder(from: src, into: "") }
+            return true
+        } isTargeted: { rootDropTargeted = $0 }
     }
 }
 
