@@ -1,7 +1,7 @@
 import Foundation
 
 /// Place filter: restrict to a whole country (by ISO countryCode) or a specific city within one.
-public enum PlaceFilter: Sendable, Equatable {
+public enum PlaceFilter: Sendable, Equatable, Hashable {
     case country(String)                          // countryCode
     case city(countryCode: String, city: String)
 }

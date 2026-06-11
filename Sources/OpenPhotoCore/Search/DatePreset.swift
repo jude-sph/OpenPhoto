@@ -2,7 +2,7 @@ import Foundation
 
 /// A relative date filter that resolves to a concrete `ClosedRange<Date>` at pick-time, so the
 /// search itself stays deterministic. `now` is injected for testability.
-public enum DatePreset: Sendable, Equatable {
+public enum DatePreset: Sendable, Equatable, Hashable {
     case today, last7Days, last30Days, last90Days, thisYear, lastYear
     case year(Int)
 
