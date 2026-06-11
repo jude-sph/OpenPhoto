@@ -69,7 +69,16 @@ struct InspectorView: View {
                     FlowLayoutLite(spacing: 6) {
                         ForEach(tags, id: \.self) { tag in
                             HStack(spacing: 4) {
-                                Text(tag).font(.system(size: 12))
+                                Button {
+                                    state.searchQuery = ""
+                                    state.searchFilters = SearchFilters(tags: [tag])
+                                    state.selection = .search
+                                    state.openedItem = nil
+                                    state.runSearch()
+                                } label: {
+                                    Text(tag).font(.system(size: 12))
+                                }
+                                .buttonStyle(.plain)
                                 Button {
                                     tags.removeAll { $0 == tag }; save()
                                 } label: {

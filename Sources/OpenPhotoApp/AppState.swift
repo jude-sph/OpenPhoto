@@ -4,11 +4,12 @@ import OpenPhotoCore
 typealias Scanner = OpenPhotoCore.Scanner   // Foundation.Scanner collision
 
 enum SidebarItem: String, Hashable, CaseIterable {
-    case timeline, folders, drives, bin
+    case timeline, folders, search, drives, bin
     var label: String {
         switch self {
         case .timeline: "Timeline"
         case .folders: "Folders"
+        case .search: "Search"
         case .drives: "Drives"
         case .bin: "Bin"
         }
@@ -17,6 +18,7 @@ enum SidebarItem: String, Hashable, CaseIterable {
         switch self {   // SF Symbol map from the UI-Design README
         case .timeline: "photo.on.rectangle.angled"
         case .folders: "folder"
+        case .search: "magnifyingglass"
         case .drives: "externaldrive"
         case .bin: "trash"
         }
@@ -70,6 +72,66 @@ final class AppState {
     var foldersRecursive: Bool = UserDefaults.standard.bool(forKey: "foldersRecursive") {
         didSet { UserDefaults.standard.set(foldersRecursive, forKey: "foldersRecursive") }
     }
+
+    // MARK: — Search state
+    var searchQuery: String = ""
+    var searchFilters = SearchFilters()
+    var searchResults: [TimelineItem] = []
+    var searching = false
+    private var semanticIndex: SemanticIndex?
+    private var semanticIndexDirty = true     // set true after an embed drain
+
+    func runSearch() {
+        guard let lib = library else { return }
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filters = searchFilters
+        guard !q.isEmpty || !filters.isEmpty else { searchResults = []; return }
+        searching = true
+        // Capture current index state on the main actor before going off-main.
+        let needsRebuild = semanticIndexDirty || semanticIndex == nil
+        let currentIndex = semanticIndex
+        Task {
+            // Run all heavy work (SQL + Accelerate + Core ML) off the main actor.
+            let (hashes, freshIndex): ([String], SemanticIndex?) = await Task.detached(priority: .userInitiated) {
+                let structured: [String]
+                if filters.isEmpty {
+                    structured = q.isEmpty ? [] : (try? lib.catalog.allHashesNewestFirst()) ?? []
+                } else {
+                    structured = (try? lib.catalog.structuredFilter(filters)) ?? []
+                }
+                guard !q.isEmpty else { return (structured, nil) }
+                let text = (try? lib.catalog.textMatches(q)) ?? []
+                // Rebuild semantic index if dirty.
+                let idx: SemanticIndex?
+                let builtFresh: SemanticIndex?
+                if needsRebuild {
+                    builtFresh = try? SemanticIndex(catalog: lib.catalog, model: EmbedStage().modelID)
+                    idx = builtFresh
+                } else {
+                    builtFresh = nil
+                    idx = currentIndex
+                }
+                let semantic: [(hash: String, score: Float)]
+                if let idx, let qVec = EmbedStage().embedText(q) {
+                    semantic = idx.query(qVec, topN: 300)
+                } else {
+                    semantic = []
+                }
+                let ranked = SearchRanker.combine(structured: structured, text: text,
+                                                  semantic: semantic, hasText: true)
+                return (ranked, builtFresh)
+            }.value
+            let items = (try? lib.catalog.items(forHashes: hashes, preservingOrder: true)) ?? []
+            // Publish results + store fresh index (if rebuilt) back on the main actor.
+            self.searchResults = items
+            self.searching = false
+            if let freshIndex {
+                self.semanticIndex = freshIndex
+                self.semanticIndexDirty = false
+            }
+        }
+    }
+
     /// Viewer: whether the bottom gallery (filmstrip) is expanded. Defaults to shown.
     var viewerGalleryShown: Bool = UserDefaults.standard.object(forKey: "viewerGalleryShown") == nil
         ? true
@@ -924,6 +986,7 @@ final class AppState {
             }
         }
         derivationProgress = nil
+        semanticIndexDirty = true   // embeddings may have grown → refresh the in-memory index
     }
 
     /// Combined remaining work across all stages (sidebar shows the sum).
