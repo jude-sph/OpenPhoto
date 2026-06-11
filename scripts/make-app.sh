@@ -29,22 +29,27 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# App icon — build OpenPhoto.icns from the 1024px source PNG if present. Prefer the macOS-named
-# source; if it's absent (e.g. replaced with a freshly-exported icon under a different name), fall
-# back to the newest "OpenPhoto-*-1024x1024@1x.png" that isn't an archived "-old" copy.
-ICON_SRC="OpenPhoto-macOS-Default-1024x1024@1x.png"
-if [[ ! -f "$ICON_SRC" ]]; then
-  ICON_SRC="$(ls -t OpenPhoto-*-1024x1024@1x.png 2>/dev/null | grep -v -- '-old' | head -1)"
-fi
-if [[ -n "$ICON_SRC" && -f "$ICON_SRC" ]]; then
-  ICONSET="$(mktemp -d)/OpenPhoto.iconset"
-  mkdir -p "$ICONSET"
-  for s in 16 32 128 256 512; do
-    sips -z "$s" "$s" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-    sips -z "$((s * 2))" "$((s * 2))" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-  done
-  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/OpenPhoto.icns"
-  rm -rf "$(dirname "$ICONSET")"
+# App icon. Prefer a ready-made macOS .icns (IconKitchen's macos/AppIcon.icns is already the correct
+# macOS sizes, margins, and shadow). Otherwise build OpenPhoto.icns from a 1024px source PNG —
+# preferring IconKitchen's macos/AppIcon1024.png, then a macOS-named source, then the newest
+# "OpenPhoto-*-1024x1024@1x.png" that isn't an archived "-old" copy.
+PREBUILT_ICNS="IconKitchen-Output/macos/AppIcon.icns"
+if [[ -f "$PREBUILT_ICNS" ]]; then
+  cp "$PREBUILT_ICNS" "$APP/Contents/Resources/OpenPhoto.icns"
+else
+  ICON_SRC="IconKitchen-Output/macos/AppIcon1024.png"
+  [[ -f "$ICON_SRC" ]] || ICON_SRC="OpenPhoto-macOS-Default-1024x1024@1x.png"
+  [[ -f "$ICON_SRC" ]] || ICON_SRC="$(ls -t OpenPhoto-*-1024x1024@1x.png 2>/dev/null | grep -v -- '-old' | head -1)"
+  if [[ -n "$ICON_SRC" && -f "$ICON_SRC" ]]; then
+    ICONSET="$(mktemp -d)/OpenPhoto.iconset"
+    mkdir -p "$ICONSET"
+    for s in 16 32 128 256 512; do
+      sips -z "$s" "$s" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+      sips -z "$((s * 2))" "$((s * 2))" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+    done
+    iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/OpenPhoto.icns"
+    rm -rf "$(dirname "$ICONSET")"
+  fi
 fi
 
 # On-device ML models + CLIP vocab (gitignored, fetched into .models/Resources/). EmbedStage loads
