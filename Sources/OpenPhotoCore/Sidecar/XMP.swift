@@ -120,4 +120,14 @@ public enum XMP {
     private static func areaAttr(_ el: XMLElement, _ localName: String) -> String? {
         el.attributes?.first { $0.localName == localName }?.stringValue
     }
+
+    /// dc:title (Apple Photos' "Title" in IPTC-as-XMP exports). Our own sidecars never
+    /// write it — used only as a caption fallback when folding foreign sidecars.
+    public static func parseTitle(_ data: Data) -> String? {
+        guard let doc = try? XMLDocument(data: data),
+              let s = try? doc.nodes(forXPath:
+                  "//*[local-name()='title']//*[local-name()='li']").first?.stringValue,
+              !s.isEmpty else { return nil }
+        return s
+    }
 }

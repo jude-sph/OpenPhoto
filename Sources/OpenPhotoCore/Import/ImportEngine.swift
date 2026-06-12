@@ -35,6 +35,8 @@ public final class ImportEngine: Sendable {
 
     public func run(source: any ImportSource, items: [ImportItem],
                     vault: Vault, dirPath: String,
+                    subdirForItem: (@Sendable (ImportItem) -> String)? = nil,
+                    postPlace: (@Sendable (ImportedItem) async -> Void)? = nil,
                     progress: (@Sendable (Progress) -> Void)? = nil) async -> BatchResult {
         var result = BatchResult()
         let fm = FileManager.default
@@ -69,6 +71,13 @@ public final class ImportEngine: Sendable {
             return result
         }
 
+        // Per-item destination dir: dirPath plus the optional per-item subdir (foreign-vault
+        // imports preserve THEIR folder tree under the chosen parent). Empty subdir = flat.
+        func destDir(for item: ImportItem) -> String {
+            guard let sub = subdirForItem?(item), !sub.isEmpty else { return dirPath }
+            return dirPath.isEmpty ? sub : dirPath + "/" + sub
+        }
+
         // 3. Per-item: fetch → hash → destination-aware dedup-check → remember staged file.
         var staged: [(item: ImportItem, url: URL, hash: String)] = []
         for (i, item) in work.enumerated() {
@@ -83,12 +92,12 @@ public final class ImportEngine: Sendable {
                 // already holds these exact bytes (true no-op).
                 if (try? library.catalog.hashPresent(
                         inVault: vault.descriptor.vaultID,
-                        dirPath: dirPath,
+                        dirPath: destDir(for: item),
                         hash: hash)) == true {
                     try? registry.append(.init(sourceKey: source.sourceKey, name: item.name,
                         size: item.byteSize, takenAt: takenStr, hash: hash,
                         importedAt: ISO8601Millis.string(from: Date()),
-                        importedTo: "\(dirPath)/\(item.name)"))
+                        importedTo: "\(destDir(for: item))/\(item.name)"))
                     result.skipped.append(item)
                     try? fm.removeItem(at: dest)
                     continue
@@ -99,18 +108,26 @@ public final class ImportEngine: Sendable {
             }
         }
 
-        // 4. Place with collision-safe names.
-        let dirURL = vault.absoluteURL(forRelativePath: dirPath)
-        try? fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        // 4. Place with collision-safe names (per-item destination dir).
         var placed: [(item: ImportItem, relPath: String, hash: String)] = []
         for (i, s) in staged.enumerated() {
             progress?(Progress(stage: .placing, done: i, total: staged.count, currentName: s.item.name))
+            let dirURL = vault.absoluteURL(forRelativePath: destDir(for: s.item))
+            try? fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
             let target = FileNaming.collisionFreeURL(for: s.item.name, in: dirURL)
             do {
                 try fm.moveItem(at: s.url, to: target)
                 placed.append((s.item, vault.relativePath(of: target), s.hash))
             } catch {
                 result.failed.append(FailedItem(item: s.item, reason: String(describing: error)))
+            }
+        }
+
+        // 4.5. Post-place hook (e.g. sidecar carry) — BEFORE the rescan so whatever it
+        // writes is ingested by the same scan.
+        if let postPlace {
+            for p in placed {
+                await postPlace(ImportedItem(item: p.item, hash: p.hash, placedRelPath: p.relPath))
             }
         }
 

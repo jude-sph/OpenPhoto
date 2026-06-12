@@ -189,4 +189,12 @@ extension Catalog {
                 """, arguments: [favorite, rating, caption, tagsJSON, hash])
         }
     }
+
+    /// Every catalogued asset hash — the zero-I/O pre-flag for foreign-drive imports
+    /// ("already in your library" from their manifest hashes, before any byte copies).
+    public func assetHashes() throws -> Set<String> {
+        try dbQueue.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT hash FROM assets"))
+        }
+    }
 }

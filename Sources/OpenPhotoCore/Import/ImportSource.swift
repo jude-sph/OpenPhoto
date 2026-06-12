@@ -10,11 +10,16 @@ public struct ImportItem: Identifiable, Sendable, Equatable {
     public var kind: MediaKind
     /// Set by pairLiveItems(): the other half of a Live Photo, if detected.
     public var livePartnerID: String?
+    /// Content hash the SOURCE claims for this item (foreign OpenPhoto drives, from their
+    /// manifest). Used ONLY to pre-flag "already in your library" before any byte copies —
+    /// never for integrity; the engine still hashes and verifies its own copy.
+    public var knownHash: String?
 
     public init(id: String, name: String, byteSize: Int64, takenAt: Date?,
-                kind: MediaKind, livePartnerID: String?) {
+                kind: MediaKind, livePartnerID: String?, knownHash: String? = nil) {
         self.id = id; self.name = name; self.byteSize = byteSize
         self.takenAt = takenAt; self.kind = kind; self.livePartnerID = livePartnerID
+        self.knownHash = knownHash
     }
 }
 

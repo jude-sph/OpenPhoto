@@ -8,12 +8,14 @@ enum ConnectedDevice: Identifiable, Equatable {
     case volume(id: String, name: String, url: URL)
     case photosLibrary
     case takeout(id: String, name: String, url: URL)
+    case foreignVault(id: String, name: String, url: URL)
     var id: String {
         switch self {
         case .camera(let id, _): "cam-\(id)"
         case .volume(let id, _, _): "vol-\(id)"
         case .photosLibrary: "photoslib"
         case .takeout(let id, _, _): "takeout-\(id)"
+        case .foreignVault(let id, _, _): "foreign-\(id)"
         }
     }
     var name: String {
@@ -22,6 +24,7 @@ enum ConnectedDevice: Identifiable, Equatable {
         case .volume(_, let n, _): n
         case .photosLibrary: "Apple Photos"
         case .takeout(_, let n, _): n
+        case .foreignVault(_, let n, _): n
         }
     }
     var symbol: String {
@@ -30,16 +33,17 @@ enum ConnectedDevice: Identifiable, Equatable {
         case .volume: "sdcard"
         case .photosLibrary: "photo.on.rectangle.angled"
         case .takeout: "arrow.down.circle"
+        case .foreignVault: "externaldrive.badge.person.crop"
         }
     }
     /// Sources whose items can actually be deleted off them, enabling the
     /// "free up space" flow: a connected camera (iPhone) and a removable volume
     /// (SD card → moves to .openphoto-trash). The read-only library imports
-    /// (Apple Photos, Google Takeout) do NOT support it.
+    /// (Apple Photos, Google Takeout, someone else's OpenPhoto drive) do NOT support it.
     var supportsDeviceDelete: Bool {
         switch self {
         case .camera, .volume: return true
-        case .photosLibrary, .takeout: return false
+        case .photosLibrary, .takeout, .foreignVault: return false
         }
     }
 }
@@ -61,6 +65,10 @@ final class DeviceWatcher: NSObject {
 
     /// Set by AppState; called whenever volumes mount/unmount (to re-scan canonical drives).
     var onVolumesChanged: (() -> Void)?
+
+    /// Set by AppState: every vault ID that is OURS (local source vaults + registered
+    /// durable drives). A mounted vault with an unknown ID is someone else's → foreign.
+    var knownVaultIDs: () -> Set<String> = { [] }
 
     func start() {
         browser.delegate = self
@@ -127,6 +135,9 @@ final class DeviceWatcher: NSObject {
             made = PhotosLibrarySource()
         case .takeout(_, _, let url):
             made = TakeoutSource(rootURL: url, displayName: device.name)
+        case .foreignVault(_, let name, let url):
+            made = ((try? Vault.open(at: url)) ?? nil)
+                .map { ForeignVaultSource(vault: $0, displayName: name) }
         }
         if let made { sourceCache[device.id] = made }
         return made
@@ -139,18 +150,29 @@ final class DeviceWatcher: NSObject {
         var vols: [ConnectedDevice] = []
         for url in urls {
             guard let v = try? url.resourceValues(forKeys: Set(keys)),
-                  v.volumeIsRemovable == true,
-                  FileManager.default.fileExists(
+                  v.volumeIsRemovable == true else { continue }
+            // Someone ELSE's OpenPhoto drive → a read-only import source. Our own
+            // registered drives never land here (their IDs are known); adoption stays
+            // behind the explicit Add Drive flow.
+            if let vault = (try? Vault.open(at: url)) ?? nil,
+               !knownVaultIDs().contains(vault.descriptor.vaultID) {
+                vols.append(.foreignVault(id: vault.descriptor.vaultID,
+                                          name: v.volumeName ?? url.lastPathComponent,
+                                          url: url))
+                continue
+            }
+            guard FileManager.default.fileExists(
                       atPath: url.appendingPathComponent("DCIM").path) else { continue }
             vols.append(.volume(id: v.volumeUUIDString ?? url.path,
                                 name: v.volumeName ?? url.lastPathComponent, url: url))
         }
         // Keep cameras, Apple Photos, Takeout, and manually-added folders; re-detect real
-        // removable volumes (none of the kept kinds are removable mounts).
+        // removable volumes and foreign vaults (none of the kept kinds are removable mounts).
         let kept = devices.filter { dev in
             switch dev {
             case .camera, .photosLibrary, .takeout: return true
             case .volume: return dev.id.hasPrefix("vol-manual-")
+            case .foreignVault: return false
             }
         }
         devices = kept + vols

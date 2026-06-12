@@ -1292,6 +1292,22 @@ final class AppState {
                 .appendingPathComponent("OpenPhoto")
             library = try LibraryService(vaultRoots: roots, appSupportDir: appSupport)
             startWatcher(roots: roots)
+            // Load drives from the persisted catalog BEFORE the device watcher starts:
+            // knownVaultIDs (below) reads durableVaults, and start() classifies
+            // already-mounted volumes synchronously.
+            reloadDrives()
+            // Every vault ID that is OURS — a mounted vault outside this set is someone
+            // else's drive and surfaces as a read-only foreign import source.
+            // ORDERING: must be assigned (and durableVaults populated via reloadDrives)
+            // before deviceWatcher.start() — start() scans mounted volumes immediately,
+            // and with the default `{ [] }` the user's own registered drive would
+            // misclassify as foreign until the next mount/unmount event.
+            deviceWatcher.knownVaultIDs = { [weak self] in
+                guard let self else { return [] }
+                var ids = Set(self.library?.vaults.map(\.descriptor.vaultID) ?? [])
+                ids.formUnion(self.durableVaults.map(\.id))
+                return ids
+            }
             deviceWatcher.start()
             deviceWatcher.openedDeviceRemoved = { [weak self] id in
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
@@ -1303,10 +1319,9 @@ final class AppState {
             }
             try? library?.catalog.reconcileEmbeddingModel(current: EmbedStage().modelID)
             Task { await rescan(); pokeDerivation() }
-            // Load drives + badge presence from the persisted catalog, then auto-scan connected
-            // drives so badges + status reflect reality without a manual Check. Re-scan on any
-            // volume mount/unmount too.
-            reloadDrives()
+            // Badge presence from the persisted catalog (drives were loaded above), then
+            // auto-scan connected drives so badges + status reflect reality without a
+            // manual Check. Re-scan on any volume mount/unmount too.
             reloadCanonicalPresence()
             if finderTagSyncEnabled { syncFinderTagsNow() }   // initial Finder-tag reconcile pass
             deviceWatcher.onVolumesChanged = { [weak self] in
@@ -1579,7 +1594,7 @@ final class AppState {
         case .camera:
             guard let cam = deviceWatcher.source(for: device) as? CameraSource else { return nil }
             return AirDropDestination(camera: cam)
-        case .photosLibrary, .takeout:
+        case .photosLibrary, .takeout, .foreignVault:
             return nil   // import-only sources — never send/free-up targets
         }
     }

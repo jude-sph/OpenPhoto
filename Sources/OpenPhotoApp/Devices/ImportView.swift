@@ -20,6 +20,11 @@ struct ImportView: View {
     @State private var importedIDCache = Set<String>()
     @State private var sentIDCache = Set<String>()
     @State private var inLibraryCache = Set<String>()
+    // Foreign-vault folder selection + the shared "Include their metadata" toggle.
+    @State private var checkedFolders = Set<String>()
+    @State private var foreignFolderCounts: [String: Int] = [:]
+    @State private var carryMetadata = false
+    @State private var enumProgress: (done: Int, total: Int)?
 
     /// Display items (Live video halves hidden) as selectable items carrying their partner.
     private var orderedSelectable: [SelectableItem] {
@@ -96,8 +101,14 @@ struct ImportView: View {
     @ViewBuilder private var content: some View {
         switch phase {
         case .connecting:
-            ContentUnavailableView("Connecting…", systemImage: "cable.connector")
-                .frame(maxHeight: .infinity)
+            ContentUnavailableView {
+                Label("Connecting…", systemImage: "cable.connector")
+            } description: {
+                if let p = enumProgress {
+                    Text("Reading \(p.done) of \(p.total)…")
+                }
+            }
+            .frame(maxHeight: .infinity)
         case .waitingForUnlock:
             ContentUnavailableView {
                 Label("Unlock your \(device.name)", systemImage: "lock.iphone")
@@ -109,30 +120,40 @@ struct ImportView: View {
                 Label("Couldn't connect", systemImage: "exclamationmark.triangle")
             } description: { Text(why) }.frame(maxHeight: .infinity)
         case .ready, .importing:
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: Theme.gridGap)],
-                          spacing: Theme.gridGap) {
-                    ForEach(Array(displayItems.enumerated()), id: \.element.id) { index, item in
-                        ImportTile(
-                            item: item, source: source!,
-                            alreadyImported: isImported(item),
-                            importedThisSession: sessionImportedIDs.contains(item.id),
-                            sentFromHere: sentIDCache.contains(item.id),
-                            inLibrary: inLibraryCache.contains(item.id),
-                            selected: selection.contains(item.id),
-                            onToggle: {
-                                selection.tap(index: index, items: orderedSelectable,
-                                              extendingRange: NSEvent.modifierFlags.contains(.shift))
-                            })
-                            .cellFrame(item.id, in: "importgrid")
-                    }
+            HStack(spacing: 0) {
+                if isForeign {
+                    folderPanel
+                    Divider().overlay(Theme.hairline)
                 }
-                .padding(.horizontal, 12).padding(.vertical, 12)
+                importGrid
             }
-            .coordinateSpace(name: "importgrid")
-            .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
-                                         space: "importgrid", enabled: true))
         }
+    }
+
+    private var importGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: Theme.gridGap)],
+                      spacing: Theme.gridGap) {
+                ForEach(Array(displayItems.enumerated()), id: \.element.id) { index, item in
+                    ImportTile(
+                        item: item, source: source!,
+                        alreadyImported: isImported(item),
+                        importedThisSession: sessionImportedIDs.contains(item.id),
+                        sentFromHere: sentIDCache.contains(item.id),
+                        inLibrary: inLibraryCache.contains(item.id),
+                        selected: selection.contains(item.id),
+                        onToggle: {
+                            selection.tap(index: index, items: orderedSelectable,
+                                          extendingRange: NSEvent.modifierFlags.contains(.shift))
+                        })
+                        .cellFrame(item.id, in: "importgrid")
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 12)
+        }
+        .coordinateSpace(name: "importgrid")
+        .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
+                                     space: "importgrid", enabled: true))
     }
 
     private var footer: some View {
@@ -156,6 +177,13 @@ struct ImportView: View {
                 Text("\(selectedDisplayCount) selected")
                     .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)
                 Spacer()
+                if isForeign || (source as? VolumeSource)?.sawXMPSidecars == true {
+                    Toggle("Include their metadata", isOn: $carryMetadata)
+                        .toggleStyle(.checkbox).controlSize(.small)
+                        .help(isForeign
+                              ? "Copy their captions, ratings, tags and favorites (their .openphoto sidecars) alongside the imported photos."
+                              : "Fold the exported .xmp sidecars (captions, keywords) into the imported files.")
+                }
                 destinationPicker
                 Button("Import \(selectedDisplayCount) items") { Task { await runBatch() } }
                     .buttonStyle(.borderedProminent)
@@ -194,8 +222,49 @@ struct ImportView: View {
 
     // MARK: helpers
 
+    // NOTE: `source` is Optional — `source is ForeignVaultSource` would always be false;
+    // `as?` flattens through the optional correctly.
+    private var isForeign: Bool { (source as? ForeignVaultSource) != nil }
+
+    /// Foreign vault: only items inside a checked folder (subtree-inclusive) display.
     private var displayItems: [ImportItem] {
-        items.filter { !($0.kind == .video && $0.livePartnerID != nil) }
+        let base = items.filter { !($0.kind == .video && $0.livePartnerID != nil) }
+        guard isForeign else { return base }
+        return base.filter { item in
+            let dir = (item.id as NSString).deletingLastPathComponent
+            return checkedFolders.contains { dir == $0 || dir.hasPrefix($0 + "/") }
+        }
+    }
+
+    /// Their folders, sorted; checking a folder includes its whole subtree.
+    private var foreignFolderList: [String] { foreignFolderCounts.keys.sorted() }
+
+    private var folderPanel: some View {
+        List {
+            ForEach(foreignFolderList, id: \.self) { path in
+                Toggle(isOn: Binding(
+                    get: { checkedFolders.contains(path) },
+                    set: { on in
+                        if on { checkedFolders.insert(path) }
+                        else { checkedFolders.remove(path) }
+                        selection.clear()
+                    })) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder").font(.system(size: 11))
+                            .foregroundStyle(Theme.textDim)
+                        Text(path.isEmpty ? "(root)" : path).font(.system(size: 12))
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Text("\(foreignFolderCounts[path] ?? 0)")
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(Theme.textFaint)
+                    }
+                }
+                .toggleStyle(.checkbox)
+            }
+        }
+        .listStyle(.sidebar)
+        .frame(width: 230)
     }
     private var selectedDisplayCount: Int {
         displayItems.filter { selection.contains($0.id) }.count
@@ -229,6 +298,11 @@ struct ImportView: View {
             phase = .failedToConnect("Source unavailable"); return
         }
         source = src
+        if let vol = src as? VolumeSource {
+            vol.enumerationProgress = { done, total in
+                Task { @MainActor in enumProgress = (done, total) }
+            }
+        }
         if src is PhotosLibrarySource {
             let ok = PhotosLibrarySource.currentStatus == .authorized
                 || PhotosLibrarySource.currentStatus == .limited
@@ -256,6 +330,12 @@ struct ImportView: View {
     private func reloadItems() async {
         guard let source else { return }
         items = (try? await source.enumerateItems()) ?? []
+        enumProgress = nil
+        if let foreign = source as? ForeignVaultSource {
+            foreignFolderCounts = (try? foreign.folderCounts()) ?? [:]
+            checkedFolders = []
+            if destination.isEmpty { destination = "From " + device.name } // spec §3: suggested parent, editable
+        }
         rebuildImportedCache()
         rebuildSentCache()
         rebuildInLibraryCache()
@@ -288,6 +368,13 @@ struct ImportView: View {
             let ms = item.takenAt.map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
             if ms != 0, keys.contains("\(item.byteSize)|\(ms / 1000)") { cache.insert(item.id) }
         }
+        // Foreign drives: exact-hash pre-flag from their manifest — zero I/O.
+        if items.contains(where: { $0.knownHash != nil }),
+           let hashes = try? state.library?.catalog.assetHashes() {
+            for item in items {
+                if let kh = item.knownHash, hashes.contains(kh) { cache.insert(item.id) }
+            }
+        }
         inLibraryCache = cache
     }
 
@@ -310,8 +397,26 @@ struct ImportView: View {
         let batchItems = items.filter { selection.contains($0.id) }
         phase = .importing(done: 0, total: batchItems.count)
         let engine = ImportEngine(library: lib, registry: registry)
-        let result = await engine.run(source: source, items: batchItems,
-                                      vault: vault, dirPath: destination) { p in
+        let foreign = source as? ForeignVaultSource
+        if let vol = source as? VolumeSource { vol.foldXMPSidecars = carryMetadata }
+        let carry = carryMetadata
+        var subdirForItem: (@Sendable (ImportItem) -> String)?
+        if foreign != nil {
+            subdirForItem = { item in (item.id as NSString).deletingLastPathComponent }
+        }
+        var postPlace: (@Sendable (ImportEngine.ImportedItem) async -> Void)?
+        if foreign != nil && carry {
+            postPlace = { placed in
+                // Carry their sidecar (their human metadata) for the placed copy —
+                // collision-renamed names included; the engine rescans right after.
+                guard let data = foreign?.sidecarData(for: placed.item) else { return }
+                let mediaURL = vault.absoluteURL(forRelativePath: placed.placedRelPath)
+                try? AtomicFile.write(data, to: vault.sidecarURL(forMediaAt: mediaURL))
+            }
+        }
+        let result = await engine.run(
+            source: source, items: batchItems, vault: vault, dirPath: destination,
+            subdirForItem: subdirForItem, postPlace: postPlace) { p in
             Task { @MainActor in phase = .importing(done: p.done, total: p.total) }
         }
         lastResult = result
