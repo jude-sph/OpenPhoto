@@ -21,7 +21,7 @@ public final class Catalog: Sendable {
     /// On-disk catalog schema version — the latest registered migration below. Written into a
     /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
     /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
-    public static let schemaVersion = 11
+    public static let schemaVersion = 12
 
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
@@ -187,6 +187,14 @@ public final class Catalog: Sendable {
             try db.create(table: "finder_tag_sync") { t in
                 t.primaryKey("hash", .text)             // → assets.hash
                 t.column("baseline", .text).notNull()   // JSON array of tag strings
+            }
+        }
+        migrator.registerMigration("v12") { db in
+            // User-chosen cover face for the People screen — a Mac-local display preference. Nullable:
+            // when NULL (or when the stored faceID no longer belongs to this person), people() falls back
+            // to the highest-confidence face via COALESCE. Stale values are never cleaned up eagerly.
+            try db.alter(table: "people") { t in
+                t.add(column: "coverFaceID", .integer)  // → faces.id; nullable
             }
         }
         try migrator.migrate(dbQueue)

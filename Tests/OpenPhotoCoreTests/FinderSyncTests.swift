@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import OpenPhotoCore
 
-@Test func schemaIsV11() { #expect(Catalog.schemaVersion == 11) }
+@Test func schemaIsV12() { #expect(Catalog.schemaVersion == 12) }
 
 @Test func finderTagBaselineRoundTrips() throws {
     let t = try TestDirs(); defer { t.cleanup() }

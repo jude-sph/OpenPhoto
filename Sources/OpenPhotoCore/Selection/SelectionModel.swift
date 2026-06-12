@@ -63,19 +63,33 @@ public struct SelectionModel: Equatable, Sendable {
         }
     }
 
-    /// Begin a rubber-band drag (clears the shift-anchor).
-    public mutating func beginDrag() { anchor = nil }
+    /// Whether the current rubber-band drag is in subtract mode (shift held at start).
+    public private(set) var isDragSubtracting: Bool = false
 
-    /// Add every item whose frame intersects `rect` (with partners). Additive: a
-    /// drag only ever grows the selection, so cells accumulate as the grid
-    /// auto-scrolls under the pointer instead of being dropped when they scroll off.
+    /// Begin a rubber-band drag (clears the shift-anchor). Pass `subtracting: true`
+    /// when ⇧ is held at drag start to latch this drag into subtract mode; intersecting
+    /// cells will be *removed* from the selection instead of added. Default `false`
+    /// keeps every existing call site compiling and behaving identically.
+    public mutating func beginDrag(subtracting: Bool = false) {
+        anchor = nil
+        isDragSubtracting = subtracting
+    }
+
+    /// Add (or subtract) every item whose frame intersects `rect` (with partners).
+    /// In add mode (default) a drag only ever grows the selection. In subtract mode
+    /// (shift held at drag start) intersecting items are removed from the selection.
     public mutating func updateDrag(rect: CGRect, frames: [String: CGRect],
                                     items: [SelectableItem]) {
         for it in items where frames[it.id]?.intersects(rect) == true {
-            selected.insert(it.id)
-            if let p = it.partnerID { selected.insert(p) }
+            if isDragSubtracting {
+                selected.remove(it.id)
+                if let p = it.partnerID { selected.remove(p) }
+            } else {
+                selected.insert(it.id)
+                if let p = it.partnerID { selected.insert(p) }
+            }
         }
     }
 
-    public mutating func endDrag() {}
+    public mutating func endDrag() { isDragSubtracting = false }
 }

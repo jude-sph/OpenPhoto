@@ -43,6 +43,7 @@ struct OpenPhotoApp: App {
 
 struct RootView: View {
     @Bindable var state: AppState
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         if state.library == nil {
@@ -88,6 +89,10 @@ struct RootView: View {
             // is open (no strip there — the lights sit over the viewer's top bar).
             .background(VerticalTrafficLights(vertical: !state.sidebarShown && state.openedItem == nil))
             .background(TitleBarDoubleClickZoom())
+            // Hand the window's native UndoManager to AppState (⌘Z registrations — see
+            // AppState+Undo.swift). The Bool task id re-fires when nil-ness flips, which is
+            // the only transition that matters (the manager instance is stable per window).
+            .task(id: undoManager == nil) { state.windowUndoManager = undoManager }
         }
     }
 

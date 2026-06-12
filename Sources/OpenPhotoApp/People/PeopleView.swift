@@ -381,6 +381,11 @@ struct PersonDetailView: View {
                             guard let id = pair.face.id else { return }
                             state.reassignFace(id, to: target?.id, fromPerson: person.id)
                             reload()
+                        },
+                        onUseAsThumbnail: {
+                            if let id = pair.face.id {
+                                state.setPersonCover(personID: person.id, faceID: id)
+                            }
                         }
                     )
                 }
@@ -622,6 +627,7 @@ struct FacePhotoTile: View {
     var onTap: () -> Void
     /// nil → no per-face management menu (cluster grid). non-nil(person) reassigns, non-nil(nil) unassigns.
     var onReassign: ((PersonRow?) -> Void)?
+    var onUseAsThumbnail: (() -> Void)?
 
     private var tileID: String { face.id.map(String.init) ?? face.hash }
 
@@ -636,7 +642,8 @@ struct FacePhotoTile: View {
             badges: { confidenceBadge },
             onTap: onTap
         )
-        .modifier(FaceTileMenu(face: face, allPeople: allPeople, onReassign: onReassign))
+        .modifier(FaceTileMenu(face: face, allPeople: allPeople,
+                               onReassign: onReassign, onUseAsThumbnail: onUseAsThumbnail))
     }
 
     private var confidenceBadge: some View {
@@ -655,10 +662,17 @@ private struct FaceTileMenu: ViewModifier {
     let face: FaceRow
     let allPeople: [PersonRow]
     let onReassign: ((PersonRow?) -> Void)?
+    let onUseAsThumbnail: (() -> Void)?
 
     @ViewBuilder func body(content: Content) -> some View {
         if let onReassign {
             content.contextMenu {
+                if let onUseAsThumbnail {
+                    Button { onUseAsThumbnail() } label: {
+                        Label("Use as Thumbnail", systemImage: "person.crop.circle")
+                    }
+                    Divider()
+                }
                 if !allPeople.isEmpty {
                     Menu("Move to person…") {
                         ForEach(allPeople.filter { $0.id != face.personID }, id: \.id) { p in

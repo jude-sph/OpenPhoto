@@ -134,8 +134,12 @@ extension Catalog {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT p.id, p.name, COUNT(f.id) AS cnt,
-                       (SELECT f2.id FROM faces f2 WHERE f2.personID = p.id
-                        ORDER BY f2.confidence DESC LIMIT 1) AS rep
+                       COALESCE(
+                         (SELECT f3.id FROM faces f3
+                          WHERE f3.id = p.coverFaceID AND f3.personID = p.id),
+                         (SELECT f2.id FROM faces f2 WHERE f2.personID = p.id
+                          ORDER BY f2.confidence DESC LIMIT 1)
+                       ) AS rep
                 FROM people p LEFT JOIN faces f ON f.personID = p.id
                 GROUP BY p.id ORDER BY cnt DESC, p.name
                 """).map { row -> PersonRow in
@@ -144,6 +148,16 @@ extension Catalog {
                                      faceCount: row["cnt"],
                                      representativeFaceID: rep)
                 }
+        }
+    }
+
+    /// Set (or clear with nil) a person's chosen cover face for the People screen.
+    /// The cover is a Mac-local display preference — it persists until cleared or the face is
+    /// reassigned to another person, at which point `people()` falls back automatically via COALESCE.
+    public func setPersonCover(personID: Int64, faceID: Int64?) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE people SET coverFaceID = ? WHERE id = ?",
+                           arguments: [faceID, personID])
         }
     }
 
