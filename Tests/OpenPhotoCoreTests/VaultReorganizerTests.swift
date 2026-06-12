@@ -65,7 +65,7 @@ private func sidecarSeed(_ vault: Vault, mediaRelPath: String) throws -> URL {
     let sc = vault.sidecarURL(forMediaAt: vault.absoluteURL(forRelativePath: mediaRelPath))
     try FileManager.default.createDirectory(at: sc.deletingLastPathComponent(),
                                             withIntermediateDirectories: true)
-    try Data("xmp".utf8).write(to: sc)
+    try Data(XMP.serialize(SidecarData.empty).utf8).write(to: sc)
     return sc
 }
 

@@ -44,7 +44,7 @@ private func makeLibrary(_ t: TestDirs, files: [String]) async throws -> (Librar
         let sc = vault.sidecarURL(forMediaAt: vault.absoluteURL(forRelativePath: rel))
         try FileManager.default.createDirectory(at: sc.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
-        try Data("xmp".utf8).write(to: sc)
+        try Data(XMP.serialize(SidecarData.empty).utf8).write(to: sc)
     }
     // Re-fetch: the partner is now hidden; the photo row carries livePairHash.
     let item = try #require(try lib.items(inDir: "a").first { $0.hash == photoHash })
