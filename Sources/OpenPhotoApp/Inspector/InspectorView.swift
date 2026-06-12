@@ -179,12 +179,11 @@ struct InspectorView: View {
                                     let name = newName.trimmingCharacters(in: .whitespaces)
                                     guard !name.isEmpty else { renaming = false; return }
                                     Task {
-                                        if let lib = state.library {
-                                            try? await lib.rename(item, to: name)
-                                            try? state.refreshQueries()
-                                            if let updated = try? lib.item(hash: item.hash) {
-                                                state.openedItem = updated
-                                            }
+                                        // Records the undo + refreshes; alerts its own failures.
+                                        await state.rename(item, to: name)
+                                        if let lib = state.library,
+                                           let updated = try? lib.item(hash: item.hash) {
+                                            state.openedItem = updated
                                         }
                                         renaming = false
                                     }

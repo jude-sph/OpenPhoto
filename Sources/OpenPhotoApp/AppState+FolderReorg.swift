@@ -62,6 +62,8 @@ extension AppState {
             NSAlert(error: error).runModal()   // surface collision/invalid-target to the user
             return
         }
+        // Primary move succeeded — record the inverse (move `newPath` back under `src`'s parent).
+        recordUndo(.moveFolder(from: src, to: newPath))
 
         // Propagate to connected durable drives whose copy of `src` actually exists (off-main).
         if let basename = driveBasename() {
@@ -114,6 +116,15 @@ extension AppState {
         // 1. Mac primary vault (local instances; movePhotos skips drive-only + in-dest).
         let result = library.movePhotos(items.filter { $0.driveRelPath == nil }, toDir: destDir)
 
+        // Undo bookkeeping: every file actually moved (primary vault + drive-only rekeys below)
+        // as data-only records; recorded once after the final rescan.
+        var undoMoves: [MovedFileRecord] = []
+        if let primaryID = library.vaults.first?.descriptor.vaultID {
+            for (old, new) in result.moved {
+                undoMoves.append(MovedFileRecord(vaultID: primaryID, from: old, to: new))
+            }
+        }
+
         // 2. Propagate the Mac moves: connected durable drives now, offline drives queued.
         if let basename = driveBasename(), !result.moved.isEmpty {
             let drives = connectedDurableDrives()
@@ -158,6 +169,7 @@ extension AppState {
                     guard new != old else { continue }
                     try? library.catalog.rewriteVaultPresencePath(vaultID: item.vaultID,
                                                                   fromRelPath: old, toRelPath: new)
+                    undoMoves.append(MovedFileRecord(vaultID: item.vaultID, from: old, to: new))
                     if let dv = connected[item.vaultID] {
                         driveFileMoves.append((dv, old, new))
                     } else {
@@ -181,6 +193,7 @@ extension AppState {
         reloadCanonicalPresence()
         await rescan()
         photoMoveToken += 1
+        if !undoMoves.isEmpty { recordUndo(.movePhotos(moves: undoMoves)) }
 
         // 4. Failures: one aggregate alert (successes are silent, like folder moves).
         if !result.failures.isEmpty {

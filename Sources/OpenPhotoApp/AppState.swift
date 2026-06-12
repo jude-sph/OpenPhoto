@@ -81,6 +81,11 @@ final class AppState {
     var refreshToken = 0
     /// Bumped after a per-photo move so the folder grid clears its (now-stale) selection.
     var photoMoveToken = 0
+    /// The main window's native UndoManager (captured by RootView). ⌘Z registrations go here so
+    /// focused text fields keep their own field-editor undo. See AppState+Undo.swift.
+    weak var windowUndoManager: UndoManager?
+    /// True while applyUndo replays an inverse op — suppresses re-recording (no redo by design).
+    var isApplyingUndo = false
     var grouping: TimelineGrouping = {
         let raw = UserDefaults.standard.string(forKey: "timelineGrouping") ?? ""
         return TimelineGrouping(rawValue: raw) ?? .day
@@ -1525,12 +1530,30 @@ final class AppState {
     /// indicator. Unlike evict, this is how a removal reaches the canonical drive.
     func delete(_ items: [TimelineItem]) async {
         guard let library else { return }
+        // Captured BEFORE the delete: asset hashes (incl. Live partners) drive the bin-restore
+        // undo; count is the user-facing photo count for the menu label.
+        let hashes = items.flatMap { [$0.hash] + ($0.livePairHash.map { [$0] } ?? []) }
+        let count = items.count
         do {
             _ = try await library.delete(items)
+            recordUndo(.deletePhotos(hashes: hashes, count: count))
             try refreshQueries()
         } catch {
             NSAlert(error: error).runModal()
         }
+    }
+
+    /// Rename via the inspector — wraps LibraryService.rename and records the undo.
+    func rename(_ item: TimelineItem, to newName: String) async {
+        guard let library else { return }
+        let dir = (item.relPath as NSString).deletingLastPathComponent
+        let oldName = (item.relPath as NSString).lastPathComponent
+        let newRel = dir.isEmpty ? newName : dir + "/" + newName
+        do {
+            try await library.rename(item, to: newName)
+            recordUndo(.rename(vaultID: item.vaultID, relPath: newRel, oldName: oldName))
+            try refreshQueries()
+        } catch { NSAlert(error: error).runModal() }
     }
 
     /// Remove the open photo, then advance the viewer to the next one (or close it if it was the
