@@ -1296,6 +1296,14 @@ final class AppState {
             deviceWatcher.openedDeviceRemoved = { [weak self] id in
                 if self?.openedDevice?.id == id { self?.openedDevice = nil }
             }
+            // Every vault ID that is OURS — a mounted vault outside this set is someone
+            // else's drive and surfaces as a read-only foreign import source.
+            deviceWatcher.knownVaultIDs = { [weak self] in
+                guard let self else { return [] }
+                var ids = Set(self.library?.vaults.map(\.descriptor.vaultID) ?? [])
+                ids.formUnion(self.durableVaults.map(\.id))
+                return ids
+            }
             // Phones (ImageCaptureCore): re-verify prior sends READ-ONLY when a camera connects.
             // Volumes/SD re-verify via onVolumesChanged below (beside autoScanConnectedDrives).
             deviceWatcher.deviceConnected = { [weak self] _ in
@@ -1579,7 +1587,7 @@ final class AppState {
         case .camera:
             guard let cam = deviceWatcher.source(for: device) as? CameraSource else { return nil }
             return AirDropDestination(camera: cam)
-        case .photosLibrary, .takeout:
+        case .photosLibrary, .takeout, .foreignVault:
             return nil   // import-only sources — never send/free-up targets
         }
     }
