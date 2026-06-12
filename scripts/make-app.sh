@@ -46,12 +46,34 @@ if grep -q '__VERSION__\|__BUILD__' "$APP/Contents/Info.plist"; then
   echo "error: version tokens not substituted in Info.plist (heredoc/sed drift?)" >&2; exit 1
 fi
 
-# Sparkle's EdDSA public key (generated in C1, committed to scripts/sparkle_public_key.txt). Until
-# then the file is absent → SUKEY is empty → the token substitutes to "" and Sparkle still launches
-# (it just can't verify update signatures yet). Substitute unconditionally so __SUPUBLICEDKEY__ never
-# survives into the shipped Info.plist.
-SUKEY="$(cat scripts/sparkle_public_key.txt 2>/dev/null | tr -d '[:space:]' || true)"
+# Sparkle's EdDSA public key (generated via Sparkle's generate_keys, committed to
+# scripts/sparkle_public_key.txt — see docs/RELEASING.md). An updater-enabled app MUST ship this key
+# or it cannot verify the authenticity of downloaded updates — a self-updating app with no key is a
+# remote-code-execution risk (a MITM could push a malicious "update"). So REFUSE to build the bundle
+# without it. Local development via `swift run` doesn't go through this script and is unaffected; only
+# the packaged .app (the thing you'd actually distribute) requires the key.
+if [[ -s scripts/sparkle_public_key.txt ]]; then
+  SUKEY="$(tr -d '[:space:]' < scripts/sparkle_public_key.txt)"
+else
+  SUKEY=""
+fi
+if [[ -z "$SUKEY" ]]; then
+  echo "error: scripts/sparkle_public_key.txt is missing or empty." >&2
+  echo "       Generate the Sparkle EdDSA key (one-time setup, see docs/RELEASING.md): run Sparkle's" >&2
+  echo "       generate_keys and save the PUBLIC key to scripts/sparkle_public_key.txt." >&2
+  echo "       Refusing to package an updater-enabled app with no signature-verification key." >&2
+  exit 1
+fi
+# Plausibility check: a Sparkle Ed25519 public key is 32 bytes → 44 base64 chars ending in '='.
+if [[ ! "$SUKEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+  echo "error: scripts/sparkle_public_key.txt does not look like a Sparkle EdDSA public key" >&2
+  echo "       (expected 44 base64 characters). Re-copy the PUBLIC key from generate_keys." >&2
+  exit 1
+fi
 sed -i '' "s|__SUPUBLICEDKEY__|${SUKEY}|" "$APP/Contents/Info.plist"
+if grep -q '__SUPUBLICEDKEY__' "$APP/Contents/Info.plist"; then
+  echo "error: SUPublicEDKey token not substituted in Info.plist" >&2; exit 1
+fi
 
 # App icon — always build a FULL multi-resolution .icns from a 1024px source. (A single-rep .icns
 # renders blank in surfaces that request a small rep, e.g. the minimized/Stage-Manager strip.)
