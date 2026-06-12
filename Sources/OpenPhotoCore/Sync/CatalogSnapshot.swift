@@ -104,6 +104,28 @@ extension CatalogSnapshot {
 }
 
 extension CatalogSnapshot {
+    /// hash → takenAtMs from a drive's snapshot — the read-only fast path that lets a
+    /// foreign drive's 10k items date-sort without touching 10k files. Reads ONLY the
+    /// portable `assets` table per the documented snapshot-reader rules (catalog-schema.md);
+    /// returns nil when the drive has no (readable) snapshot — callers fall back to
+    /// manifest mtimes.
+    public static func assetDates(drive: Vault) -> [String: Int64]? {
+        let dbURL = drive.stateDirURL.appendingPathComponent(dirName)
+            .appendingPathComponent("catalog.sqlite")
+        guard FileManager.default.fileExists(atPath: dbURL.path) else { return nil }
+        var cfg = Configuration(); cfg.readonly = true
+        guard let snap = try? DatabaseQueue(path: dbURL.path, configuration: cfg) else { return nil }
+        return try? snap.read { db in
+            var out: [String: Int64] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT hash, takenAtMs FROM assets") {
+                out[row["hash"]] = row["takenAtMs"]
+            }
+            return out
+        }
+    }
+}
+
+extension CatalogSnapshot {
     /// Reconcile an adopted drive's presence against its authoritative manifest (the snapshot may be
     /// stale). No re-hash, no file reads beyond the manifest: drop presence whose hash isn't in the
     /// manifest; add presence (and a minimal asset) for every manifest hash that's missing.
