@@ -102,12 +102,12 @@ The source Mac's internal queue of **folder-structure operations** to apply to a
 |---|---|---|
 | `id` | INTEGER **PK** | Auto-incremented primary key. |
 | `vaultID` | TEXT | The drive vault this op is queued for (references `vaults.id`). |
-| `op` | TEXT | `"move"` \| `"create"` \| `"delete"`. |
-| `srcRelPath` | TEXT? | Source vault-root-relative path. Required for `"move"` and `"delete"`; null for `"create"`. |
-| `dstRelPath` | TEXT? | Destination vault-root-relative path. Required for `"move"` and `"create"`; null for `"delete"`. |
+| `op` | TEXT | `"move"` \| `"create"` \| `"delete"` \| `"moveFile"`. |
+| `srcRelPath` | TEXT? | Source vault-root-relative path. Required for `"move"`, `"delete"`, and `"moveFile"`; null for `"create"`. For `"moveFile"` it is a FILE path. |
+| `dstRelPath` | TEXT? | Destination vault-root-relative path. Required for `"move"`, `"create"`, and `"moveFile"`; null for `"delete"`. For `"moveFile"` it includes the final basename (the Mac's collision-adjusted name). |
 | `createdAtMs` | INTEGER | Epoch milliseconds when the op was queued. |
 
-This table is the **source Mac's private reconcile queue**. It records structural folder rearrangements (drag-drop nesting, folder creation, folder deletion) that happened on the Mac while the target drive was offline. On the drive's next connect, `applyPendingFolderOps(forDriveID:driveVault:)` applies these ops to the drive vault before the drift scan and sync — so the path-keyed sync never sees stale paths and never creates duplicate files.
+This table is the **source Mac's private reconcile queue**. It records structural folder rearrangements (drag-drop nesting, folder creation, folder deletion) that happened on the Mac while the target drive was offline. On the drive's next connect, `applyPendingFolderOps(forDriveID:driveVault:)` applies these ops to the drive vault before the drift scan and sync — so the path-keyed sync never sees stale paths and never creates duplicate files. Since 2026-06-12 the queue also records **per-photo file moves** (`op = "moveFile"`, file-grain `srcRelPath` → `dstRelPath`): the same replay applies them with the file-move primitive (file + sidecar + manifest entry), and a source file missing on the drive makes the op moot (cleared, not retried). No schema change — `op` was always free-form TEXT; readers of older queues simply never see the new kind.
 
 External readers **MUST ignore this table**. It reflects the source Mac's internal pending-ops state and does not describe anything that has already happened (or is guaranteed to happen) on the drive being read.
 
