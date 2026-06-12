@@ -9,7 +9,11 @@ import CoreGraphics
 /// queue (not the Swift concurrency executor). The continuation dance assumes
 /// single-flight fetch/delete: the ImportEngine calls them sequentially per item,
 /// so downloadContinuation and deleteContinuation are never written concurrently.
-/// Thread-safety: `lock` guards `isGone` and all three continuation properties.
+/// Thread-safety: `lock` guards `isGone`, all three continuation properties, the
+/// `itemsByID` map, and `enumerationTask`. The import grid and the on-connect
+/// send-reverify both reach the SAME CameraSource, so enumeration and the reads
+/// that depend on its map (fetch/thumbnail/delete) genuinely race — `itemsByID`
+/// is a non-Sendable Dictionary and MUST only be touched under `lock`.
 /// Discipline: copy-out the continuation, nil it, unlock, THEN resume — never
 /// resume while holding the lock to avoid re-entrancy deadlocks. In async contexts
 /// use `lock.withLock { }` (the Swift 6-safe closure form).
@@ -17,7 +21,6 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     public let sourceKey: String
     public let displayName: String
     private let camera: ICCameraDevice
-    private var itemsByID: [String: ICCameraItem] = [:]
 
     public private(set) var stateStream: AsyncStream<SourceState>!
     private var stateContinuation: AsyncStream<SourceState>.Continuation!
@@ -31,6 +34,8 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     private var readyContinuations: [CheckedContinuation<Void, Error>] = []
     private var downloadContinuation: CheckedContinuation<Void, Error>?
     private var deleteContinuation: CheckedContinuation<Void, Error>?
+    private var itemsByID: [String: ICCameraItem] = [:]
+    private var enumerationTask: Task<[ImportItem], Error>?  // single-flights concurrent enumerations
 
     public init(camera: ICCameraDevice) {
         self.camera = camera
@@ -117,6 +122,23 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     }
 
     public func enumerateItems() async throws -> [ImportItem] {
+        // Single-flight. The import grid and the on-connect send-reverify both ask
+        // the SAME CameraSource to enumerate, often at the same instant on plug-in.
+        // Running two device reads concurrently used to clobber the shared itemsByID
+        // map (heap corruption → SIGSEGV) and returned varying partial counts.
+        // Coalesce concurrent callers onto one in-flight read; a caller arriving
+        // AFTER it finishes starts a fresh read (so reconnects still re-scan).
+        let task: Task<[ImportItem], Error> = lock.withLock {
+            if let existing = enumerationTask { return existing }
+            let t = Task { try await self.performEnumeration() }
+            enumerationTask = t
+            return t
+        }
+        defer { lock.withLock { if enumerationTask == task { enumerationTask = nil } } }
+        return try await task.value
+    }
+
+    private func performEnumeration() async throws -> [ImportItem] {
         // iPhone media catalogs keep growing for a moment after "ready", so a
         // single read catches a varying partial count. Wait until the count is
         // stable across two checks (capped at ~6s) before snapshotting.
@@ -128,14 +150,20 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
             try? await Task.sleep(for: .milliseconds(200))
         }
         let files = (camera.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
-        itemsByID.removeAll()
         // ptpObjectHandle is unreliable on iPhones (often 0 for every file), which
         // collapses the SwiftUI grid to a single cell. Use the enumeration index
         // for a guaranteed-unique, session-stable id (registry dedup keys on
         // name+size+takenAt, not this id, so a per-session id is fine).
+        //
+        // Build the id→file map in a LOCAL dictionary, then publish it atomically
+        // under `lock`. Never mutate the shared itemsByID incrementally: fetch()/
+        // thumbnail() read it concurrently while the grid renders, and an in-place
+        // removeAll()+refill is a data race on a non-Sendable Dictionary.
+        var localMap: [String: ICCameraItem] = [:]
+        localMap.reserveCapacity(files.count)
         var items: [ImportItem] = files.enumerated().map { index, f in
             let id = "icc-\(index)"
-            itemsByID[id] = f
+            localMap[id] = f
             return ImportItem(
                 id: id,
                 name: f.name ?? "item-\(index)",
@@ -146,6 +174,7 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
             )
         }
         items.sort { ($0.takenAt ?? .distantPast) > ($1.takenAt ?? .distantPast) }
+        lock.withLock { itemsByID = localMap }
         return pairLiveItems(items)
     }
 
@@ -154,7 +183,7 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     public func fetch(_ item: ImportItem, to url: URL) async throws {
         if lock.withLock({ isGone }) { throw URLError(.cancelled) }
 
-        guard let file = itemsByID[item.id] as? ICCameraFile else {
+        guard let file = lock.withLock({ itemsByID[item.id] }) as? ICCameraFile else {
             throw CocoaError(.fileNoSuchFile)
         }
         let dir = url.deletingLastPathComponent()
@@ -195,7 +224,7 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
                 continue
             }
 
-            guard let file = itemsByID[item.id] else {
+            guard let file = lock.withLock({ itemsByID[item.id] }) else {
                 results.append(DeleteResult(itemID: item.id, error: "not found"))
                 continue
             }
@@ -227,7 +256,7 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     /// not Unmanaged — SDK bridges it directly). Polls briefly after requestThumbnail;
     /// UI re-requests on nil.
     public func thumbnail(_ item: ImportItem, maxPixel: Int) async -> CGImage? {
-        guard let file = itemsByID[item.id] else { return nil }
+        guard let file = lock.withLock({ itemsByID[item.id] }) else { return nil }
         if let existing = file.thumbnail { return existing }
         file.requestThumbnail()
         for _ in 0..<20 {
