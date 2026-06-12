@@ -66,8 +66,14 @@ public enum XMP {
         let doc = try XMLDocument(data: data)
         guard let desc = try doc.nodes(forXPath: "//*[local-name()='Description']").first
             as? XMLElement else { return .empty }
-        let rating = Int(attr(desc, "Rating") ?? "0") ?? 0
-        let favorite = (attr(desc, "Label") == "Favorite")
+        // xmp:Rating / xmp:Label may be an attribute (our serializer) OR a child
+        // element (ImageIO's re-serialization). Accept both.
+        let ratingStr = attr(desc, "Rating")
+            ?? (try? desc.nodes(forXPath: "./*[local-name()='Rating']").first?.stringValue) ?? nil
+        let rating = Int(ratingStr ?? "0") ?? 0
+        let labelStr = attr(desc, "Label")
+            ?? (try? desc.nodes(forXPath: "./*[local-name()='Label']").first?.stringValue) ?? nil
+        let favorite = (labelStr == "Favorite")
         let caption = try desc.nodes(forXPath:
             ".//*[local-name()='description']//*[local-name()='li']")
             .first?.stringValue
