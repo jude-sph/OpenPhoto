@@ -65,11 +65,13 @@ public final class LibraryService: Sendable {
     }
 
     /// Mirror on-disk sidecars into catalog columns (sidecars are authoritative).
+    /// A corrupt or unreadable sidecar is silently skipped — the media file is
+    /// still valid and the metadata will be empty until the sidecar is repaired.
     private func ingestSidecars(vault: Vault) throws {
         guard let store = sidecarStores[vault.descriptor.vaultID] else { return }
         for entry in try Manifest.read(from: vault.manifestURL) {
-            let data = try store.read(forMediaRelPath: entry.path)
-            guard data != .empty else { continue }
+            guard let data = try? store.read(forMediaRelPath: entry.path),
+                  data != .empty else { continue }
             let tags = String(data: try JSONEncoder().encode(data.tags), encoding: .utf8) ?? "[]"
             try catalog.updateHumanMetadata(hash: entry.hash.stringValue,
                                             favorite: data.favorite, rating: data.rating,
