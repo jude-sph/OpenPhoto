@@ -6,7 +6,12 @@ cd "$(dirname "$0")/.."
 swift build -c release
 
 VERSION="$(tr -d '[:space:]' < VERSION)"
-BUILD="$(git rev-list --count HEAD)"   # monotonically increasing; Sparkle compares this
+# VERSION feeds CFBundleShortVersionString and the DMG name, and Sparkle parses it as a version —
+# reject anything that isn't a plain dotted-numeric so a stray char can't ship a broken Info.plist.
+if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+  echo "error: VERSION ('$VERSION') must be dotted-numeric, e.g. 0.1.0" >&2; exit 1
+fi
+BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 0)"   # monotonically increasing; Sparkle compares this
 
 APP=build/OpenPhoto.app
 rm -rf "$APP"
@@ -33,7 +38,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-sed -i '' "s/__VERSION__/${VERSION}/; s/__BUILD__/${BUILD}/" "$APP/Contents/Info.plist"
+sed -i '' "s|__VERSION__|${VERSION}|; s|__BUILD__|${BUILD}|" "$APP/Contents/Info.plist"
+if grep -q '__VERSION__\|__BUILD__' "$APP/Contents/Info.plist"; then
+  echo "error: version tokens not substituted in Info.plist (heredoc/sed drift?)" >&2; exit 1
+fi
 
 # App icon — always build a FULL multi-resolution .icns from a 1024px source. (A single-rep .icns
 # renders blank in surfaces that request a small rep, e.g. the minimized/Stage-Manager strip.)
