@@ -34,6 +34,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSPhotoLibraryUsageDescription</key><string>OpenPhoto imports photos you choose from your Apple Photos library. It only ever copies them out and never modifies your Photos library.</string>
+    <key>SUFeedURL</key><string>https://jude-sph.github.io/OpenPhoto/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>__SUPUBLICEDKEY__</string>
+    <key>SUScheduledCheckInterval</key><integer>86400</integer>
 </dict>
 </plist>
 PLIST
@@ -42,6 +45,13 @@ sed -i '' "s|__VERSION__|${VERSION}|; s|__BUILD__|${BUILD}|" "$APP/Contents/Info
 if grep -q '__VERSION__\|__BUILD__' "$APP/Contents/Info.plist"; then
   echo "error: version tokens not substituted in Info.plist (heredoc/sed drift?)" >&2; exit 1
 fi
+
+# Sparkle's EdDSA public key (generated in C1, committed to scripts/sparkle_public_key.txt). Until
+# then the file is absent → SUKEY is empty → the token substitutes to "" and Sparkle still launches
+# (it just can't verify update signatures yet). Substitute unconditionally so __SUPUBLICEDKEY__ never
+# survives into the shipped Info.plist.
+SUKEY="$(cat scripts/sparkle_public_key.txt 2>/dev/null | tr -d '[:space:]' || true)"
+sed -i '' "s|__SUPUBLICEDKEY__|${SUKEY}|" "$APP/Contents/Info.plist"
 
 # App icon — always build a FULL multi-resolution .icns from a 1024px source. (A single-rep .icns
 # renders blank in surfaces that request a small rep, e.g. the minimized/Stage-Manager strip.)
@@ -76,6 +86,22 @@ if [[ -d "$MODELS_SRC" ]]; then
     && echo "Injected GeoNames dataset into $APP/Contents/Resources/geonames/"
 else
   echo "note: $MODELS_SRC absent — shipping without semantic-search models (search degrades)"
+fi
+
+# Embed Sparkle.framework (and its XPC helpers, which live inside it) into the bundle.
+SPARKLE_FW="$(find .build -name 'Sparkle.framework' -type d | head -1)"
+if [[ -n "$SPARKLE_FW" ]]; then
+  mkdir -p "$APP/Contents/Frameworks"
+  cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
+  # Ensure the executable can find @rpath/Sparkle.framework under Contents/Frameworks.
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/OpenPhoto" 2>/dev/null || true
+  # Sign nested XPC services + the framework (ad-hoc), inside-out, before signing the app.
+  find "$APP/Contents/Frameworks/Sparkle.framework" -name '*.xpc' -print0 \
+    | while IFS= read -r -d '' xpc; do codesign --force --sign - "$xpc"; done
+  codesign --force --sign - "$APP/Contents/Frameworks/Sparkle.framework"
+  echo "Embedded Sparkle.framework"
+else
+  echo "warning: Sparkle.framework not found in .build — run 'swift build' first"
 fi
 
 codesign --force --sign - "$APP"

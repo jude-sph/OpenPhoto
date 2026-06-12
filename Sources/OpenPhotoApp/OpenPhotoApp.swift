@@ -1,9 +1,13 @@
 import SwiftUI
 import OpenPhotoCore
+import Sparkle
 
 @main
 struct OpenPhotoApp: App {
     @State private var state = AppState()
+
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     var body: some Scene {
         WindowGroup("OpenPhoto") {
@@ -22,6 +26,9 @@ struct OpenPhotoApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updaterController.checkForUpdates(nil) }
+            }
             CommandGroup(after: .sidebar) {
                 Button("Toggle Sidebar") {
                     MainActor.assumeIsolated { state.sidebarShown.toggle() }
