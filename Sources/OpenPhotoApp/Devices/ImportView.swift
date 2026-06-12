@@ -30,6 +30,7 @@ struct ImportView: View {
         VStack(spacing: 0) {
             header
             Divider().overlay(Theme.hairline)
+            livePhotoNote
             content
             Divider().overlay(Theme.hairline)
             footer
@@ -67,6 +68,29 @@ struct ImportView: View {
             Button("Deselect") { selection.clear() }.controlSize(.small)
         }
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
+    }
+
+    /// iPhones don't expose the Live Photo motion `.mov` over USB (an Apple/
+    /// ImageCaptureCore limitation — confirmed by the Phase-2 spike), so Live Photos
+    /// import as plain stills. Tell the user how to keep them live. Shown only for a
+    /// connected camera once the grid is up (SD cards/folders pair Live Photos fine).
+    private var showLivePhotoNote: Bool {
+        guard case .camera = device else { return false }
+        switch phase { case .ready, .importing: return true; default: return false }
+    }
+
+    @ViewBuilder private var livePhotoNote: some View {
+        if showLivePhotoNote {
+            HStack(spacing: 7) {
+                Image(systemName: "livephoto")
+                Text("Live Photos import as stills over USB — Apple doesn't expose the motion video to apps. To keep them live, import via Apple Photos, or AirDrop them to a folder first.")
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(Theme.textDim)
+            .padding(.horizontal, 16).padding(.vertical, 7)
+            Divider().overlay(Theme.hairline)
+        }
     }
 
     @ViewBuilder private var content: some View {
