@@ -357,6 +357,17 @@ final class AppState {
         }
     }
 
+    /// Set a person's People-screen cover to one of their confirmed faces.
+    func setPersonCover(personID: Int64, faceID: Int64) {
+        guard let lib = library else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            try? lib.catalog.setPersonCover(personID: personID, faceID: faceID)
+            await MainActor.run { [weak self] in
+                self?.loadPeople()
+            }
+        }
+    }
+
     /// Delete a person (faces revert to unassigned). Clears their regions from sidecars.
     func removePerson(_ personID: Int64) {
         guard let lib = library else { return }
