@@ -41,7 +41,7 @@ public final class VolumeCopyDestination: SendDestination, @unchecked Sendable {
         var outcomes: [SendOutcome] = []
         for (i, item) in items.enumerated() {
             progress(SendProgress(stage: .sending, done: i, total: items.count, currentName: item.displayName))
-            let target = collisionFreeURL(for: item.displayName, in: folderURL)
+            let target = FileNaming.collisionFreeURL(for: item.displayName, in: folderURL)
             do {
                 try fm.copyItem(at: item.originalURL, to: target)
                 // Flush to the physical device before verifying: copyItem writes through
@@ -87,18 +87,4 @@ public final class VolumeCopyDestination: SendDestination, @unchecked Sendable {
         return 0
     }
 
-    /// IMG_1.JPG → IMG_1 (2).JPG … (mirror of ImportEngine's collision-safe naming).
-    private func collisionFreeURL(for name: String, in dir: URL) -> URL {
-        let fm = FileManager.default
-        var candidate = dir.appendingPathComponent(name)
-        var n = 2
-        let base = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
-        while fm.fileExists(atPath: candidate.path) {
-            let suffixed = ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)"
-            candidate = dir.appendingPathComponent(suffixed)
-            n += 1
-        }
-        return candidate
-    }
 }

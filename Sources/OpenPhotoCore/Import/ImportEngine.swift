@@ -105,7 +105,7 @@ public final class ImportEngine: Sendable {
         var placed: [(item: ImportItem, relPath: String, hash: String)] = []
         for (i, s) in staged.enumerated() {
             progress?(Progress(stage: .placing, done: i, total: staged.count, currentName: s.item.name))
-            let target = collisionFreeURL(for: s.item.name, in: dirURL)
+            let target = FileNaming.collisionFreeURL(for: s.item.name, in: dirURL)
             do {
                 try fm.moveItem(at: s.url, to: target)
                 placed.append((s.item, vault.relativePath(of: target), s.hash))
@@ -149,18 +149,4 @@ public final class ImportEngine: Sendable {
         return result
     }
 
-    /// IMG_1.JPG → IMG_1 (2).JPG → IMG_1 (3).JPG …
-    private func collisionFreeURL(for name: String, in dir: URL) -> URL {
-        let fm = FileManager.default
-        var candidate = dir.appendingPathComponent(name)
-        var n = 2
-        let base = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
-        while fm.fileExists(atPath: candidate.path) {
-            let suffixed = ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)"
-            candidate = dir.appendingPathComponent(suffixed)
-            n += 1
-        }
-        return candidate
-    }
 }
