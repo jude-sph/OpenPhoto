@@ -105,8 +105,33 @@ public final class VolumeSource: ImportSource, @unchecked Sendable {
         return f.date(from: s)
     }
 
+    /// UI toggle ("Include their metadata"): fold an adjacent Apple-export `.xmp`
+    /// sidecar (Export Unmodified Originals + "IPTC as XMP") into each fetched photo —
+    /// Takeout-style, before hashing — so their captions/keywords survive the crossing.
+    /// Default off; the sidecar itself is never copied in.
+    public var foldXMPSidecars = false
+
+    /// IMG_1.HEIC → IMG_1.xmp (Apple's ext-replaced form) or IMG_1.HEIC.xmp (appended).
+    static func xmpSidecarURL(forMedia url: URL) -> URL? {
+        let replaced = url.deletingPathExtension().appendingPathExtension("xmp")
+        if FileManager.default.fileExists(atPath: replaced.path) { return replaced }
+        let appended = url.appendingPathExtension("xmp")
+        if FileManager.default.fileExists(atPath: appended.path) { return appended }
+        return nil
+    }
+
     public func fetch(_ item: ImportItem, to url: URL) async throws {
-        try FileManager.default.copyItem(at: rootURL.appendingPathComponent(item.id), to: url)
+        let src = rootURL.appendingPathComponent(item.id)
+        try FileManager.default.copyItem(at: src, to: url)
+        guard foldXMPSidecars, item.kind == .photo,
+              let sidecarURL = Self.xmpSidecarURL(forMedia: src),
+              let data = try? Data(contentsOf: sidecarURL) else { return }
+        var sd = (try? XMP.parse(data)) ?? .empty
+        if sd.caption == nil, let title = XMP.parseTitle(data) { sd.caption = title }
+        sd.faces = []   // face regions are not carried by the fold
+        guard sd != .empty else { return }
+        try? EmbeddedMetadata.embed(sd, exifDate: nil, latitude: nil, longitude: nil,
+                                    intoImageAt: url)
     }
 
     public func delete(_ items: [ImportItem]) async throws -> [DeleteResult] {
