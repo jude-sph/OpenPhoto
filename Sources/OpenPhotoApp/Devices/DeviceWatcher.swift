@@ -6,22 +6,40 @@ import OpenPhotoCore
 enum ConnectedDevice: Identifiable, Equatable {
     case camera(id: String, name: String)
     case volume(id: String, name: String, url: URL)
+    case photosLibrary
+    case takeout(id: String, name: String, url: URL)
     var id: String {
         switch self {
         case .camera(let id, _): "cam-\(id)"
         case .volume(let id, _, _): "vol-\(id)"
+        case .photosLibrary: "photoslib"
+        case .takeout(let id, _, _): "takeout-\(id)"
         }
     }
     var name: String {
         switch self {
         case .camera(_, let n): n
         case .volume(_, let n, _): n
+        case .photosLibrary: "Apple Photos"
+        case .takeout(_, let n, _): n
         }
     }
     var symbol: String {
         switch self {
         case .camera: "iphone"
         case .volume: "sdcard"
+        case .photosLibrary: "photo.on.rectangle.angled"
+        case .takeout: "arrow.down.circle"
+        }
+    }
+    /// Sources whose items can actually be deleted off them, enabling the
+    /// "free up space" flow: a connected camera (iPhone) and a removable volume
+    /// (SD card → moves to .openphoto-trash). The read-only library imports
+    /// (Apple Photos, Google Takeout) do NOT support it.
+    var supportsDeviceDelete: Bool {
+        switch self {
+        case .camera, .volume: return true
+        case .photosLibrary, .takeout: return false
         }
     }
 }
@@ -56,6 +74,10 @@ final class DeviceWatcher: NSObject {
         NotificationCenter.default.addObserver(self, selector: #selector(closeAllSessions),
                                                name: NSApplication.willTerminateNotification, object: nil)
         volumesChanged()
+        // Apple Photos is always available (permission is requested when opened) — pin it first.
+        if !devices.contains(where: { $0.id == "photoslib" }) {
+            devices.insert(.photosLibrary, at: 0)
+        }
     }
 
     /// Release all camera sessions on quit so they don't linger into the next launch.
@@ -67,6 +89,18 @@ final class DeviceWatcher: NSObject {
         let dev = ConnectedDevice.volume(id: "manual-" + url.path,
                                          name: url.lastPathComponent, url: url)
         if !devices.contains(where: { $0.id == dev.id }) { devices.append(dev) }
+    }
+
+    /// Route a chosen folder to the right source: a Google Takeout export becomes a
+    /// `.takeout` device (special metadata folding); any other folder is a plain volume.
+    func addImportFolder(url: URL) {
+        if TakeoutSource.looksLikeTakeout(url) {
+            let dev = ConnectedDevice.takeout(id: "manual-" + url.path,
+                                              name: url.lastPathComponent, url: url)
+            if !devices.contains(where: { $0.id == dev.id }) { devices.append(dev) }
+        } else {
+            addManualVolume(url: url)
+        }
     }
 
     /// Remove a manually-added folder import source by its device id (`vol-manual-…`). Real
@@ -89,6 +123,10 @@ final class DeviceWatcher: NSObject {
             made = cameras[id].map { CameraSource(camera: $0) }
         case .volume(_, _, let url):
             made = VolumeSource(rootURL: url, displayName: device.name)
+        case .photosLibrary:
+            made = PhotosLibrarySource()
+        case .takeout(_, _, let url):
+            made = TakeoutSource(rootURL: url, displayName: device.name)
         }
         if let made { sourceCache[device.id] = made }
         return made
@@ -107,10 +145,13 @@ final class DeviceWatcher: NSObject {
             vols.append(.volume(id: v.volumeUUIDString ?? url.path,
                                 name: v.volumeName ?? url.lastPathComponent, url: url))
         }
-        // Keep cameras and manually-added folder sources; re-detect real removable volumes.
+        // Keep cameras, Apple Photos, Takeout, and manually-added folders; re-detect real
+        // removable volumes (none of the kept kinds are removable mounts).
         let kept = devices.filter { dev in
-            if case .camera = dev { return true }
-            return dev.id.hasPrefix("vol-manual-")
+            switch dev {
+            case .camera, .photosLibrary, .takeout: return true
+            case .volume: return dev.id.hasPrefix("vol-manual-")
+            }
         }
         devices = kept + vols
         onVolumesChanged?()

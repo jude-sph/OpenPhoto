@@ -25,6 +25,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSPhotoLibraryUsageDescription</key><string>OpenPhoto imports photos you choose from your Apple Photos library. It only ever copies them out and never modifies your Photos library.</string>
 </dict>
 </plist>
 PLIST

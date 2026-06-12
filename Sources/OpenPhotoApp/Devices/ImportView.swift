@@ -136,7 +136,7 @@ struct ImportView: View {
                 Button("Import \(selectedDisplayCount) items") { Task { await runBatch() } }
                     .buttonStyle(.borderedProminent)
                     .disabled(selectedDisplayCount == 0 || destination.isEmpty)
-                if !sessionImported.isEmpty || hasPreviouslyImportedOnDevice {
+                if device.supportsDeviceDelete && (!sessionImported.isEmpty || hasPreviouslyImportedOnDevice) {
                     Button("Free up space on \(device.name)…") { showFreeUp = true }
                         .controlSize(.small)
                 }
@@ -205,6 +205,15 @@ struct ImportView: View {
             phase = .failedToConnect("Source unavailable"); return
         }
         source = src
+        if src is PhotosLibrarySource {
+            let ok = PhotosLibrarySource.currentStatus == .authorized
+                || PhotosLibrarySource.currentStatus == .limited
+            let status = ok ? PhotosLibrarySource.currentStatus : await PhotosLibrarySource.requestAccess()
+            if status != .authorized && status != .limited {
+                phase = .failedToConnect("OpenPhoto needs access to Apple Photos. Grant it in System Settings → Privacy & Security → Photos, then reopen this source.")
+                return
+            }
+        }
         if let cam = src as? CameraSource {
             stateStreamTask = Task { [weak cam] in
                 guard let cam else { return }

@@ -73,7 +73,7 @@ struct SidebarView: View {
                 .padding(.horizontal, 8)
                 // Folder sources (added via "Add import source…") can be removed here;
                 // phones/SD cards are removed by unplugging.
-                if device.id.hasPrefix("vol-manual-") {
+                if device.id.hasPrefix("vol-manual-") || device.id.hasPrefix("takeout-manual-") {
                     button.contextMenu {
                         Button(role: .destructive) { state.removeImportSource(device) } label: {
                             Label("Remove import source", systemImage: "minus.circle")
