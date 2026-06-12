@@ -111,3 +111,65 @@ private func fakeItems() -> [(ImportItem, Data)] {
     _ = (photo, video)
 }
 
+@Test func subdirForItemPlacesIntoPerItemFolders() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, vault, reg) = try makeEnv(t)
+    try await lib.scanAll()
+    let fake = FakeSource(sourceKey: "fk", items: fakeItems())
+    let engine = ImportEngine(library: lib, registry: reg)
+    let items = try await fake.enumerateItems()
+
+    let result = await engine.run(source: fake, items: items, vault: vault,
+                                  dirPath: "From Sam",
+                                  subdirForItem: { $0.id == "1" ? "rome2022" : "" })
+
+    #expect(result.imported.count == 2 && result.failed.isEmpty)
+    #expect(FileManager.default.fileExists(
+        atPath: vault.absoluteURL(forRelativePath: "From Sam/rome2022/IMG_1.JPG").path))
+    #expect(FileManager.default.fileExists(
+        atPath: vault.absoluteURL(forRelativePath: "From Sam/IMG_2.JPG").path))
+    // Registry + manifest recorded the real placed relPaths.
+    let placed = Set(result.imported.map(\.placedRelPath))
+    #expect(placed == ["From Sam/rome2022/IMG_1.JPG", "From Sam/IMG_2.JPG"])
+}
+
+@Test func subdirAwareDedupSkipsOnlyWithinTheSameTargetDir() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, vault, reg) = try makeEnv(t)
+    try await lib.scanAll()
+    let fake = FakeSource(sourceKey: "fk", items: fakeItems())
+    let engine = ImportEngine(library: lib, registry: reg)
+    let items = try await fake.enumerateItems()
+    // First import into From Sam/rome2022.
+    _ = await engine.run(source: fake, items: [items[0]], vault: vault,
+                         dirPath: "From Sam", subdirForItem: { _ in "rome2022" })
+    // Same item again into the SAME subdir → skipped as duplicate.
+    let again = await engine.run(source: fake, items: [items[0]], vault: vault,
+                                 dirPath: "From Sam", subdirForItem: { _ in "rome2022" })
+    #expect(again.skipped.count == 1 && again.imported.isEmpty)
+}
+
+@Test func postPlaceRunsBeforeRescanWithPlacedRelPath() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, vault, reg) = try makeEnv(t)
+    try await lib.scanAll()
+    let fake = FakeSource(sourceKey: "fk", items: fakeItems())
+    let engine = ImportEngine(library: lib, registry: reg)
+    let items = try await fake.enumerateItems()
+
+    // postPlace writes a sidecar next to the placed file; because the hook runs BEFORE the
+    // engine's rescan, the rescan must ingest it in the same run (favorite lands in catalog).
+    let result = await engine.run(source: fake, items: [items[0]], vault: vault,
+                                  dirPath: "inbox",
+                                  postPlace: { placed in
+        let mediaURL = vault.absoluteURL(forRelativePath: placed.placedRelPath)
+        let xmp = XMP.serialize(SidecarData(rating: 0, favorite: true, caption: "from them",
+                                            tags: [], faces: []))
+        try? AtomicFile.write(Data(xmp.utf8), to: vault.sidecarURL(forMediaAt: mediaURL))
+    })
+
+    #expect(result.imported.count == 1)
+    let item = try lib.items(inDir: "inbox").first
+    #expect(item?.favorite == true && item?.caption == "from them")
+}
+

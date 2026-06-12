@@ -311,9 +311,10 @@ struct ImportView: View {
         phase = .importing(done: 0, total: batchItems.count)
         let engine = ImportEngine(library: lib, registry: registry)
         let result = await engine.run(source: source, items: batchItems,
-                                      vault: vault, dirPath: destination) { p in
+                                      vault: vault, dirPath: destination,
+                                      progress: { p in
             Task { @MainActor in phase = .importing(done: p.done, total: p.total) }
-        }
+        })
         lastResult = result
         sessionImported.append(contentsOf: result.imported)
         sessionImportedIDs.formUnion(result.imported.map(\.item.id))
