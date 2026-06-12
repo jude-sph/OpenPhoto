@@ -26,10 +26,11 @@ echo "Releasing ${TAG} …"
 RELDIR="build/release-archives"
 rm -rf "$RELDIR"; mkdir -p "$RELDIR"
 ditto -c -k --keepParent build/OpenPhoto.app "$RELDIR/OpenPhoto-${VERSION}.zip"
-cp "build/OpenPhoto-${VERSION}.dmg" "$RELDIR/"
 
-# 2. Sign + (re)generate the appcast. generate_appcast reads the private key from the Keychain and
-#    writes appcast.xml into RELDIR, pointing downloads at the GitHub Releases asset URLs.
+# 2. Sign + (re)generate the appcast from the ZIP ONLY. The DMG is a human download, not a Sparkle
+#    update channel — keeping it out of the scanned dir gives the feed one clean enclosure.
+#    generate_appcast reads the private key from your login Keychain (expect a one-time Keychain
+#    access prompt — click "Always Allow") and writes appcast.xml into RELDIR.
 GENAPPCAST="$(find .build -path '*/Sparkle/bin/generate_appcast' -o -name generate_appcast -type f 2>/dev/null | head -1)"
 if [[ -z "$GENAPPCAST" ]]; then
   echo "error: generate_appcast not found in .build — run 'swift build' first" >&2
@@ -42,7 +43,7 @@ echo "Using generate_appcast: $GENAPPCAST"
 
 # 3. Create the GitHub Release with the zip + dmg.
 gh release create "$TAG" \
-  "$RELDIR/OpenPhoto-${VERSION}.zip" "$RELDIR/OpenPhoto-${VERSION}.dmg" \
+  "$RELDIR/OpenPhoto-${VERSION}.zip" "build/OpenPhoto-${VERSION}.dmg" \
   --title "OpenPhoto ${VERSION}" --notes "OpenPhoto ${VERSION}"
 
 # 4. Publish appcast.xml to the gh-pages branch (served at the SUFeedURL).
