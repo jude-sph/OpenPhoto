@@ -16,6 +16,9 @@ BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 0)"   # monotonically inc
 APP=build/OpenPhoto.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+# Keep this intermediate build artifact out of Spotlight/Launchpad so it doesn't show up as a second
+# "OpenPhoto" next to the real /Applications install. (install.sh copies this to /Applications.)
+touch build/.metadata_never_index
 cp .build/release/OpenPhotoApp "$APP/Contents/MacOS/OpenPhoto"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
