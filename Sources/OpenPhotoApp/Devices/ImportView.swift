@@ -334,6 +334,7 @@ struct ImportView: View {
         if let foreign = source as? ForeignVaultSource {
             foreignFolderCounts = (try? foreign.folderCounts()) ?? [:]
             checkedFolders = []
+            if destination.isEmpty { destination = "From " + device.name } // spec §3: suggested parent, editable
         }
         rebuildImportedCache()
         rebuildSentCache()
