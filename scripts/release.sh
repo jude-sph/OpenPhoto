@@ -46,21 +46,24 @@ gh release create "$TAG" \
   "$RELDIR/OpenPhoto-${VERSION}.zip" "build/OpenPhoto-${VERSION}.dmg" \
   --title "OpenPhoto ${VERSION}" --notes "OpenPhoto ${VERSION}"
 
-# 4. Publish appcast.xml to the gh-pages branch (served at the SUFeedURL).
-#    Use a temporary worktree so this doesn't disturb the current checkout.
-git fetch origin gh-pages 2>/dev/null || true
-WORKTREE="$(mktemp -d)"
-if git worktree add "$WORKTREE" gh-pages 2>/dev/null; then
-  :
+# 4. Publish appcast.xml to the gh-pages branch (served at the SUFeedURL). Done in a throwaway clone
+#    so it's portable across git versions (avoids `git worktree add --orphan`, which needs git ≥ 2.42)
+#    and never disturbs the current checkout. Handles both first-creation and updates.
+PUB="$(mktemp -d)"
+REMOTE_URL="$(git remote get-url origin)"
+if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+  git clone -q --branch gh-pages --single-branch "$REMOTE_URL" "$PUB"
 else
-  # gh-pages doesn't exist locally yet — create it tracking origin
-  git worktree add "$WORKTREE" -b gh-pages origin/gh-pages 2>/dev/null \
-    || git worktree add --orphan -b gh-pages "$WORKTREE"
+  git init -q "$PUB"
+  git -C "$PUB" checkout -q -b gh-pages
+  git -C "$PUB" remote add origin "$REMOTE_URL"
 fi
-cp "$RELDIR/appcast.xml" "$WORKTREE/appcast.xml"
-( cd "$WORKTREE" && git add appcast.xml \
-    && git commit -m "appcast: OpenPhoto ${VERSION}" && git push origin gh-pages )
-git worktree remove "$WORKTREE"
+cp "$RELDIR/appcast.xml" "$PUB/appcast.xml"
+git -C "$PUB" add appcast.xml
+git -C "$PUB" -c user.email="$(git config user.email)" -c user.name="$(git config user.name)" \
+  commit -qm "appcast: OpenPhoto ${VERSION}"
+git -C "$PUB" push -q origin gh-pages
+rm -rf "$PUB"
 
 echo ""
 echo "Released ${TAG}. GitHub Pages takes ~1 minute to publish."
