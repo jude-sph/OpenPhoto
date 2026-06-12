@@ -8,6 +8,9 @@ struct ImportTile: View {
     let alreadyImported: Bool
     let importedThisSession: Bool
     var sentFromHere: Bool = false
+    /// The photo already exists ANYWHERE in OpenPhoto's catalog (any source, including drive-only) —
+    /// matched by size + capture-second before download. Shown as a drive glyph.
+    var inLibrary: Bool = false
     let selected: Bool
     let onToggle: () -> Void
 
@@ -29,6 +32,11 @@ struct ImportTile: View {
         ZStack {
             kindBadge.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             statusBadge.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            if inLibrary && !importedThisSession {
+                badgeIcon("externaldrive.fill", size: 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .help("Already in your OpenPhoto library")
+            }
         }
     }
 
@@ -43,7 +51,9 @@ struct ImportTile: View {
     @ViewBuilder private var statusBadge: some View {
         if importedThisSession { statusText("Imported \u{2713}", color: Theme.green) }
         else if sentFromHere { statusText("Sent from here", color: Theme.blue) }
-        else if alreadyImported { statusText("Already in library", color: Theme.textFaint) }
+        // The catalog-wide drive glyph supersedes the per-source "Already in library" text; show the
+        // text only for the rare registry-knows-it-but-not-in-catalog case (e.g. since binned).
+        else if alreadyImported && !inLibrary { statusText("Already in library", color: Theme.textFaint) }
     }
 
     private func badgeIcon(_ symbol: String, size: CGFloat) -> some View {

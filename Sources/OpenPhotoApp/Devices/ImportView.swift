@@ -19,6 +19,7 @@ struct ImportView: View {
     @State private var stateStreamTask: Task<Void, Never>?
     @State private var importedIDCache = Set<String>()
     @State private var sentIDCache = Set<String>()
+    @State private var inLibraryCache = Set<String>()
 
     /// Display items (Live video halves hidden) as selectable items carrying their partner.
     private var orderedSelectable: [SelectableItem] {
@@ -93,6 +94,7 @@ struct ImportView: View {
                             alreadyImported: isImported(item),
                             importedThisSession: sessionImportedIDs.contains(item.id),
                             sentFromHere: sentIDCache.contains(item.id),
+                            inLibrary: inLibraryCache.contains(item.id),
                             selected: selection.contains(item.id),
                             onToggle: {
                                 selection.tap(index: index, items: orderedSelectable,
@@ -223,6 +225,7 @@ struct ImportView: View {
         items = (try? await source.enumerateItems()) ?? []
         rebuildImportedCache()
         rebuildSentCache()
+        rebuildInLibraryCache()
     }
 
     private func rebuildImportedCache() {
@@ -243,6 +246,18 @@ struct ImportView: View {
 
     /// Mark items that OpenPhoto previously sent to THIS device (so a returned
     /// photo reads "sent from here", not a new import). Matched by fingerprint.
+    /// Flag device photos that already exist ANYWHERE in OpenPhoto's catalog (any source, including
+    /// drive-only) — matched by size + capture-second (no device-file hashing). Drives the drive glyph.
+    private func rebuildInLibraryCache() {
+        guard let keys = try? state.library?.catalog.knownSizeDateKeys() else { inLibraryCache = []; return }
+        var cache = Set<String>()
+        for item in items {
+            let ms = item.takenAt.map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+            if ms != 0, keys.contains("\(item.byteSize)|\(ms / 1000)") { cache.insert(item.id) }
+        }
+        inLibraryCache = cache
+    }
+
     private func rebuildSentCache() {
         guard let source, let reg = state.sendRegistry else { sentIDCache = []; return }
         var cache = Set<String>()
@@ -271,6 +286,7 @@ struct ImportView: View {
         sessionImportedIDs.formUnion(result.imported.map(\.item.id))
         rebuildImportedCache()
         rebuildSentCache()
+        rebuildInLibraryCache()
         selection.clear()
         try? state.refreshQueries()
         phase = .ready
