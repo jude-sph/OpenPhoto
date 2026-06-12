@@ -121,11 +121,20 @@ extension DeviceWatcher: ICDeviceBrowserDelegate {
     nonisolated func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice,
                                    moreComing: Bool) {
         guard let cam = device as? ICCameraDevice else { return }
-        let id = cam.serialNumberString ?? cam.name ?? UUID().uuidString
-        let name = cam.name ?? "Camera"
+        // Stable id keyed on the USB location, so a locked phone added as "LOC:<id>"
+        // and its later resolved re-add collapse to ONE row instead of two.
+        let id = CameraIdentity.id(usbLocationID: Int(device.usbLocationID),
+                                   serial: cam.serialNumberString, name: device.name)
+        let name = CameraIdentity.displayName(device.name)
         Task { @MainActor in
             self.cameras[id] = cam
-            if !self.devices.contains(where: { $0.id == "cam-\(id)" }) {
+            if let idx = self.devices.firstIndex(where: { $0.id == "cam-\(id)" }) {
+                // Same physical device re-reported (e.g. its name resolved after unlock):
+                // refresh the label in place rather than appending a duplicate row.
+                if self.devices[idx].name != name {
+                    self.devices[idx] = .camera(id: id, name: name)
+                }
+            } else {
                 self.devices.append(.camera(id: id, name: name))
             }
             self.deviceConnected?("cam-\(id)")   // re-verify prior sends to this phone (read-only)
@@ -133,16 +142,19 @@ extension DeviceWatcher: ICDeviceBrowserDelegate {
     }
     nonisolated func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice,
                                    moreGoing: Bool) {
-        // Match by device name — crude but acceptable for v1 (no stable cross-boundary ID).
-        let name = device.name
+        // Same stable id as didAdd — the USB location is constant for the connection,
+        // so removal always matches even though the name resolved after the add.
+        let id = (device as? ICCameraDevice).map {
+            CameraIdentity.id(usbLocationID: Int(device.usbLocationID),
+                              serial: $0.serialNumberString, name: device.name)
+        }
+        guard let id else { return }
         Task { @MainActor in
-            if let (id, _) = self.cameras.first(where: { $0.value.name == name }) {
-                self.cameras[id] = nil
-                self.sourceCache["cam-\(id)"]?.close()   // release the ICC session — don't leak it
-                self.sourceCache["cam-\(id)"] = nil       // drop stale source so a replug makes a fresh session
-                self.devices.removeAll { $0.id == "cam-\(id)" }
-                if self.openedDeviceRemoved != nil { self.openedDeviceRemoved?("cam-\(id)") }
-            }
+            self.cameras[id] = nil
+            self.sourceCache["cam-\(id)"]?.close()   // release the ICC session — don't leak it
+            self.sourceCache["cam-\(id)"] = nil       // drop stale source so a replug makes a fresh session
+            self.devices.removeAll { $0.id == "cam-\(id)" }
+            self.openedDeviceRemoved?("cam-\(id)")    // close the import view if this source was open
         }
     }
 }
