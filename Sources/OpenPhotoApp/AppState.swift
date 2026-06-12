@@ -1374,6 +1374,35 @@ final class AppState {
         sections = []; flatItems = []; folderTree = []; binEntries = []
         selectedFolder = nil; selection = .timeline
         refreshToken &+= 1
+
+        // MUST-FIX: reset cached objects that would otherwise stay bound to the old library.
+        _importRegistry = nil
+        _sendRegistry = nil
+        _deviceRegistry = nil
+        semanticIndex = nil
+        semanticIndexDirty = true
+        derivationTask?.cancel(); derivationTask = nil
+
+        // Defense-in-depth: clear per-library state so a subsequent open starts clean.
+        reverified = [:]
+        durableVaults = []
+        canonicalPresence = []
+        driveDrift = [:]
+        drivePendingDeletions = [:]
+        drivePendingSync = [:]
+        people = []
+        suggestedClusters = []
+        cullGroups = []
+        searchResults = []
+        openedPerson = nil
+        viewerItems = []
+        expandedFolders = []
+
+        // MUST-FIX: clear DeviceWatcher closures that close over the old library.
+        deviceWatcher.knownVaultIDs = { [] }
+        deviceWatcher.onVolumesChanged = nil
+        deviceWatcher.deviceConnected = nil
+        deviceWatcher.openedDeviceRemoved = nil
     }
 
     /// Switch the library to a different single root: forget the old local vault's catalog rows
@@ -1383,7 +1412,7 @@ final class AppState {
             return   // same folder — no-op
         }
         if let lib = library {
-            for v in lib.vaults where v.descriptor.role == .local {
+            for v in lib.vaults {
                 try? lib.catalog.purgeLocalVault(id: v.descriptor.vaultID)
             }
         }

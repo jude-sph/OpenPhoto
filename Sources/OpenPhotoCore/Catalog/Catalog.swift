@@ -253,7 +253,7 @@ public final class Catalog: Sendable {
                 AND hash NOT IN (SELECT hash FROM vault_presence)
                 """
             for table in ["assets", "faces", "embeddings", "phash", "geocode",
-                          "derivation_jobs", "finder_tag_sync", "ocr"] {
+                          "derivation_jobs", "finder_tag_sync", "ocr", "pending_deletions"] {
                 try db.execute(sql: "DELETE FROM \(table) WHERE \(orphan)")
             }
         }
