@@ -83,6 +83,18 @@ extension Catalog {
         }
     }
 
+    /// Resolve grid instanceIDs ("<vaultID>|<relPath>") back to browse rows — local
+    /// instances and drive-only presence rows alike. Order is not preserved.
+    public func items(instanceIDs: [String]) throws -> [TimelineItem] {
+        guard !instanceIDs.isEmpty else { return [] }
+        return try dbQueue.read { db in
+            let marks = databaseQuestionMarks(count: instanceIDs.count)
+            return try TimelineItem.fetchAll(db, sql: """
+                SELECT * FROM (\(Self.timelineSQL)) WHERE vaultID || '|' || relPath IN (\(marks))
+                """, arguments: StatementArguments(instanceIDs))
+        }
+    }
+
     /// dirPath → item count (local instances + drive-only assets, Mac-folder-aligned).
     /// - Parameter vaultID: when non-nil, restricts to that local vault; drive-only branch is
     ///   only included when vaultID is nil (drive-only assets have no local vaultID).

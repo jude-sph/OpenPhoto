@@ -383,6 +383,45 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// The presence-row relPath for one asset on one drive — Live-pair partner
+    /// resolution for drive-only moves. Nil when the drive has no row for the hash.
+    public func vaultPresenceRelPath(vaultID: String, hash: String) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT relPath FROM vault_presence WHERE vaultID = ? AND hash = ? LIMIT 1
+                """, arguments: [vaultID, hash])
+        }
+    }
+
+    /// File-grain sibling of `rewriteVaultPresencePaths`: re-key ONE drive's presence row
+    /// after a per-photo move (`fromRelPath` → `toRelPath`, both Mac-aligned). Pure catalog
+    /// op; the drive's file is moved now (connected) or queued (offline) by the caller.
+    public func rewriteVaultPresencePath(vaultID: String, fromRelPath: String,
+                                         toRelPath: String) throws {
+        let from = fromRelPath.precomposedStringWithCanonicalMapping
+        let to = toRelPath.precomposedStringWithCanonicalMapping
+        guard !from.isEmpty, !to.isEmpty, from != to else { return }
+        try dbQueue.write { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT rowid AS rid, driveRelPath FROM vault_presence
+                WHERE vaultID = ? AND relPath = ?
+                """, arguments: [vaultID, from])
+            for row in rows {
+                let rid: Int64 = row["rid"]
+                let oldDriveRel: String = row["driveRelPath"]
+                // Same suffix-swap as the dir-grain rewrite (prefixed + unprefixed shapes).
+                let newDriveRel = oldDriveRel.hasSuffix(from)
+                    ? String(oldDriveRel.dropLast(from.count)) + to
+                    : oldDriveRel
+                try db.execute(sql: """
+                    UPDATE vault_presence SET relPath = ?, dirPath = ?, driveRelPath = ?
+                    WHERE rowid = ?
+                    """, arguments: [to, (to as NSString).deletingLastPathComponent,
+                                     newDriveRel, rid])
+            }
+        }
+    }
+
     public func upsert(assets: [AssetRecord]) throws {
         try dbQueue.write { db in for a in assets { try a.upsert(db) } }
     }
