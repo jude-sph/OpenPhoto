@@ -145,6 +145,7 @@ extension View {
 /// The toolbar shown while a grid is in select mode.
 struct SelectionActionBar: View {
     let count: Int
+    var moveControls: AnyView? = nil    // Folders screen injects its move cluster here
     var sendTargetName: String? = nil       // non-nil → show "Send to <name>"
     var onSend: () -> Void = {}
     let onDelete: () -> Void
@@ -160,6 +161,7 @@ struct SelectionActionBar: View {
                 .font(.system(size: 13, weight: .medium).monospacedDigit())
                 .foregroundStyle(Theme.textDim)
             Spacer()
+            if let moveControls { moveControls }
             Button("Deselect", action: onDeselect).disabled(count == 0).controlSize(.small)
             if let name = sendTargetName {
                 Button(action: onSend) {
