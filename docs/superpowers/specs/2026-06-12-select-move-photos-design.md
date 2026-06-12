@@ -28,7 +28,10 @@ File-grain sibling of `moveFolder`, same file (`Sources/OpenPhotoCore/Vault/Vaul
 
 ```swift
 static func moveFile(in vault: Vault, relPath: String, intoDirRelPath: String) throws -> String
+static func moveFile(in vault: Vault, relPath: String, toRelPath: String) throws -> String
 ```
+
+Two variants: the **into-dir** form picks a collision-free basename (the Mac's initial move); the **exact-target** form is for drive propagation — it reuses the Mac's final (possibly collision-adjusted) basename so Mac and drive paths stay aligned, collision-adjusting only if the drive's target is occupied.
 
 - Validates: source exists (else `.missing`); destination dir exists (else `.invalidTarget`); a same-dir move returns the input path unchanged (no-op).
 - Destination name is collision-safe: the existing `collisionFreeURL` logic (today duplicated privately in `ImportEngine` and `VolumeCopyDestination`) is **extracted to a shared internal helper** (e.g. `FileNaming.collisionFreeURL(for:in:)`) and reused here — `IMG_1.jpg` → `IMG_1 (2).jpg`.
@@ -59,7 +62,7 @@ New `AppState.movePhotos(_ items: [TimelineItem], into dest: String)` (in `AppSt
 5. `reloadCanonicalPresence()`, then one `rescan()`. `selectedFolder` is unchanged (the user stays put); no UI path remap needed (no folder paths changed).
 6. Errors: aggregate failures into **one** `NSAlert` summary at the end (count + first few file names); successes are silent.
 
-**New-folder destination:** the action bar's "New folder…" path calls the existing `createFolder(named:under:)` first (which already propagates + queues), then runs the move into it.
+**New-folder destination:** created implicitly by the move primitive (`moveFile` creates intermediate directories on the Mac and on each drive, and queued `"moveFile"` replays do the same) — no `createFolder` round-trip, which would also navigate the UI to the new folder; the user stays in the current folder. The folder tree picks the new directory up at rescan.
 
 ---
 
@@ -72,7 +75,7 @@ The bar (Select mode active) gains, alongside Send/Delete/Evict/Rehydrate:
 - **Destination picker + Move:** the import screen's pattern — `Picker` listing all folders from `state.folderTree` (recursively collected, sorted) + a "New folder…" `TextField` + a **Move** button. Move is enabled when the selection is non-empty and a destination is chosen (or a new-folder name typed). The picker excludes nothing: moving into the current folder is simply a per-item skip.
 - **"Drag to move" toggle** (button-style `Toggle`, like the toolbar's "Include subfolders"). Resets to off when Select mode exits.
 
-The Timeline's `SelectionActionBar` usage is untouched — the bar gains an optional `@ViewBuilder` extra-controls slot (default empty); `FolderGridView` passes the move controls into it, `TimelineView` passes nothing.
+The Timeline's `SelectionActionBar` usage is untouched — the bar gains an optional move-controls slot (`var moveControls: AnyView? = nil`); `FolderGridView` passes the move controls into it, `TimelineView` is untouched.
 
 ### 4.2 Grid drag behavior
 
