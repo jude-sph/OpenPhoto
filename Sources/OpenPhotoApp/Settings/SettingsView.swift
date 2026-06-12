@@ -10,6 +10,8 @@ struct SettingsView: View {
         TabView {
             general
                 .tabItem { Label("General", systemImage: "gearshape") }
+            library
+                .tabItem { Label("Library", systemImage: "folder") }
             about
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -28,6 +30,44 @@ struct SettingsView: View {
                 .disabled(!state.finderTagSyncEnabled)
         }
         .padding()
+    }
+
+    private var library: some View {
+        Form {
+            Text("Library folder").font(.system(size: 12, weight: .semibold))
+            HStack {
+                Image(systemName: "folder").foregroundStyle(Theme.accent)
+                Text(state.configuredRoot?.path ?? "No folder chosen")
+                    .font(.system(size: 12, design: .monospaced))
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            HStack {
+                Button("Change…") { changeRootViaPanel() }
+                Button("Close Library") { state.closeLibraryAndForgetRoot() }
+                    .disabled(state.library == nil)
+            }
+            Text("Switching forgets OpenPhoto's index of the old folder and indexes the new one. Your photo files and any edits (favorites, tags, captions, people) are never touched — they live with the files.")
+                .font(.system(size: 11)).foregroundStyle(Theme.textDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding()
+    }
+
+    private func changeRootViaPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = state.configuredRoot
+            ?? FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
+        panel.message = "Choose the folder OpenPhoto should index."
+        guard panel.runModal() == .OK, let url = panel.urls.first else { return }
+        let alert = NSAlert()
+        alert.messageText = "Switch OpenPhoto to \"\(url.lastPathComponent)\"?"
+        alert.informativeText = "Photos from your current folder will be removed from OpenPhoto's views. Your files and edits are not touched."
+        alert.addButton(withTitle: "Switch")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { state.changeRoot(to: url) }
     }
 
     private var about: some View {

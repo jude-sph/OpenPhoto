@@ -3,7 +3,7 @@ import OpenPhotoCore
 
 struct WelcomeView: View {
     @Bindable var state: AppState
-    @State private var roots: [URL] = []
+    @State private var root: URL?
 
     var body: some View {
         VStack(spacing: 18) {
@@ -15,31 +15,20 @@ struct WelcomeView: View {
                 .multilineTextAlignment(.center)
 
             VStack(spacing: 6) {
-                ForEach(roots, id: \.self) { url in
+                if let root {
                     HStack {
                         Image(systemName: "folder").foregroundStyle(Theme.accent)
-                        Text(url.path).font(.system(size: 12, design: .monospaced))
+                        Text(root.path).font(.system(size: 12, design: .monospaced)).lineLimit(1)
+                            .truncationMode(.middle)
                         Spacer()
                         Image(systemName: "checkmark").foregroundStyle(Theme.green)
-                        Button { roots.removeAll { $0 == url } } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.textFaint)
-                        }.buttonStyle(.plain)
                     }
                     .padding(10)
                     .background(Theme.bg2, in: RoundedRectangle(cornerRadius: 9))
                 }
-                Button {
-                    let panel = NSOpenPanel()
-                    panel.canChooseDirectories = true
-                    panel.canChooseFiles = false
-                    panel.allowsMultipleSelection = true
-                    panel.directoryURL = FileManager.default.urls(for: .picturesDirectory,
-                                                                  in: .userDomainMask).first
-                    if panel.runModal() == .OK {
-                        roots.append(contentsOf: panel.urls.filter { !roots.contains($0) })
-                    }
-                } label: {
-                    Label("Choose a folder…", systemImage: "plus")
+                Button { chooseFolder() } label: {
+                    Label(root == nil ? "Choose your photo folder…" : "Choose a different folder…",
+                          systemImage: "plus")
                         .frame(maxWidth: .infinity).padding(10)
                         .overlay(RoundedRectangle(cornerRadius: 9)
                             .strokeBorder(Theme.hairline, style: .init(lineWidth: 1, dash: [5])))
@@ -47,13 +36,23 @@ struct WelcomeView: View {
             }
             .frame(width: 460)
 
-            Button("Open library") { state.openLibrary(roots: roots) }
+            Button("Open library") { if let root { state.openLibrary(roots: [root]) } }
                 .buttonStyle(.borderedProminent)
-                .disabled(roots.isEmpty)
+                .disabled(root == nil)
 
-            Text("Suggested: your Pictures and Movies folders.")
+            Text("Tip: choose your Pictures folder. Don't choose the Photos Library — that's Apple's internal database.")
                 .font(.system(size: 11)).foregroundStyle(Theme.textFaint)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
+        if panel.runModal() == .OK { root = panel.urls.first }
     }
 }

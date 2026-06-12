@@ -88,6 +88,19 @@ final class DeviceWatcher: NSObject {
         }
     }
 
+    /// Tear down everything `start()` set up, so the watcher can be cleanly restarted when the user
+    /// switches libraries. Idempotent.
+    func stop() {
+        browser.stop()
+        browser.delegate = nil
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
+        for src in sourceCache.values { src.close() }
+        sourceCache.removeAll()
+        cameras.removeAll()
+        devices.removeAll()
+    }
+
     /// Release all camera sessions on quit so they don't linger into the next launch.
     @objc private func closeAllSessions() {
         for src in sourceCache.values { src.close() }

@@ -1300,7 +1300,11 @@ final class AppState {
             .map { URL(fileURLWithPath: $0) }
     }
 
+    /// The one configured local library folder (single-root model), or nil on first run.
+    var configuredRoot: URL? { configuredRoots.first }
+
     func openLibrary(roots: [URL]) {
+        closeLibrary()   // tear down any previously-open library so this can be called to switch
         UserDefaults.standard.set(roots.map(\.path), forKey: Self.rootsDefaultsKey)
         do {
             let appSupport = FileManager.default.urls(
@@ -1358,6 +1362,67 @@ final class AppState {
         } catch {
             NSAlert(error: error).runModal()
         }
+    }
+
+    /// Tear the open library down to the pre-open state (back to the Welcome screen). Safe to call
+    /// when nothing is open. Does NOT touch the persisted root or any files — purely in-memory.
+    func closeLibrary() {
+        watcher?.stop(); watcher = nil
+        deviceWatcher.stop()
+        library = nil
+        openedItem = nil; openedDevice = nil; peekContext = nil
+        sections = []; flatItems = []; folderTree = []; binEntries = []
+        selectedFolder = nil; selection = .timeline
+        refreshToken &+= 1
+
+        // MUST-FIX: reset cached objects that would otherwise stay bound to the old library.
+        _importRegistry = nil
+        _sendRegistry = nil
+        _deviceRegistry = nil
+        semanticIndex = nil
+        semanticIndexDirty = true
+        derivationTask?.cancel(); derivationTask = nil
+
+        // Defense-in-depth: clear per-library state so a subsequent open starts clean.
+        reverified = [:]
+        durableVaults = []
+        canonicalPresence = []
+        driveDrift = [:]
+        drivePendingDeletions = [:]
+        drivePendingSync = [:]
+        people = []
+        suggestedClusters = []
+        cullGroups = []
+        searchResults = []
+        openedPerson = nil
+        viewerItems = []
+        expandedFolders = []
+
+        // MUST-FIX: clear DeviceWatcher closures that close over the old library.
+        deviceWatcher.knownVaultIDs = { [] }
+        deviceWatcher.onVolumesChanged = nil
+        deviceWatcher.deviceConnected = nil
+        deviceWatcher.openedDeviceRemoved = nil
+    }
+
+    /// Switch the library to a different single root: forget the old local vault's catalog rows
+    /// (rebuildable — files and XMP sidecars are untouched), then open the new folder live.
+    func changeRoot(to newRoot: URL) {
+        if let current = configuredRoot, current.standardizedFileURL == newRoot.standardizedFileURL {
+            return   // same folder — no-op
+        }
+        if let lib = library {
+            for v in lib.vaults {
+                try? lib.catalog.purgeLocalVault(id: v.descriptor.vaultID)
+            }
+        }
+        openLibrary(roots: [newRoot])
+    }
+
+    /// Return to the Welcome screen and forget the configured root (used by "Close Library").
+    func closeLibraryAndForgetRoot() {
+        closeLibrary()
+        UserDefaults.standard.removeObject(forKey: Self.rootsDefaultsKey)
     }
 
     func rescan() async {

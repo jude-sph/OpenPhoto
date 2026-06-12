@@ -5,6 +5,14 @@ cd "$(dirname "$0")/.."
 
 swift build -c release
 
+VERSION="$(tr -d '[:space:]' < VERSION)"
+# VERSION feeds CFBundleShortVersionString and the DMG name, and Sparkle parses it as a version —
+# reject anything that isn't a plain dotted-numeric so a stray char can't ship a broken Info.plist.
+if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+  echo "error: VERSION ('$VERSION') must be dotted-numeric, e.g. 0.1.0" >&2; exit 1
+fi
+BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 0)"   # monotonically increasing; Sparkle compares this
+
 APP=build/OpenPhoto.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -20,37 +28,69 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>OpenPhoto</string>
     <key>CFBundleIconFile</key><string>OpenPhoto</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+    <key>CFBundleVersion</key><string>__BUILD__</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSPhotoLibraryUsageDescription</key><string>OpenPhoto imports photos you choose from your Apple Photos library. It only ever copies them out and never modifies your Photos library.</string>
+    <key>SUFeedURL</key><string>https://jude-sph.github.io/OpenPhoto/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>__SUPUBLICEDKEY__</string>
+    <key>SUScheduledCheckInterval</key><integer>86400</integer>
 </dict>
 </plist>
 PLIST
 
-# App icon. Prefer a ready-made macOS .icns (IconKitchen's macos/AppIcon.icns is already the correct
-# macOS sizes, margins, and shadow). Otherwise build OpenPhoto.icns from a 1024px source PNG —
-# preferring IconKitchen's macos/AppIcon1024.png, then a macOS-named source, then the newest
-# "OpenPhoto-*-1024x1024@1x.png" that isn't an archived "-old" copy.
-PREBUILT_ICNS="IconKitchen-Output/macos/AppIcon.icns"
-if [[ -f "$PREBUILT_ICNS" ]]; then
-  cp "$PREBUILT_ICNS" "$APP/Contents/Resources/OpenPhoto.icns"
+sed -i '' "s|__VERSION__|${VERSION}|; s|__BUILD__|${BUILD}|" "$APP/Contents/Info.plist"
+if grep -q '__VERSION__\|__BUILD__' "$APP/Contents/Info.plist"; then
+  echo "error: version tokens not substituted in Info.plist (heredoc/sed drift?)" >&2; exit 1
+fi
+
+# Sparkle's EdDSA public key (generated via Sparkle's generate_keys, committed to
+# scripts/sparkle_public_key.txt — see docs/RELEASING.md). An updater-enabled app MUST ship this key
+# or it cannot verify the authenticity of downloaded updates — a self-updating app with no key is a
+# remote-code-execution risk (a MITM could push a malicious "update"). So REFUSE to build the bundle
+# without it. Local development via `swift run` doesn't go through this script and is unaffected; only
+# the packaged .app (the thing you'd actually distribute) requires the key.
+if [[ -s scripts/sparkle_public_key.txt ]]; then
+  SUKEY="$(tr -d '[:space:]' < scripts/sparkle_public_key.txt)"
 else
-  ICON_SRC="IconKitchen-Output/macos/AppIcon1024.png"
-  [[ -f "$ICON_SRC" ]] || ICON_SRC="OpenPhoto-macOS-Default-1024x1024@1x.png"
-  [[ -f "$ICON_SRC" ]] || ICON_SRC="$(ls -t OpenPhoto-*-1024x1024@1x.png 2>/dev/null | grep -v -- '-old' | head -1)"
-  if [[ -n "$ICON_SRC" && -f "$ICON_SRC" ]]; then
-    ICONSET="$(mktemp -d)/OpenPhoto.iconset"
-    mkdir -p "$ICONSET"
-    for s in 16 32 128 256 512; do
-      sips -z "$s" "$s" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-      sips -z "$((s * 2))" "$((s * 2))" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-    done
-    iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/OpenPhoto.icns"
-    rm -rf "$(dirname "$ICONSET")"
-  fi
+  SUKEY=""
+fi
+if [[ -z "$SUKEY" ]]; then
+  echo "error: scripts/sparkle_public_key.txt is missing or empty." >&2
+  echo "       Generate the Sparkle EdDSA key (one-time setup, see docs/RELEASING.md): run Sparkle's" >&2
+  echo "       generate_keys and save the PUBLIC key to scripts/sparkle_public_key.txt." >&2
+  echo "       Refusing to package an updater-enabled app with no signature-verification key." >&2
+  exit 1
+fi
+# Plausibility check: a Sparkle Ed25519 public key is 32 bytes → 44 base64 chars ending in '='.
+if [[ ! "$SUKEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+  echo "error: scripts/sparkle_public_key.txt does not look like a Sparkle EdDSA public key" >&2
+  echo "       (expected 44 base64 characters). Re-copy the PUBLIC key from generate_keys." >&2
+  exit 1
+fi
+sed -i '' "s|__SUPUBLICEDKEY__|${SUKEY}|" "$APP/Contents/Info.plist"
+if grep -q '__SUPUBLICEDKEY__' "$APP/Contents/Info.plist"; then
+  echo "error: SUPublicEDKey token not substituted in Info.plist" >&2; exit 1
+fi
+
+# App icon — always build a FULL multi-resolution .icns from a 1024px source. (A single-rep .icns
+# renders blank in surfaces that request a small rep, e.g. the minimized/Stage-Manager strip.)
+ICON_SRC="IconKitchen-Output/macos/AppIcon1024.png"
+[[ -f "$ICON_SRC" ]] || ICON_SRC="$(ls -t OpenPhoto-*-1024x1024@1x.png 2>/dev/null | grep -v -- '-old' | head -1)"
+if [[ -n "${ICON_SRC:-}" && -f "$ICON_SRC" ]]; then
+  ICONSET="$(mktemp -d)/OpenPhoto.iconset"
+  mkdir -p "$ICONSET"
+  for s in 16 32 128 256 512; do
+    sips -z "$s" "$s" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    sips -z "$((s * 2))" "$((s * 2))" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/OpenPhoto.icns"
+  rm -rf "$(dirname "$ICONSET")"
+  echo "Built multi-size OpenPhoto.icns from $ICON_SRC"
+else
+  echo "warning: no 1024px icon source found — app will use the generic icon"
 fi
 
 # On-device ML models + CLIP vocab (gitignored, fetched into .models/Resources/). EmbedStage loads
@@ -68,6 +108,25 @@ if [[ -d "$MODELS_SRC" ]]; then
     && echo "Injected GeoNames dataset into $APP/Contents/Resources/geonames/"
 else
   echo "note: $MODELS_SRC absent — shipping without semantic-search models (search degrades)"
+fi
+
+# Embed Sparkle.framework (and its XPC helpers, which live inside it) into the bundle.
+# Anchor to the RELEASE build products (this script ships the release binary). On a machine that has
+# also built debug, an unanchored find could embed the debug-config copy of the framework.
+SPARKLE_FW="$(find .build -path '*/release/Sparkle.framework' -type d | head -1)"
+[[ -n "$SPARKLE_FW" ]] || SPARKLE_FW="$(find .build -name 'Sparkle.framework' -type d | head -1)"
+if [[ -n "$SPARKLE_FW" ]]; then
+  mkdir -p "$APP/Contents/Frameworks"
+  cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
+  # Ensure the executable can find @rpath/Sparkle.framework under Contents/Frameworks.
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/OpenPhoto" 2>/dev/null || true
+  # Sign nested XPC services + the framework (ad-hoc), inside-out, before signing the app.
+  find "$APP/Contents/Frameworks/Sparkle.framework" -name '*.xpc' -print0 \
+    | while IFS= read -r -d '' xpc; do codesign --force --sign - "$xpc"; done
+  codesign --force --sign - "$APP/Contents/Frameworks/Sparkle.framework"
+  echo "Embedded Sparkle.framework"
+else
+  echo "warning: Sparkle.framework not found in .build — run 'swift build' first"
 fi
 
 codesign --force --sign - "$APP"

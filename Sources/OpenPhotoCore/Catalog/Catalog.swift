@@ -239,6 +239,26 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// Remove a *local* vault entirely: its instances, its registration/presence, and any per-hash
+    /// derived rows left with no backing instance AND no drive presence. Drive-only assets (tracked
+    /// via another vault's `vault_presence`) are preserved. Files on disk are untouched; everything
+    /// removed here is rebuildable by rescanning the folder. Used by "switch library".
+    public func purgeLocalVault(id: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM instances WHERE vaultID = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM vaults WHERE id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM vault_presence WHERE vaultID = ?", arguments: [id])
+            let orphan = """
+                hash NOT IN (SELECT hash FROM instances)
+                AND hash NOT IN (SELECT hash FROM vault_presence)
+                """
+            for table in ["assets", "faces", "embeddings", "phash", "geocode",
+                          "derivation_jobs", "finder_tag_sync", "ocr", "pending_deletions"] {
+                try db.execute(sql: "DELETE FROM \(table) WHERE \(orphan)")
+            }
+        }
+    }
+
     /// Full swap of a vault's presence set — stores path/size data alongside the hash
     /// so browse queries can surface drive-only assets in folder views.
     public func replaceVaultPresence(vaultID: String, entries: [VaultPresenceEntry]) throws {
