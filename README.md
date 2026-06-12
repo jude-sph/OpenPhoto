@@ -25,13 +25,31 @@ swift run OpenPhotoApp     # run the app directly
 scripts/make-app.sh        # assemble build/OpenPhoto.app
 ```
 
-First launch asks you to choose your library folders. To try it with a synthetic library instead of real photos:
+First launch asks you to choose your library folder. To try it with a synthetic library instead of real photos:
 
 ```bash
 swift scripts/gen-fixtures.swift 300   # generates ./fixtures-library
 ```
 
 then point the welcome screen at `fixtures-library/`.
+
+## Install / Build / Release
+
+### Scripts
+
+| Script | Purpose |
+|---|---|
+| `scripts/install.sh` | Build and install to `/Applications/OpenPhoto.app` (your stable personal copy). Refreshes Dock and icon caches. |
+| `scripts/make-dmg.sh` | Build a shareable `build/OpenPhoto-<version>.dmg` with a drag-to-install layout. Send this to anyone who wants to try OpenPhoto. |
+| `scripts/release.sh` | Publish a new version for everyone: builds artifacts, signs and regenerates the Sparkle appcast, creates a GitHub Release, and pushes the updated appcast to GitHub Pages. |
+
+### Sharing the app
+
+See **[docs/DISTRIBUTING.md](docs/DISTRIBUTING.md)** — what file to send, how recipients install it (including the one-time Gatekeeper "Open Anyway" step on macOS 15+), and how automatic updates work for them.
+
+### Publishing a new version
+
+See **[docs/RELEASING.md](docs/RELEASING.md)** — one-time developer setup (EdDSA key generation, GitHub Pages, `gh` CLI), the per-release checklist (bump `VERSION`, run `release.sh`, verify the live appcast), and troubleshooting.
 
 ## Documentation
 

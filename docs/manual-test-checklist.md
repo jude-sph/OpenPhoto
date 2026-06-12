@@ -51,3 +51,28 @@ never writes to the device.*
 changes were verified live during development and are **not** on this list. iPhone
 import/send AirDrop behaviour was proven by spikes (`docs/spikes/`) but not re-checked
 against the shipped UI — listed above for a final pass.
+
+---
+
+## Slice A — Configurable library root
+
+- [ ] **First run shows Welcome.** On a clean install (or after `defaults delete dev.jude.openphoto libraryRootPaths`), the app opens to the Welcome screen rather than the main UI.
+- [ ] **Choose folder → open library.** Pick `~/Pictures` (or a fixtures folder) on the Welcome screen; the timeline appears without a restart.
+- [ ] **Switch root via Settings.** Open Settings (⌘,) → Library tab → **Change…** → pick a different folder → confirm the alert. The old folder's photos leave every view; the new folder's photos appear — with no app restart.
+- [ ] **Authored metadata survives a switch and switch-back.** Add a caption or favorite on a photo from folder A. Switch to folder B, then switch back to A. Confirm the caption/favorite is still present (metadata lives in XMP sidecars, not in the catalog).
+- [ ] **Missing-root fallback.** Configure a root, quit, rename or delete the folder, relaunch. The app shows the Welcome screen rather than crashing or showing an empty timeline. The configured path is not forgotten (it reappears in Settings if the folder is restored).
+
+## Slice B — Packaging, install & icon
+
+- [ ] **`install.sh` puts a launchable app in `/Applications`.** Run `./scripts/install.sh`; confirm `/Applications/OpenPhoto.app` exists and launches cleanly.
+- [ ] **Icon in Dock.** The Dock shows the OpenPhoto glyph (not a blank white square or generic app icon).
+- [ ] **Icon in minimized/Stage-Manager strip.** Minimize the window (⌘M) and confirm the minimized-window thumbnail shows the OpenPhoto glyph, not a blank square.
+- [ ] **DMG drag-install.** Run `./scripts/make-dmg.sh`. Mount the resulting `build/OpenPhoto-<version>.dmg`. Confirm it shows the app, an Applications symlink, and `READ ME FIRST.txt`. Drag-install the app and confirm it launches.
+
+## Slice C — Self-update (Sparkle)
+
+- [ ] **Older build detects a newer release.** Install a known-older build (lower build number / version). Launch it and use **App menu → Check for Updates…**. Confirm Sparkle shows a prompt offering the newer version.
+- [ ] **One-click update installs and relaunches.** Click **Update** in the Sparkle prompt. The app downloads the new version, closes, and relaunches at the updated version — confirm via **App menu → About OpenPhoto**.
+- [ ] **No second "Open Anyway" after update.** After the Sparkle-installed update relaunches, macOS must not show a Gatekeeper warning. (Sparkle strips the quarantine attribute from updates it installs.)
+- [ ] **"Check for Updates…" works on demand.** When already on the latest version, the item opens Sparkle's dialog reporting that the app is up to date.
+- [ ] **Tampered archive rejected.** Modify a byte in a `.zip` release archive (locally) and point a test appcast at it. Confirm Sparkle refuses to install it with a signature error rather than silently installing the corrupt file.
