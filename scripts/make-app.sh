@@ -5,6 +5,9 @@ cd "$(dirname "$0")/.."
 
 swift build -c release
 
+VERSION="$(tr -d '[:space:]' < VERSION)"
+BUILD="$(git rev-list --count HEAD)"   # monotonically increasing; Sparkle compares this
+
 APP=build/OpenPhoto.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -20,8 +23,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>OpenPhoto</string>
     <key>CFBundleIconFile</key><string>OpenPhoto</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+    <key>CFBundleVersion</key><string>__BUILD__</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -30,27 +33,24 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# App icon. Prefer a ready-made macOS .icns (IconKitchen's macos/AppIcon.icns is already the correct
-# macOS sizes, margins, and shadow). Otherwise build OpenPhoto.icns from a 1024px source PNG —
-# preferring IconKitchen's macos/AppIcon1024.png, then a macOS-named source, then the newest
-# "OpenPhoto-*-1024x1024@1x.png" that isn't an archived "-old" copy.
-PREBUILT_ICNS="IconKitchen-Output/macos/AppIcon.icns"
-if [[ -f "$PREBUILT_ICNS" ]]; then
-  cp "$PREBUILT_ICNS" "$APP/Contents/Resources/OpenPhoto.icns"
+sed -i '' "s/__VERSION__/${VERSION}/; s/__BUILD__/${BUILD}/" "$APP/Contents/Info.plist"
+
+# App icon — always build a FULL multi-resolution .icns from a 1024px source. (A single-rep .icns
+# renders blank in surfaces that request a small rep, e.g. the minimized/Stage-Manager strip.)
+ICON_SRC="IconKitchen-Output/macos/AppIcon1024.png"
+[[ -f "$ICON_SRC" ]] || ICON_SRC="$(ls -t OpenPhoto-*-1024x1024@1x.png 2>/dev/null | grep -v -- '-old' | head -1)"
+if [[ -n "${ICON_SRC:-}" && -f "$ICON_SRC" ]]; then
+  ICONSET="$(mktemp -d)/OpenPhoto.iconset"
+  mkdir -p "$ICONSET"
+  for s in 16 32 128 256 512; do
+    sips -z "$s" "$s" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    sips -z "$((s * 2))" "$((s * 2))" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/OpenPhoto.icns"
+  rm -rf "$(dirname "$ICONSET")"
+  echo "Built multi-size OpenPhoto.icns from $ICON_SRC"
 else
-  ICON_SRC="IconKitchen-Output/macos/AppIcon1024.png"
-  [[ -f "$ICON_SRC" ]] || ICON_SRC="OpenPhoto-macOS-Default-1024x1024@1x.png"
-  [[ -f "$ICON_SRC" ]] || ICON_SRC="$(ls -t OpenPhoto-*-1024x1024@1x.png 2>/dev/null | grep -v -- '-old' | head -1)"
-  if [[ -n "$ICON_SRC" && -f "$ICON_SRC" ]]; then
-    ICONSET="$(mktemp -d)/OpenPhoto.iconset"
-    mkdir -p "$ICONSET"
-    for s in 16 32 128 256 512; do
-      sips -z "$s" "$s" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-      sips -z "$((s * 2))" "$((s * 2))" "$ICON_SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-    done
-    iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/OpenPhoto.icns"
-    rm -rf "$(dirname "$ICONSET")"
-  fi
+  echo "warning: no 1024px icon source found — app will use the generic icon"
 fi
 
 # On-device ML models + CLIP vocab (gitignored, fetched into .models/Resources/). EmbedStage loads
