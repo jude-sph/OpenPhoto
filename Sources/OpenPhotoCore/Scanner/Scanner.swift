@@ -89,6 +89,13 @@ public enum Scanner {
                 progress(Progress(stage: .extracting, done: idx, total: aligned.count))
                 let m = await MetadataExtractor.extract(from: f.url, kind: f.kind)
                 meta = m
+                // Base layer: human metadata embedded in the file (Takeout/Apple imports,
+                // or any file dragged in with embedded XMP). The `.openphoto/` sidecar
+                // ingested after the scan still overrides this (sidecar > embedded).
+                let embedded = (f.kind == .photo) ? EmbeddedMetadata.read(from: f.url) : nil
+                let embeddedTagsJSON = embedded.flatMap {
+                    try? String(data: JSONEncoder().encode($0.tags), encoding: .utf8) ?? "[]"
+                } ?? "[]"
                 newAssets.append(AssetRecord(
                     hash: entry.hash.stringValue, kind: f.kind.rawValue,
                     takenAtMs: Int64(m.takenAt.timeIntervalSince1970 * 1000),
@@ -97,7 +104,10 @@ public enum Scanner {
                     cameraModel: m.cameraModel, lensModel: m.lensModel,
                     durationSeconds: m.durationSeconds,
                     livePairHash: nil, isLivePairedVideo: false,
-                    favorite: false, rating: 0, caption: nil, tagsJSON: "[]"))
+                    favorite: embedded?.favorite ?? false,
+                    rating: embedded?.rating ?? 0,
+                    caption: embedded?.caption,
+                    tagsJSON: embeddedTagsJSON))
             }
             // Every file participates in pairing (contentIdentifier only known for new files).
             pairCandidates.append(.init(
