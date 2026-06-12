@@ -79,6 +79,8 @@ final class AppState {
     var derivationProgress: (done: Int, total: Int)?
     var scanning = false
     var refreshToken = 0
+    /// Bumped after a per-photo move so the folder grid clears its (now-stale) selection.
+    var photoMoveToken = 0
     var grouping: TimelineGrouping = {
         let raw = UserDefaults.standard.string(forKey: "timelineGrouping") ?? ""
         return TimelineGrouping(rawValue: raw) ?? .day

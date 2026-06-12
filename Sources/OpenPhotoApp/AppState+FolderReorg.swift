@@ -97,6 +97,104 @@ extension AppState {
         remapUIPaths(from: src, to: newPath)
     }
 
+    // MARK: - Move photos (file-grain)
+
+    /// Move the photos behind `ids` (grid instanceIDs) into folder `dest` ("" = library
+    /// root). Local files move in the Mac primary vault; the moves propagate to connected
+    /// durable drives now (exact targets keep basenames aligned) and queue ("moveFile")
+    /// for offline ones. Drive-only items re-key their presence row immediately and move
+    /// on (or queue for) their drive. One rescan at the end; the user stays in the folder.
+    func movePhotos(ids: [String], into dest: String) async {
+        guard let library, !ids.isEmpty else { return }
+        let items = (try? library.catalog.items(instanceIDs: ids)) ?? []
+        guard !items.isEmpty else { return }
+        let destDir = dest.precomposedStringWithCanonicalMapping
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        // 1. Mac primary vault (local instances; movePhotos skips drive-only + in-dest).
+        let result = library.movePhotos(items.filter { $0.driveRelPath == nil }, toDir: destDir)
+
+        // 2. Propagate the Mac moves: connected durable drives now, offline drives queued.
+        if let basename = driveBasename(), !result.moved.isEmpty {
+            let drives = connectedDurableDrives()
+            if !drives.isEmpty {
+                let moved = result.moved
+                await Task.detached(priority: .userInitiated) {
+                    for d in drives {
+                        for (old, new) in moved {
+                            _ = try? VaultReorganizer.moveFile(in: d.vault,
+                                relPath: mapToDriveStatic(old, basename: basename),
+                                toRelPath: mapToDriveStatic(new, basename: basename))
+                        }
+                    }
+                }.value
+            }
+            for driveID in offlineDurableDriveIDs() {
+                for (old, new) in result.moved {
+                    _ = try? library.catalog.enqueueFolderOp(vaultID: driveID, op: "moveFile",
+                                                             src: old, dst: new)
+                }
+            }
+        }
+
+        // 3. Drive-only items: re-key the presence row now (instant UI), then move the
+        //    drive file now if that drive is connected, else queue. Live partners follow
+        //    via their presence row.
+        let driveOnly = items.filter { $0.driveRelPath != nil && $0.dirPath != destDir }
+        if !driveOnly.isEmpty, let basename = driveBasename() {
+            let connected = Dictionary(uniqueKeysWithValues:
+                connectedDurableDrives().map { ($0.id, $0.vault) })
+            var driveFileMoves: [(vault: Vault, old: String, new: String)] = []
+            for item in driveOnly {
+                var relPaths = [item.relPath]
+                if let pairHash = item.livePairHash,
+                   let pairRel = try? library.catalog.vaultPresenceRelPath(
+                        vaultID: item.vaultID, hash: pairHash) {
+                    relPaths.append(pairRel)
+                }
+                for old in relPaths {
+                    let name = (old as NSString).lastPathComponent
+                    let new = destDir.isEmpty ? name : destDir + "/" + name
+                    guard new != old else { continue }
+                    try? library.catalog.rewriteVaultPresencePath(vaultID: item.vaultID,
+                                                                  fromRelPath: old, toRelPath: new)
+                    if let dv = connected[item.vaultID] {
+                        driveFileMoves.append((dv, old, new))
+                    } else {
+                        _ = try? library.catalog.enqueueFolderOp(vaultID: item.vaultID,
+                                op: "moveFile", src: old, dst: new)
+                    }
+                }
+            }
+            if !driveFileMoves.isEmpty {
+                let moves = driveFileMoves
+                await Task.detached(priority: .userInitiated) {
+                    for m in moves {
+                        _ = try? VaultReorganizer.moveFile(in: m.vault,
+                            relPath: mapToDriveStatic(m.old, basename: basename),
+                            toRelPath: mapToDriveStatic(m.new, basename: basename))
+                    }
+                }.value
+            }
+        }
+
+        reloadCanonicalPresence()
+        await rescan()
+        photoMoveToken += 1
+
+        // 4. Failures: one aggregate alert (successes are silent, like folder moves).
+        if !result.failures.isEmpty {
+            let alert = NSAlert()
+            let n = result.failures.count
+            alert.messageText = "Couldn't move \(n) item\(n == 1 ? "" : "s")"
+            alert.informativeText = result.failures
+                .sorted { $0.key < $1.key }.prefix(4)
+                .map { "\(($0.key as NSString).lastPathComponent): \($0.value)" }
+                .joined(separator: "\n") + (n > 4 ? "\n…" : "")
+            alert.runModal()
+        }
+    }
+
     // MARK: - Create
 
     /// Create a new folder `name` under `parent` (nil/empty == library root). Applies to the Mac
@@ -209,6 +307,15 @@ extension AppState {
                         } catch VaultReorganizer.ReorgError.notEmpty {
                             // Folder still holds content on this drive — leave it, but consider the
                             // op handled (it will be reconciled by normal deletion propagation).
+                        }
+                    case "moveFile":
+                        guard let src = op.src, let dst = op.dst else { continue }
+                        do {
+                            try VaultReorganizer.moveFile(in: driveVault,
+                                relPath: mapToDriveStatic(src, basename: basename),
+                                toRelPath: mapToDriveStatic(dst, basename: basename))
+                        } catch VaultReorganizer.ReorgError.missing {
+                            // The drive never held this file — nothing to move; op is moot.
                         }
                     default:
                         continue   // unknown op kind — leave it queued
