@@ -81,7 +81,7 @@ struct RubberBandModifier: ViewModifier {
         DragGesture(minimumDistance: 8, coordinateSpace: .named(space))
             .onChanged { v in
                 guard enabled else { return }
-                if dragRect == nil { selection.beginDrag() }
+                if dragRect == nil { selection.beginDrag(subtracting: NSEvent.modifierFlags.contains(.shift)) }
                 let rect = CGRect(x: min(v.startLocation.x, v.location.x),
                                   y: min(v.startLocation.y, v.location.y),
                                   width: abs(v.location.x - v.startLocation.x),
