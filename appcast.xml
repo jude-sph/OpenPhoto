@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>OpenPhoto</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Sat, 13 Jun 2026 00:38:27 +0100</pubDate>
+            <sparkle:version>483</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/jude-sph/OpenPhoto/releases/download/v0.1.0/OpenPhoto-0.1.0.zip" length="193629015" type="application/octet-stream" sparkle:edSignature="npkP6JFBSi56OYeW6ByrKajzwLaDuEuOl5AOxQr+MKsWFpc6142yCbZRUPOpWb8K2KyErVU00lbukNk7uqyNCw=="/>
+        </item>
+    </channel>
+</rss>
