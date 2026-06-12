@@ -12,8 +12,12 @@ struct OpenPhotoApp: App {
                 .background(Theme.windowBG)
                 .tint(Theme.accent)
                 .task {
-                    let roots = state.configuredRoots
-                    if !roots.isEmpty { state.openLibrary(roots: roots) }
+                    guard let root = state.configuredRoot else { return }   // → Welcome
+                    if FileManager.default.fileExists(atPath: root.path) {
+                        state.openLibrary(roots: [root])
+                    }
+                    // If the saved folder is missing (moved/unplugged), fall through to Welcome
+                    // without forgetting it — it may reappear; the user can re-open via Welcome.
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -34,6 +38,13 @@ struct OpenPhotoApp: App {
                 Button("Export Metadata Sidecars\u{2026}") {
                     MainActor.assumeIsolated { state.exportSidecars() }
                 }
+                Divider()
+                Button("Library…") {
+                    MainActor.assumeIsolated {
+                        _ = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    }
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
             }
         }
 
