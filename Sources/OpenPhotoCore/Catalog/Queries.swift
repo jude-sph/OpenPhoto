@@ -39,6 +39,21 @@ extension Catalog {
         }
     }
 
+    /// `"<byteSize>|<captureSecond>"` fingerprints for every catalogued asset (local instances ∪
+    /// drive-only). Lets the import grid flag a device photo that already exists anywhere in OpenPhoto
+    /// — before it's downloaded, so without hashing the device file — using the same size + capture-
+    /// second match the import registry and send-verifier use (`PresenceFingerprint.looselyMatches`).
+    public func knownSizeDateKeys() throws -> Set<String> {
+        try dbQueue.read { db in
+            var keys = Set<String>()
+            for row in try Row.fetchAll(db, sql: "SELECT size, takenAtMs FROM (\(Self.timelineSQL))") {
+                let size: Int64 = row["size"]; let ms: Int64 = row["takenAtMs"]
+                keys.insert("\(size)|\(ms / 1000)")
+            }
+            return keys
+        }
+    }
+
     /// Items whose instance lives in the given folder.
     /// - Parameters:
     ///   - vaultID: when non-nil, restricts to that vault; nil = union across vaults.
