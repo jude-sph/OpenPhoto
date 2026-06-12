@@ -50,9 +50,25 @@ extension AppState {
             }
 
         case .movePhotos(let moves):
+            // Count how many requested instanceIDs actually resolve in the catalog now, so we
+            // can warn the user about any subset that was already gone before the undo ran.
+            // This is a read-only pre-flight; the movePhotos calls below remain unchanged.
+            guard let library else { return }
+            let groups = UndoPlan.inverseMoveGroups(moves)
+            var unresolved = 0
+            for group in groups {
+                let resolved = (try? library.catalog.items(instanceIDs: group.ids))?.count ?? 0
+                unresolved += group.ids.count - resolved
+            }
             // movePhotos already alerts its own failures and is stale-safe (.missing skips).
-            for group in UndoPlan.inverseMoveGroups(moves) {
+            for group in groups {
                 await movePhotos(ids: group.ids, into: group.destDir)
+            }
+            if unresolved > 0 {
+                let alert = NSAlert()
+                alert.messageText = "Couldn't undo Move for \(unresolved) item\(unresolved == 1 ? "" : "s")"
+                alert.informativeText = "They were no longer where the move left them — nothing was changed for those items."
+                alert.runModal()
             }
 
         case .moveFolder(let from, let to):
