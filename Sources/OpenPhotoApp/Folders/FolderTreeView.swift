@@ -80,13 +80,17 @@ struct FolderTreeView: View {
         } isTargeted: { rootDropTargeted = $0 }
     }
 
-    /// Move a dragged folder to the library root (un-nest). Rejects (returns false) a folder that is
-    /// already at the root — its parent path is empty, so there is nothing to un-nest. Shared by the
-    /// pinned header and the empty-space-below drop targets.
-    private func moveToRoot(_ src: String?) -> Bool {
-        guard let src, !src.isEmpty,
-              !(src as NSString).deletingLastPathComponent.isEmpty else { return false }
-        Task { await state.moveFolder(from: src, into: "") }
+    /// Header + empty-space drops: photos move to the library root; a dragged folder
+    /// un-nests to the root (rejected if it's already there).
+    private func moveToRoot(_ payload: String?) -> Bool {
+        guard let payload, !payload.isEmpty else { return false }
+        if let ids = PhotoMovePayload.decode(payload) {
+            guard !ids.isEmpty else { return false }
+            Task { await state.movePhotos(ids: ids, into: "") }
+            return true
+        }
+        guard !(payload as NSString).deletingLastPathComponent.isEmpty else { return false }
+        Task { await state.moveFolder(from: payload, into: "") }
         return true
     }
 }
@@ -147,11 +151,16 @@ private struct FolderRow: View {
             .onTapGesture { state.selectedFolder = node.path }
             .draggable(node.path)
             .dropDestination(for: String.self) { items, _ in
-                guard let src = items.first,
-                      src != node.path,
-                      !src.isEmpty,
-                      !node.path.hasPrefix(src + "/") else { return false }
-                Task { await state.moveFolder(from: src, into: node.path) }
+                guard let payload = items.first else { return false }
+                if let ids = PhotoMovePayload.decode(payload) {
+                    guard !ids.isEmpty else { return false }
+                    Task { await state.movePhotos(ids: ids, into: node.path) }
+                    return true
+                }
+                guard payload != node.path,
+                      !payload.isEmpty,
+                      !node.path.hasPrefix(payload + "/") else { return false }
+                Task { await state.moveFolder(from: payload, into: node.path) }
                 return true
             } isTargeted: { targeted in
                 dropTargeted = targeted

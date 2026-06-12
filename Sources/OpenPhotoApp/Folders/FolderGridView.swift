@@ -10,6 +10,9 @@ struct FolderGridView: View {
     @State private var showForceEvict = false
     @State private var showDelete = false
     @State private var showSend = false
+    @State private var dragToMove = false
+    @State private var moveDest = ""
+    @State private var newMoveFolderName = ""
 
     private var orderedSelectable: [SelectableItem] {
         items.map { SelectableItem(id: $0.instanceID) }
@@ -29,9 +32,10 @@ struct FolderGridView: View {
             content
         }
         .task(id: state.selectedFolder) {
-            selection.clear(); selectMode = false       // leaving a folder ends select mode
+            selection.clear(); selectMode = false; dragToMove = false       // leaving a folder ends select mode
             reload()
         }
+        .task(id: state.photoMoveToken) { selection.clear() }   // moved items left this folder
         .task(id: state.refreshToken) { reload() }      // refresh after rescans (keep selection)
         .task(id: state.videoOnly) { reload() }          // re-filter when the video-only toggle flips
         .task(id: state.foldersRecursive) { reload() }   // re-query when include-subfolders flips
@@ -93,12 +97,26 @@ struct FolderGridView: View {
             }
             .coordinateSpace(name: "foldergrid")
             .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
-                                         space: "foldergrid", enabled: selectMode))
+                                         space: "foldergrid", enabled: selectMode && !dragToMove))
             .pinchZoomGrid($state.gridMinSize)
         }
     }
 
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
+        if selectMode && dragToMove {
+            tile(item).draggable(dragPayload(for: item))
+        } else {
+            tile(item)
+        }
+    }
+
+    /// Dragging a selected tile carries the whole selection; an unselected tile just itself.
+    private func dragPayload(for item: TimelineItem) -> String {
+        PhotoMovePayload.encode(selection.contains(item.instanceID)
+                                ? Array(selection.selected) : [item.instanceID])
+    }
+
+    @ViewBuilder private func tile(_ item: TimelineItem) -> some View {
         MediaTile(
             id: item.instanceID,
             selectMode: selectMode,
@@ -127,6 +145,7 @@ struct FolderGridView: View {
     private var selectionBar: some View {
         SelectionActionBar(
             count: selection.count,
+            moveControls: AnyView(moveControls),
             sendTargetName: state.connectedSendTarget()?.name,
             onSend: { showSend = true },
             onDelete: { if !evictableItems.isEmpty { showDelete = true } },
@@ -136,7 +155,52 @@ struct FolderGridView: View {
             onRehydrate: { let items = rehydratableItems
                            Task { _ = await state.rehydrate(items); selection.clear(); selectMode = false } },
             onDeselect: { selection.clear() },
-            onDone: { selection.clear(); selectMode = false })
+            onDone: { selection.clear(); selectMode = false; dragToMove = false })
+    }
+
+    /// Destination dropdown + "New folder…" + Move (the import screen's pattern), plus
+    /// the drag-to-move toggle that flips grid dragging from rubber-band to drag-out.
+    private var moveControls: some View {
+        HStack(spacing: 6) {
+            Toggle(isOn: $dragToMove) {
+                Label("Drag to Move", systemImage: "hand.draw")
+            }
+            .toggleStyle(.button).controlSize(.small)
+            .help("Drag selected photos onto a folder in the sidebar. Turn off to rubber-band select again.")
+            Picker(selection: $moveDest) {
+                Text("Move to…").tag("")
+                ForEach(pickerFolders, id: \.self) { f in
+                    Text(f).tag(f)
+                }
+            } label: { EmptyView() }
+            .frame(maxWidth: 180)
+            TextField("New folder…", text: $newMoveFolderName)
+                .frame(width: 110)
+                .onSubmit {
+                    let t = newMoveFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !t.isEmpty { moveDest = t; newMoveFolderName = "" }
+                }
+            Button("Move") {
+                let ids = Array(selection.selected)
+                let dest = moveDest
+                Task { await state.movePhotos(ids: ids, into: dest) }
+            }
+            .disabled(selection.count == 0 || moveDest.isEmpty || moveDest == state.selectedFolder)
+            .controlSize(.small)
+        }
+    }
+
+    private var allFolders: [String] {
+        var paths: [String] = []
+        func walk(_ nodes: [FolderNode]) { for n in nodes { paths.append(n.path); walk(n.children) } }
+        walk(state.folderTree)
+        return paths.sorted()
+    }
+    /// Picker options including a just-typed new folder, so selecting it never blanks the menu.
+    private var pickerFolders: [String] {
+        var fs = allFolders
+        if !moveDest.isEmpty, !fs.contains(moveDest) { fs.insert(moveDest, at: 0) }
+        return fs
     }
 
     private var toolbar: some View {
