@@ -54,7 +54,7 @@ if git worktree add "$WORKTREE" gh-pages 2>/dev/null; then
 else
   # gh-pages doesn't exist locally yet — create it tracking origin
   git worktree add "$WORKTREE" -b gh-pages origin/gh-pages 2>/dev/null \
-    || git worktree add "$WORKTREE" --orphan gh-pages
+    || git worktree add --orphan -b gh-pages "$WORKTREE"
 fi
 cp "$RELDIR/appcast.xml" "$WORKTREE/appcast.xml"
 ( cd "$WORKTREE" && git add appcast.xml \

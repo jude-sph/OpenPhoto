@@ -111,7 +111,10 @@ else
 fi
 
 # Embed Sparkle.framework (and its XPC helpers, which live inside it) into the bundle.
-SPARKLE_FW="$(find .build -name 'Sparkle.framework' -type d | head -1)"
+# Anchor to the RELEASE build products (this script ships the release binary). On a machine that has
+# also built debug, an unanchored find could embed the debug-config copy of the framework.
+SPARKLE_FW="$(find .build -path '*/release/Sparkle.framework' -type d | head -1)"
+[[ -n "$SPARKLE_FW" ]] || SPARKLE_FW="$(find .build -name 'Sparkle.framework' -type d | head -1)"
 if [[ -n "$SPARKLE_FW" ]]; then
   mkdir -p "$APP/Contents/Frameworks"
   cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
