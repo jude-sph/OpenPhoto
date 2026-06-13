@@ -20,3 +20,6 @@ spike-download/
 # make-app.sh injects them into the built .app, the build tolerates their absence)
 .models/
 Sources/OpenPhotoCore/Resources/*.mlpackage/
+
+# face-recognition spike (scratch: venv, downloaded weights, converted model)
+tools/face-spike/
