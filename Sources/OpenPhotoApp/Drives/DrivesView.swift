@@ -104,9 +104,13 @@ struct DrivesView: View {
             Divider().overlay(Theme.hairline)
 
             if state.durableVaults.isEmpty {
+                // Fill the area below the header so the header stays pinned to the top (otherwise the
+                // intrinsic-sized empty state lets the VStack shrink and the parent centers it,
+                // leaving a large blank band above the header).
                 ContentUnavailableView("No canonical drive yet",
                     systemImage: "externaldrive.badge.plus",
                     description: Text("Add a drive or folder to hold your canonical library."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(state.durableVaults, id: \.id) { vr in row(vr) }.listStyle(.inset)
             }
