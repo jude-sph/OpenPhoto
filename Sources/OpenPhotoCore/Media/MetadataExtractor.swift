@@ -15,7 +15,11 @@ public enum MetadataExtractor {
     public static func extract(from url: URL, kind: MediaKind) async -> MediaMetadata {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let mtime = attrs?[.modificationDate] as? Date ?? Date()
-        var m = MediaMetadata(takenAt: mtime)
+        // Provisional date: a capture stamp parsed from the filename when present (phone/camcorder
+        // names like 20190101_000146.mp4 carry the real time, and a copy/move resets the file's
+        // mtime), else the file's modified date. Embedded EXIF/QuickTime dates below override this
+        // whenever the file actually carries one.
+        var m = MediaMetadata(takenAt: FilenameDate.parse(url.lastPathComponent) ?? mtime)
         switch kind {
         case .photo: extractImage(url, into: &m)
         case .video: await extractVideo(url, into: &m)
@@ -66,17 +70,27 @@ public enum MetadataExtractor {
             m.pixelWidth = Int(abs(size.width))
             m.pixelHeight = Int(abs(size.height))
         }
-        if let meta = try? await asset.load(.metadata) {
-            if let created = meta.first(where: { $0.commonKey == .commonKeyCreationDate }),
-               let s = try? await created.load(.stringValue),
-               let d = ISO8601Millis.date(from: s) ?? ISO8601Millis.dateLenient(from: s) {
-                m.takenAt = d
+        // Embedded capture date: prefer the common creation-date metadata, then the asset-level
+        // creationDate (which surfaces dates stored in the moov/mvhd header that the common
+        // metadata can miss). Only a real embedded date overrides the filename/mtime provisional.
+        let meta = (try? await asset.load(.metadata)) ?? []
+        var embedded: Date?
+        if let created = meta.first(where: { $0.commonKey == .commonKeyCreationDate }),
+           let s = try? await created.load(.stringValue) {
+            embedded = ISO8601Millis.date(from: s) ?? ISO8601Millis.dateLenient(from: s)
+        }
+        if embedded == nil, let item = try? await asset.load(.creationDate) {
+            if let d = try? await item.load(.dateValue) {
+                embedded = d
+            } else if let s = try? await item.load(.stringValue) {
+                embedded = ISO8601Millis.date(from: s) ?? ISO8601Millis.dateLenient(from: s)
             }
-            if let cid = meta.first(where: {
-                $0.identifier?.rawValue == "mdta/com.apple.quicktime.content.identifier"
-            }), let s = try? await cid.load(.stringValue) {
-                m.contentIdentifier = s
-            }
+        }
+        if let embedded { m.takenAt = embedded }
+        if let cid = meta.first(where: {
+            $0.identifier?.rawValue == "mdta/com.apple.quicktime.content.identifier"
+        }), let s = try? await cid.load(.stringValue) {
+            m.contentIdentifier = s
         }
     }
 }
