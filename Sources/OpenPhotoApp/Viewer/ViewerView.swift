@@ -50,9 +50,10 @@ struct ViewerView: View {
                 p.play()
                 player = p
             } else if !live {
-                player = nil
+                tearDownPlayer()
             }
         }
+        .onDisappear { tearDownPlayer() }
     }
 
     private var stage: some View {
@@ -210,9 +211,18 @@ struct ViewerView: View {
         state.removeOpenedItem { await state.delete($0) }   // advance to next, delete in background
     }
 
+    /// Stop and release the current AV player. Pausing (and clearing the item) is required — merely
+    /// dropping the `player` reference keeps the AVPlayer alive and playing audio until it happens to
+    /// dealloc, and navigating away then back then stacks a second player (the doubled-audio bug).
+    private func tearDownPlayer() {
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        player = nil
+    }
+
     private func loadFull() async {
         fullImage = nil
-        player = nil
+        tearDownPlayer()
         playingLive = false
         liveURL = nil
         driveUnplugged = false
