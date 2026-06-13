@@ -94,6 +94,18 @@ private func face(_ hash: String, _ vec: [Float], source: String = "auto",
     #expect(try cat.pendingDerivation(stage: "faces") == [A])   // photos are faces-eligible
 }
 
+@Test func renamePersonUpdatesNameKeepsFaces() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.upsert(assets: [photo(A)])
+    let f = try cat.insertFaces([face(A, [1, 0])])
+    let p = try cat.createPerson(name: "Bob")
+    try cat.assignFaces(f, to: p)
+    try cat.renamePerson(p, to: "Robert")
+    #expect(try cat.people().first?.name == "Robert")
+    #expect(try cat.faces(forPerson: p).count == 1)   // faces untouched
+}
+
 @Test func faceForIDRoundTrip() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))

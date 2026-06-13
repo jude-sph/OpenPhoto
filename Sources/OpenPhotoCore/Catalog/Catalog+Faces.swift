@@ -130,6 +130,14 @@ extension Catalog {
         }
     }
 
+    /// Rename a person. Human metadata — the App pairs this with a sidecar rewrite of the person's
+    /// confirmed regions (writeSidecarRegions) so the on-disk MWG region name stays in sync.
+    public func renamePerson(_ id: Int64, to name: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE people SET name = ? WHERE id = ?", arguments: [name, id])
+        }
+    }
+
     public func people() throws -> [PersonRow] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """

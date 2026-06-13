@@ -352,6 +352,41 @@ final class AppState {
         }
     }
 
+    /// Rename a person: update the catalog, then rewrite the person's photos' sidecars so the
+    /// on-disk MWG region name matches (writeSidecarRegions reads the new name from the catalog).
+    func renamePerson(_ personID: Int64, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let lib = library else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try lib.catalog.renamePerson(personID, to: trimmed)
+                self?.writeSidecarRegions(forPersonID: personID, lib: lib)
+            } catch { NSLog("renamePerson failed: \(error)") }
+            await MainActor.run { [weak self] in
+                self?.facesDirty = true
+                self?.loadPeople()
+            }
+        }
+    }
+
+    /// Move selected faces to an EXISTING person. Mirrors splitFaces but assigns to a chosen person
+    /// instead of creating one. Rewrites sidecars for the destination (gains regions) and the source
+    /// (loses them); both pull current catalog state per affected hash, so stale names drop.
+    func moveFaces(_ faceIDs: [Int64], toPerson personID: Int64, fromPerson old: Int64?) {
+        guard !faceIDs.isEmpty, let lib = library else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try lib.catalog.assignFaces(faceIDs, to: personID)
+                self?.writeSidecarRegions(forPersonID: personID, lib: lib)
+                if let old, old != personID { self?.writeSidecarRegions(forPersonID: old, lib: lib) }
+            } catch { NSLog("moveFaces failed: \(error)") }
+            await MainActor.run { [weak self] in
+                self?.facesDirty = true
+                self?.loadPeople()
+            }
+        }
+    }
+
     /// Reassign one face to another person (or nil → unassign). Updates sidecars accordingly.
     func reassignFace(_ id: Int64, to personID: Int64?, fromPerson oldPersonID: Int64?) {
         guard let lib = library else { return }
