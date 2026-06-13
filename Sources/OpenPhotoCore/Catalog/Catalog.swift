@@ -197,6 +197,13 @@ public final class Catalog: Sendable {
                 t.add(column: "coverFaceID", .integer)  // → faces.id; nullable
             }
         }
+        migrator.registerMigration("v13") { db in
+            // Display rotation (0/90/180/270, clockwise), human-chosen, mirrored from the XMP sidecar's
+            // tiff:Orientation. Display-only — original pixels are never modified (format spec §3/§9).
+            try db.alter(table: "assets") { t in
+                t.add(column: "rotation", .integer).notNull().defaults(to: 0)
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 

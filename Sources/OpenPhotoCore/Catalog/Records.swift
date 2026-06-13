@@ -35,6 +35,7 @@ public struct AssetRecord: Codable, FetchableRecord, PersistableRecord, Sendable
     public var rating: Int
     public var caption: String?
     public var tagsJSON: String           // JSON array of strings
+    public var rotation: Int              // display rotation 0/90/180/270 CW (mirrors sidecar; display-only)
 
     public init(hash: String, kind: String, takenAtMs: Int64,
                 pixelWidth: Int?, pixelHeight: Int?,
@@ -42,7 +43,8 @@ public struct AssetRecord: Codable, FetchableRecord, PersistableRecord, Sendable
                 cameraModel: String?, lensModel: String?,
                 durationSeconds: Double?,
                 livePairHash: String?, isLivePairedVideo: Bool,
-                favorite: Bool, rating: Int, caption: String?, tagsJSON: String) {
+                favorite: Bool, rating: Int, caption: String?, tagsJSON: String,
+                rotation: Int = 0) {
         self.hash = hash
         self.kind = kind
         self.takenAtMs = takenAtMs
@@ -59,6 +61,7 @@ public struct AssetRecord: Codable, FetchableRecord, PersistableRecord, Sendable
         self.rating = rating
         self.caption = caption
         self.tagsJSON = tagsJSON
+        self.rotation = rotation
     }
 }
 
@@ -99,6 +102,7 @@ public struct TimelineItem: Codable, FetchableRecord, Sendable, Equatable {
     public var rating: Int
     public var caption: String?
     public var tagsJSON: String
+    public var rotation: Int       // display rotation 0/90/180/270 CW (display-only)
     public var vaultID: String
     public var relPath: String
     public var dirPath: String

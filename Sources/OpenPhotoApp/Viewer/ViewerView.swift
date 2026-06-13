@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import CoreImage
 import OpenPhotoCore
 
 struct ViewerView: View {
@@ -14,6 +15,7 @@ struct ViewerView: View {
     private var flatItems: [TimelineItem] {
         state.viewerItems.isEmpty ? state.flatItems : state.viewerItems
     }
+    private var rotationDeg: Double { Double(state.openedItem?.rotation ?? 0) }
     private var index: Int? { flatItems.firstIndex { $0.instanceID == state.openedItem?.instanceID } }
 
     var body: some View {
@@ -43,7 +45,7 @@ struct ViewerView: View {
         .onKeyPress(KeyEquivalent("i")) { state.inspectorShown.toggle(); return .handled }
         .onKeyPress(.deleteForward) { deleteCurrent(); return .handled }
         .onKeyPress(.delete) { deleteCurrent(); return .handled }
-        .task(id: state.openedItem?.instanceID) { await loadFull() }
+        .task(id: "\(state.openedItem?.instanceID ?? "")|\(state.openedItem?.rotation ?? 0)") { await loadFull() }
         .onChange(of: playingLive) { _, live in
             if live, let url = liveURL {
                 let p = AVPlayer(url: url)
@@ -68,6 +70,7 @@ struct ViewerView: View {
                     // under it — with the top bar floating over the video.
                     ZStack(alignment: .top) {
                         PlayerView(player: player)
+                            .rotationEffect(.degrees(rotationDeg))
                             .ignoresSafeArea(.container, edges: .top)   // still reaches the top edge
                         // A tight drop shadow on the controls keeps them legible over bright video
                         // without the top-of-window vignette a gradient background created.
@@ -137,17 +140,18 @@ struct ViewerView: View {
                 }
             } else if item.kind == MediaKind.video.rawValue {
                 if let player {
-                    PlayerView(player: player)
+                    PlayerView(player: player).rotationEffect(.degrees(rotationDeg))
                 }
             } else if playingLive {
                 if let player {
-                    PlayerView(player: player)
+                    PlayerView(player: player).rotationEffect(.degrees(rotationDeg))
                 }
             } else if let fullImage {
-                // GPU-composited zoom/pan via a CALayer — no SwiftUI re-render during
-                // gestures, so it stays smooth on full-res photos. Keyed per photo.
+                // GPU-composited zoom/pan via a CALayer — no SwiftUI re-render during gestures, so it
+                // stays smooth on full-res photos. Rotation is baked into fullImage so pan/zoom stay
+                // in the upright frame. Keyed per photo + rotation.
                 ZoomableImageView(image: fullImage)
-                    .id(state.openedItem?.instanceID)
+                    .id("\(state.openedItem?.instanceID ?? "")|\(state.openedItem?.rotation ?? 0)")
             } else {
                 ProgressView().controlSize(.large)
             }
@@ -241,9 +245,20 @@ struct ViewerView: View {
         let data = await Task.detached(priority: .userInitiated) {
             try? Data(contentsOf: url)
         }.value
-        if let data {
-            fullImage = NSImage(data: data)
+        if let data, let img = NSImage(data: data) {
+            fullImage = Self.rotated(img, degrees: item.rotation)
         }
+    }
+
+    /// Rotate an NSImage 0/90/180/270 CW for display — the original file is never modified.
+    private static func rotated(_ image: NSImage, degrees: Int) -> NSImage {
+        let d = ((degrees % 360) + 360) % 360
+        guard d != 0,
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return image }
+        let orient: CGImagePropertyOrientation = d == 90 ? .right : (d == 180 ? .down : .left)
+        let ci = CIImage(cgImage: cg).oriented(orient)
+        guard let out = CIContext().createCGImage(ci, from: ci.extent) else { return image }
+        return NSImage(cgImage: out, size: NSSize(width: out.width, height: out.height))
     }
 
     private func livePairURL(photo: TimelineItem, pairHash: String) -> URL? {

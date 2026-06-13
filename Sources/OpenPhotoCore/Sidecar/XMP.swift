@@ -7,6 +7,15 @@ public enum XMP {
     static let nsDC     = "http://purl.org/dc/elements/1.1/"
     static let nsMWGRS  = "http://www.metadataworkinggroup.com/schemas/regions/"
     static let nsStArea = "http://ns.adobe.com/xmp/sType/Area#"
+    static let nsTIFF   = "http://ns.adobe.com/tiff/1.0/"
+
+    /// rotation (0/90/180/270 CW) ↔ EXIF/TIFF Orientation (1/6/3/8). Flips (2/4/5/7) decode to 0.
+    static func exifOrientation(fromRotation r: Int) -> Int {
+        switch ((r % 360) + 360) % 360 { case 90: return 6; case 180: return 3; case 270: return 8; default: return 1 }
+    }
+    static func rotation(fromExifOrientation o: Int) -> Int {
+        switch o { case 6: return 90; case 3: return 180; case 8: return 270; default: return 0 }
+    }
 
     public static func serialize(_ d: SidecarData) -> String {
         func esc(_ s: String) -> String {
@@ -49,12 +58,15 @@ public enum XMP {
         let labelAttr = d.favorite ? " xmp:Label=\"Favorite\"" : ""
         let mwgNS = d.faces.isEmpty ? "" :
             "\n    xmlns:mwg-rs=\"\(nsMWGRS)\" xmlns:stArea=\"\(nsStArea)\""
+        let orient = exifOrientation(fromRotation: d.rotation)
+        let orientAttr = orient != 1 ? " tiff:Orientation=\"\(orient)\"" : ""
+        let tiffNS = orient != 1 ? "\n    xmlns:tiff=\"\(nsTIFF)\"" : ""
         return """
         <?xpacket begin="\u{FEFF}" id="W5M0MpCehiHzreSzNTczkc9d"?>
         <x:xmpmeta xmlns:x="\(nsX)">
          <rdf:RDF xmlns:rdf="\(nsRDF)">
           <rdf:Description rdf:about=""
-            xmlns:xmp="\(nsXMP)" xmlns:dc="\(nsDC)"\(mwgNS)\(ratingAttr)\(labelAttr)>
+            xmlns:xmp="\(nsXMP)" xmlns:dc="\(nsDC)"\(mwgNS)\(tiffNS)\(ratingAttr)\(labelAttr)\(orientAttr)>
         \(inner)  </rdf:Description>
          </rdf:RDF>
         </x:xmpmeta>
@@ -108,8 +120,13 @@ public enum XMP {
             faces.append(FaceRegion(name: name, visionRect: visionRect))
         }
 
+        // tiff:Orientation may be an attribute (our serializer) or a child element.
+        let orientStr = attr(desc, "Orientation")
+            ?? (try? desc.nodes(forXPath: "./*[local-name()='Orientation']").first?.stringValue) ?? nil
+        let rot = rotation(fromExifOrientation: Int(orientStr ?? "1") ?? 1)
+
         return SidecarData(rating: rating, favorite: favorite, caption: caption,
-                           tags: tags, faces: faces)
+                           tags: tags, faces: faces, rotation: rot)
     }
 
     private static func attr(_ el: XMLElement, _ localName: String) -> String? {

@@ -107,10 +107,12 @@ Standard namespaces, chosen for maximal third-party intelligibility:
 | Caption | `dc:description` |
 | Title | `dc:title` |
 | People / face regions | MWG Regions (`mwg-rs:Regions`), `Type="Face"`, with `Name` |
+| Display rotation | `tiff:Orientation` (`1`/`6`/`3`/`8` → 0°/90°/180°/270° clockwise) |
 
 Notes:
 
 - A sidecar exists only if there is something to record. Absence of a sidecar = no human-authored metadata.
+- **Display rotation** is recorded as `tiff:Orientation` (namespace `http://ns.adobe.com/tiff/1.0/`): `1`=0°, `6`=90° CW, `3`=180°, `8`=270° CW. It is a **display-only** transform — the original image pixels are never modified (originals are immutable). Readers MAY honour it to show the image upright. Flip orientations (`2`/`4`/`5`/`7`) are not written and SHOULD be decoded as 0°.
 - Sidecar association is by filename. After an outside rename, OpenPhoto self-heals the association via content hash; third-party writers renaming media SHOULD rename the sidecar in the same operation.
 - Only *human-confirmed* people appear in sidecars. Machine guesses (unconfirmed clusters) never leave the catalog.
 

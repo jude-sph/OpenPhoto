@@ -22,6 +22,7 @@ struct ThumbnailImage: View {
     let id: String
     let provider: @Sendable (_ maxPixel: Int) async -> CGImage?
     var targetPixel: Int = ThumbnailStore.maxPixel
+    var rotation: Int = 0   // display rotation (0/90/180/270 CW); applied as a render transform
     @State private var asyncImage: CGImage?
 
     private var cacheKey: NSString { "\(id)@\(targetPixel)" as NSString }
@@ -32,6 +33,7 @@ struct ThumbnailImage: View {
             Theme.tile
             if let cached {
                 Image(decorative: cached, scale: 1).resizable().aspectRatio(contentMode: .fill)
+                    .rotationEffect(.degrees(Double(rotation)))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -71,7 +73,7 @@ extension ThumbnailImage {
                 return img
             }
             return await lib.thumbnails.cachedDisplayImage(for: hash, maxPixel: px)
-        }, targetPixel: targetPixel)
+        }, targetPixel: targetPixel, rotation: item.rotation)
     }
 }
 

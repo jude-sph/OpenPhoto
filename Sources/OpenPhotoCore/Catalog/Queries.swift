@@ -8,7 +8,7 @@ extension Catalog {
     private static let localSelect = """
         SELECT a.hash, a.kind, a.takenAtMs, a.pixelWidth, a.pixelHeight, a.latitude, a.longitude,
                a.cameraModel, a.lensModel, a.durationSeconds, a.livePairHash, a.favorite, a.rating,
-               a.caption, a.tagsJSON, i.vaultID, i.relPath, i.dirPath, i.size, NULL AS driveRelPath
+               a.caption, a.tagsJSON, a.rotation, i.vaultID, i.relPath, i.dirPath, i.size, NULL AS driveRelPath
         FROM assets a JOIN instances i ON i.hash = a.hash
         WHERE a.isLivePairedVideo = 0
         """
@@ -18,7 +18,7 @@ extension Catalog {
     private static let driveSelect = """
         SELECT a.hash, a.kind, a.takenAtMs, a.pixelWidth, a.pixelHeight, a.latitude, a.longitude,
                a.cameraModel, a.lensModel, a.durationSeconds, a.livePairHash, a.favorite, a.rating,
-               a.caption, a.tagsJSON, vp.vaultID, vp.relPath, vp.dirPath, vp.size, vp.driveRelPath
+               a.caption, a.tagsJSON, a.rotation, vp.vaultID, vp.relPath, vp.dirPath, vp.size, vp.driveRelPath
         FROM assets a JOIN vault_presence vp ON vp.hash = a.hash
         WHERE a.isLivePairedVideo = 0
           AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.hash = a.hash)
@@ -178,6 +178,14 @@ extension Catalog {
                 SELECT EXISTS(SELECT 1 FROM instances
                               WHERE hash = ? AND vaultID = ? AND dirPath = ?)
                 """, arguments: [hash, vaultID, dirPath]) ?? false
+        }
+    }
+
+    /// Mirror the sidecar's display rotation (0/90/180/270 CW) into the catalog for fast display.
+    public func setRotation(hash: String, rotation: Int) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE assets SET rotation = ? WHERE hash = ?",
+                           arguments: [((rotation % 360) + 360) % 360, hash])
         }
     }
 

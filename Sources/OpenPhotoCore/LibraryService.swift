@@ -76,6 +76,7 @@ public final class LibraryService: Sendable {
             try catalog.updateHumanMetadata(hash: entry.hash.stringValue,
                                             favorite: data.favorite, rating: data.rating,
                                             caption: data.caption, tagsJSON: tags)
+            try catalog.setRotation(hash: entry.hash.stringValue, rotation: data.rotation)
         }
     }
 
@@ -228,11 +229,34 @@ public final class LibraryService: Sendable {
 
     public func updateMetadata(for item: TimelineItem, rating: Int, favorite: Bool,
                                caption: String?, tags: [String]) throws {
-        let data = SidecarData(rating: rating, favorite: favorite, caption: caption, tags: tags)
-        try sidecarStores[item.vaultID]?.write(data, forMediaRelPath: item.relPath)  // durable first
+        if let store = sidecarStores[item.vaultID] {
+            // Read-modify-write so a metadata edit never wipes the sidecar's confirmed faces or rotation.
+            let existing = (try? store.read(forMediaRelPath: item.relPath)) ?? .empty
+            let data = SidecarData(rating: rating, favorite: favorite, caption: caption, tags: tags,
+                                   faces: existing.faces, rotation: existing.rotation)
+            try store.write(data, forMediaRelPath: item.relPath)  // durable first
+        }
         let tagsJSON = String(data: try JSONEncoder().encode(tags), encoding: .utf8) ?? "[]"
         try catalog.updateHumanMetadata(hash: item.hash, favorite: favorite,
                                         rating: rating, caption: caption, tagsJSON: tagsJSON)
+    }
+
+    /// Set display rotation (0/90/180/270 CW) for the content: read-modify-write every local instance's
+    /// sidecar (preserving all other fields) and mirror to the catalog. Display-only — pixels untouched.
+    /// Returns the normalized rotation.
+    @discardableResult
+    public func setRotation(for item: TimelineItem, rotation: Int) throws -> Int {
+        let norm = ((rotation % 360) + 360) % 360
+        for inst in (try? catalog.instances(forHash: item.hash)) ?? [] {
+            guard let store = sidecarStores[inst.vaultID] else { continue }
+            let existing = (try? store.read(forMediaRelPath: inst.relPath)) ?? .empty
+            let data = SidecarData(rating: existing.rating, favorite: existing.favorite,
+                                   caption: existing.caption, tags: existing.tags,
+                                   faces: existing.faces, rotation: norm)
+            try? store.write(data, forMediaRelPath: inst.relPath)
+        }
+        try catalog.setRotation(hash: item.hash, rotation: norm)
+        return norm
     }
 
     /// Reconcile an asset's tags with macOS Finder tags on its local files via a 3-way merge against the

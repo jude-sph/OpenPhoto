@@ -67,6 +67,21 @@ struct InspectorView: View {
                 }
                 .disabled(state.isDriveOnly(item))
 
+                section("Rotate") {
+                    HStack(spacing: 16) {
+                        Button { state.rotate(item, by: -90) } label: {
+                            Image(systemName: "rotate.left")
+                        }.buttonStyle(.plain).help("Rotate left (non-destructive)")
+                        Button { state.rotate(item, by: 90) } label: {
+                            Image(systemName: "rotate.right")
+                        }.buttonStyle(.plain).help("Rotate right (non-destructive)")
+                        Spacer()
+                    }
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.textDim)
+                }
+                .disabled(state.isDriveOnly(item))
+
                 section("Tags") {
                     FlowLayoutLite(spacing: 6) {
                         ForEach(tags, id: \.self) { tag in

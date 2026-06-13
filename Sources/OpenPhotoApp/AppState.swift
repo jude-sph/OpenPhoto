@@ -440,6 +440,23 @@ final class AppState {
         }
     }
 
+    /// Rotate a photo/video by 90° (delta ±90), display-only. Writes the rotation to the sidecar +
+    /// catalog (originals untouched), then refreshes the opened item + grids so every surface re-renders.
+    func rotate(_ item: TimelineItem, by delta: Int) {
+        guard let lib = library else { return }
+        let target = item.rotation + delta
+        Task.detached(priority: .userInitiated) { [weak self] in
+            _ = try? lib.setRotation(for: item, rotation: target)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if self.openedItem?.hash == item.hash {
+                    self.openedItem = (try? lib.item(hash: item.hash)) ?? self.openedItem
+                }
+                try? self.refreshQueries()
+            }
+        }
+    }
+
     // MARK: — Private sidecar helpers (nonisolated — run off main actor only)
 
     /// Write (or rewrite) MWG face regions into the sidecars of every asset that has a confirmed
