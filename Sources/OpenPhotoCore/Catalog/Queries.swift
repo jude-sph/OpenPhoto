@@ -198,4 +198,15 @@ extension Catalog {
             Set(try String.fetchAll(db, sql: "SELECT hash FROM assets"))
         }
     }
+
+    /// Media OpenPhoto indexes on this Mac: file count + summed bytes (local instances). This is
+    /// OpenPhoto's footprint, NOT the root folder's size — that folder also holds Photos libraries,
+    /// app bundles, and other files OpenPhoto skips.
+    public func librarySize() throws -> (count: Int, bytes: Int64) {
+        try dbQueue.read { db in
+            let row = try Row.fetchOne(db, sql:
+                "SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS b FROM instances")
+            return (row?["n"] ?? 0, row?["b"] ?? 0)
+        }
+    }
 }

@@ -5,6 +5,7 @@ import OpenPhotoCore
 /// About surfaces on-device-analysis credits + the required GeoNames attribution.
 struct SettingsView: View {
     @Bindable var state: AppState
+    @State private var libStats: (count: Int, bytes: Int64)?
 
     var body: some View {
         TabView {
@@ -46,11 +47,26 @@ struct SettingsView: View {
                 Button("Close Library") { state.closeLibraryAndForgetRoot() }
                     .disabled(state.library == nil)
             }
+            if let s = libStats {
+                Divider()
+                HStack {
+                    Text("Indexed media").font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Text("\(s.count) item\(s.count == 1 ? "" : "s") · \(ByteCountFormatter.string(fromByteCount: s.bytes, countStyle: .file))")
+                        .font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.textDim)
+                }
+                Text("OpenPhoto's footprint — the photos and videos it indexes. This is less than the folder's total size on disk, which also holds Photos libraries, app bundles, and other files OpenPhoto skips.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("Switching forgets OpenPhoto's index of the old folder and indexes the new one. Your photo files and any edits (favorites, tags, captions, people) are never touched — they live with the files.")
                 .font(.system(size: 11)).foregroundStyle(Theme.textDim)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding()
+        .task(id: state.refreshToken) {
+            libStats = state.library.flatMap { try? $0.catalog.librarySize() }
+        }
     }
 
     private func changeRootViaPanel() {
