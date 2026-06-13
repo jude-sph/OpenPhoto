@@ -49,6 +49,14 @@ extension Catalog {
         }
     }
 
+    /// Drop all job rows for a stage so every eligible asset re-enters `pendingDerivation` — the
+    /// trigger for a full re-derivation (e.g. the face rescan after a model change).
+    public func clearDerivationJobs(stage: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM derivation_jobs WHERE stage = ?", arguments: [stage])
+        }
+    }
+
     /// Record a failed attempt (increments the attempt count).
     public func markDerivationFailed(hash: String, stage: String) throws {
         let now = Int64(Date().timeIntervalSince1970 * 1000)

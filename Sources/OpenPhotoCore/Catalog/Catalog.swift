@@ -204,6 +204,22 @@ public final class Catalog: Sendable {
                 t.add(column: "rotation", .integer).notNull().defaults(to: 0)
             }
         }
+        migrator.registerMigration("v14") { db in
+            // Face-recognition v2 (AdaFace IR-101). Two rebuildable, machine-derived additions —
+            // catalog-only, NO sidecar, NO on-disk format change:
+            //  • faces.quality — clusterability score (capture quality if the face passed the quality
+            //    gate, else 0). The clusterer reads only quality>0 faces; gated faces remain for
+            //    display + manual assignment. Existing rows default to 1 (re-derived by the rescan).
+            //  • catalog_meta — a tiny key/value store; holds `faceModelVersion` so a model change
+            //    triggers a one-time face re-derivation (old dim≠512 vectors self-exclude regardless).
+            try db.alter(table: "faces") { t in
+                t.add(column: "quality", .double).notNull().defaults(to: 1)
+            }
+            try db.create(table: "catalog_meta") { t in
+                t.primaryKey("key", .text)
+                t.column("value", .text).notNull()
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 
