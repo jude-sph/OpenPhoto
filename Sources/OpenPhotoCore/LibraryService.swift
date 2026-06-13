@@ -207,7 +207,15 @@ public final class LibraryService: Sendable {
             node.children = (childPaths[path] ?? []).sorted().map(build)
             return node
         }
-        return rootPaths.sorted().map(build)
+        var tree = rootPaths.sorted().map(build)
+        // Photos sitting directly in the library root (dirPath "") have no subfolder node, so they'd
+        // be invisible in the Folders view. Surface them as a top-level node named after the library
+        // folder; selecting it browses the loose root photos via `items(inDir: "")`.
+        if let rootCount = counts[""], rootCount > 0, let rootURL = vaults.first?.rootURL {
+            tree.insert(FolderNode(path: "", name: rootURL.lastPathComponent,
+                                   count: rootCount, children: []), at: 0)
+        }
+        return tree
     }
 
     // MARK: Edit

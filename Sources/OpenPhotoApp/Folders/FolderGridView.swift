@@ -203,9 +203,16 @@ struct FolderGridView: View {
         return fs
     }
 
+    /// Header label for the selected folder; the root node has dirPath "" so show its display name.
+    private var breadcrumb: String {
+        guard let dir = state.selectedFolder else { return "Folders" }
+        if dir.isEmpty { return state.folderTree.first { $0.path == "" }?.name ?? "Library Root" }
+        return dir.replacingOccurrences(of: "/", with: " › ")
+    }
+
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Text(state.selectedFolder?.replacingOccurrences(of: "/", with: " › ") ?? "Folders")
+            Text(breadcrumb)
                 .font(.system(size: 15, weight: .semibold))
             Text("\(items.count) items")
                 .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)

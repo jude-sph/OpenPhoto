@@ -81,6 +81,29 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     Dictionary(uniqueKeysWithValues: nodes.map { ($0.name, $0) })
 }
 
+@Test func folderTreeSurfacesLooseRootPhotosAsTopNode() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    // One photo loose in the root, one inside a subfolder (distinct dates → distinct hashes).
+    try makeJPEG(at: pics.appendingPathComponent("loose.jpg"),
+                 dateTimeOriginal: "2022:10:07 14:23:01", lat: nil, lon: nil)
+    try makeJPEG(at: pics.appendingPathComponent("2024/sub.jpg").creatingParent(),
+                 dateTimeOriginal: "2023:01:02 09:00:00", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+
+    let tree = try lib.folderTree()
+    // A root node (path "") named after the library folder, listed first, with the loose count.
+    #expect(tree.first?.path == "")
+    let root = try #require(tree.first { $0.path == "" })
+    #expect(root.name == "Pictures")
+    #expect(root.count == 1)
+    #expect(tree.contains { $0.path == "2024" })
+    // Selecting it browses exactly the loose root photo.
+    let rootItems = try lib.items(inDir: "")
+    #expect(rootItems.map(\.relPath) == ["loose.jpg"])
+}
+
 @Test func renameMovesFileAndSidecarKeepingIdentity() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let lib = try makeLibrary(t)
