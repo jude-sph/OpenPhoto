@@ -74,10 +74,16 @@ struct FolderTreeView: View {
         .padding(.vertical, 7)
         .background(rootDropTargeted ? Theme.accent.opacity(0.16) : .clear)
         .overlay(alignment: .bottom) { Divider().overlay(Theme.hairline) }
-        .contentShape(Rectangle())
-        .dropDestination(for: String.self) { items, _ in
-            moveToRoot(items.first)
-        } isTargeted: { rootDropTargeted = $0 }
+        // Put the drop target BEHIND the header content so the "+" (New Folder) button still receives
+        // clicks. Wrapping the whole header in .contentShape + .dropDestination was swallowing the
+        // button's tap (clicking it did nothing).
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .dropDestination(for: String.self) { items, _ in
+                    moveToRoot(items.first)
+                } isTargeted: { rootDropTargeted = $0 }
+        }
     }
 
     /// Header + empty-space drops: photos move to the library root; a dragged folder
