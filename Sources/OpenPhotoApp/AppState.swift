@@ -239,12 +239,16 @@ final class AppState {
     var cullMode: CullMode = .bursts
     var cullGroups: [CullGroup] = []
     var cullLoading = false
+    private var cullLoadToken = 0   // bumped per load; a stale detached result is dropped if a newer switch superseded it
 
     /// Compute redundant-photo groups off-main (the loadPeople pattern). Bursts reuse `embeddings`;
     /// Duplicates use the `phash` table. Sharpness (bursts) is measured on-demand from cached thumbs.
     func loadCullGroups() {
         guard let lib = library else { return }
         let mode = cullMode
+        cullLoadToken &+= 1
+        let token = cullLoadToken
+        cullGroups = []          // drop the previous mode's groups now — don't show them stale under the new label
         cullLoading = true
         Task {
             let groups: [CullGroup] = await Task.detached(priority: .userInitiated) {
@@ -287,6 +291,7 @@ final class AppState {
                 }
                 return out
             }.value
+            guard token == self.cullLoadToken else { return }   // a newer mode switch superseded this load
             self.cullGroups = groups
             self.cullLoading = false
         }
