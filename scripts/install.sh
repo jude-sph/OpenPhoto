@@ -4,6 +4,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The build artifact build/OpenPhoto.app is transient — it gets copied to /Applications. If left on
+# disk it shows up as a SECOND "OpenPhoto" in Spotlight/Launchpad (a .metadata_never_index marker is
+# unreliable — proven), so remove + unregister it on exit. /Applications/OpenPhoto.app is unaffected.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
+cleanup_build_app() { rm -rf build/OpenPhoto.app; "$LSREGISTER" -u "$PWD/build/OpenPhoto.app" 2>/dev/null || true; }
+trap cleanup_build_app EXIT
+
 ./scripts/make-app.sh
 
 DEST="/Applications/OpenPhoto.app"

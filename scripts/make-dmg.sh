@@ -3,6 +3,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Remove the transient build/OpenPhoto.app on exit so it can't show up as a 2nd "OpenPhoto" in
+# Spotlight/Launchpad. release.sh sets OPENPHOTO_KEEP_BUILD_APP=1 because it still needs the .app
+# (to zip it for the Sparkle update) after this script returns; it does its own cleanup at its end.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
+cleanup_build_app() { rm -rf build/OpenPhoto.app; "$LSREGISTER" -u "$PWD/build/OpenPhoto.app" 2>/dev/null || true; }
+trap '[[ -n "${OPENPHOTO_KEEP_BUILD_APP:-}" ]] || cleanup_build_app' EXIT
+
 ./scripts/make-app.sh
 VERSION="$(tr -d '[:space:]' < VERSION)"
 

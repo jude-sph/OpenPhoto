@@ -17,6 +17,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Keep build/OpenPhoto.app alive through make-dmg.sh (we still zip it below for the Sparkle update),
+# then remove + unregister it on exit so it never lingers as a 2nd "OpenPhoto" in Spotlight/Launchpad.
+export OPENPHOTO_KEEP_BUILD_APP=1
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
+cleanup_build_app() { rm -rf build/OpenPhoto.app; "$LSREGISTER" -u "$PWD/build/OpenPhoto.app" 2>/dev/null || true; }
+trap cleanup_build_app EXIT
+
 VERSION="$(tr -d '[:space:]' < VERSION)"
 TAG="v${VERSION}"
 echo "Releasing ${TAG} …"
