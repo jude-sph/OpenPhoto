@@ -192,9 +192,16 @@ final class AppState {
     // MARK: — People state
     var people: [PersonRow] = []
     var suggestedClusters: [FaceCluster] = []
+    /// personID → unassigned faceIDs that match this person's centroid (suggested additions to confirm).
+    var suggestedAdditions: [Int64: [Int64]] = [:]
+    /// Unassigned faces that matched no person and formed no cluster — the "Other faces" bucket, so
+    /// every detected face is reachable (DBSCAN noise was previously invisible).
+    var otherFaceIDs: [Int64] = []
     /// Non-nil → the People view shows this person's detail grid. Lifted out of the view so the
     /// inspector's "In this image" section can deep-link straight to a person.
     var openedPerson: PersonRow?
+    /// True → the People view shows the "Other faces" bucket grid.
+    var browsingOtherFaces = false
     var facesLoading = false
     private var facesDirty = true
     private var geocodeDirty = true
@@ -204,32 +211,58 @@ final class AppState {
     /// produced the old 1700-photo blob. Reasonable starting defaults — tune on a real library.
     private let faceClusterEps = 0.5
     private let faceClusterMinPts = 3
+    /// Max cosine distance for an unassigned face to be SUGGESTED as a member of an existing person.
+    /// A touch looser than `faceClusterEps` because a many-face centroid is a strong anchor.
+    private let faceMatchThreshold = 0.55
 
-    /// Compute named-people cards (Catalog.people()) and suggested unnamed clusters
-    /// (FaceClusterer over unassignedFacesWithEmbeddings()) off the main actor. Called when the
-    /// People view appears and re-called when facesDirty after a drain.
+    /// Recompute the People screen off the main actor: named people, suggested ADDITIONS to existing
+    /// people (faces near a person's centroid), suggested NEW clusters (DBSCAN over the rest), and the
+    /// "Other faces" bucket (everything left). Every unassigned face lands in exactly one of the three.
     func loadPeople() {
         guard let lib = library else { return }
         facesLoading = true
-        let eps = faceClusterEps
-        let minPts = faceClusterMinPts
+        let eps = faceClusterEps, minPts = faceClusterMinPts, matchThreshold = faceMatchThreshold
         Task {
-            let (ppl, clusters): ([PersonRow], [FaceCluster]) =
+            let result: (people: [PersonRow], clusters: [FaceCluster],
+                         additions: [Int64: [Int64]], other: [Int64]) =
                 await Task.detached(priority: .userInitiated) {
                     let ppl = (try? lib.catalog.people()) ?? []
                     let unassigned = (try? lib.catalog.unassignedFacesWithEmbeddings()) ?? []
-                    let groups = DBSCAN.groups(unassigned, eps: eps, minPts: minPts)
-                    let conf = groups.map { ids -> FaceCluster in
-                        FaceCluster(faceIDs: ids, representativeFaceID: ids.first ?? 0,
-                                    count: ids.count)
+
+                    // Per-person centroids from current-model confirmed vectors.
+                    var byPerson: [Int64: [[Float]]] = [:]
+                    for a in (try? lib.catalog.assignedFacesWithEmbeddings()) ?? [] {
+                        byPerson[a.personID, default: []].append(a.vector)
                     }
-                    return (ppl, conf)
+                    let centroids: [(personID: Int64, vector: [Float])] = byPerson.compactMap { pid, vecs in
+                        FaceMatcher.centroid(vecs).map { (pid, $0) }
+                    }
+
+                    // Match unassigned → nearest person (suggestions); cluster the rest; bucket the noise.
+                    let (matched, unmatched) = FaceMatcher.match(
+                        faces: unassigned, centroids: centroids, threshold: matchThreshold)
+                    let additions = Dictionary(uniqueKeysWithValues: matched.map { ($0.personID, $0.faceIDs) })
+                    let groups = DBSCAN.groups(unmatched, eps: eps, minPts: minPts)
+                    let conf = groups.map { FaceCluster(faceIDs: $0, representativeFaceID: $0.first ?? 0,
+                                                        count: $0.count) }
+                    let clustered = Set(groups.flatMap { $0 })
+                    let other = unmatched.map(\.id).filter { !clustered.contains($0) }
+                    return (ppl, conf, additions, other)
                 }.value
-            self.people = ppl
-            self.suggestedClusters = clusters
+            self.people = result.people
+            self.suggestedClusters = result.clusters
+            self.suggestedAdditions = result.additions
+            self.otherFaceIDs = result.other
             self.facesLoading = false
             self.facesDirty = false
         }
+    }
+
+    /// Dismiss a person's suggested additions (in-session): the faces drop to the Other-faces bucket.
+    /// Not persisted — a later People reload may re-suggest them once the centroid sharpens (by design).
+    func dismissSuggestions(forPerson personID: Int64) {
+        if let ids = suggestedAdditions[personID] { otherFaceIDs.append(contentsOf: ids) }
+        suggestedAdditions[personID] = nil
     }
 
     /// Manual "Rescan Faces" (Settings → Library): re-run detection + embedding across the whole

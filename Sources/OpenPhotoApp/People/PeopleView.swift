@@ -13,6 +13,8 @@ struct PeopleView: View {
         if let cluster = selectedCluster {
             ClusterDetailView(state: state, cluster: cluster,
                               onBack: { selectedCluster = nil })
+        } else if state.browsingOtherFaces {
+            OtherFacesDetailView(state: state, onBack: { state.browsingOtherFaces = false })
         } else if let person = state.openedPerson {
             // Person-detail navigation lives on AppState so the inspector can deep-link here.
             PersonDetailView(state: state, person: person,
@@ -20,7 +22,8 @@ struct PeopleView: View {
         } else {
             PeopleOverviewView(state: state,
                                onSelectPerson: { state.openedPerson = $0 },
-                               onOpenCluster: { selectedCluster = $0 })
+                               onOpenCluster: { selectedCluster = $0 },
+                               onBrowseOther: { state.browsingOtherFaces = true })
         }
     }
 }
@@ -31,6 +34,7 @@ struct PeopleOverviewView: View {
     @Bindable var state: AppState
     var onSelectPerson: (PersonRow) -> Void
     var onOpenCluster: (FaceCluster) -> Void
+    var onBrowseOther: () -> Void
 
     // Merge-selection state (select two named people to merge).
     @State private var mergeSelection: Set<Int64> = []
@@ -46,7 +50,7 @@ struct PeopleOverviewView: View {
                 Spacer()
                 ProgressView("Analyzing faces…").foregroundStyle(Theme.textDim)
                 Spacer()
-            } else if state.people.isEmpty && state.suggestedClusters.isEmpty {
+            } else if state.people.isEmpty && state.suggestedClusters.isEmpty && state.otherFaceIDs.isEmpty {
                 emptyState
             } else {
                 ScrollView {
@@ -57,13 +61,16 @@ struct PeopleOverviewView: View {
                         if !state.suggestedClusters.isEmpty {
                             suggestedSection
                         }
+                        if !state.otherFaceIDs.isEmpty {
+                            otherFacesSection
+                        }
                     }
                     .padding(16)
                 }
             }
         }
         .onAppear {
-            if state.people.isEmpty && state.suggestedClusters.isEmpty {
+            if state.people.isEmpty && state.suggestedClusters.isEmpty && state.otherFaceIDs.isEmpty {
                 state.loadPeople()
             }
         }
@@ -159,6 +166,39 @@ struct PeopleOverviewView: View {
         }
     }
 
+    // MARK: Other faces (unclustered, unmatched — the bucket)
+
+    private var otherFacesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("Other faces", count: state.otherFaceIDs.count)
+            Text("Faces that didn't fall into a group. Open to select faces and add them to someone.")
+                .font(.system(size: 12)).foregroundStyle(Theme.textDim).padding(.bottom, 2)
+            Button(action: onBrowseOther) {
+                HStack(spacing: 12) {
+                    if let first = state.otherFaceIDs.first {
+                        FaceCropView(state: state, faceID: first, hash: nil, size: 64, fill: false)
+                            .frame(width: 64, height: 64)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    } else {
+                        RoundedRectangle(cornerRadius: 8).fill(Theme.tile).frame(width: 64, height: 64)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Other faces").font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.text)
+                        Text("\(state.otherFaceIDs.count) face\(state.otherFaceIDs.count == 1 ? "" : "s") to sort")
+                            .font(.system(size: 12)).foregroundStyle(Theme.textDim)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(Theme.textFaint)
+                }
+                .padding(10)
+                .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, 24)
+    }
+
     // MARK: Empty state
 
     private var emptyState: some View {
@@ -244,6 +284,15 @@ struct PersonCard: View {
                     )
                     .frame(width: 90, height: 90)
                     .clipShape(Circle())
+                    if let n = state.suggestedAdditions[person.id]?.count, n > 0, !mergeSelected {
+                        Text("+\(n)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Theme.accent, in: Capsule())
+                            .frame(width: 90, height: 90, alignment: .topTrailing)
+                            .help("\(n) suggested face\(n == 1 ? "" : "s") — open to review")
+                    }
                     if mergeSelected {
                         Circle()
                             .strokeBorder(Theme.accent, lineWidth: 3)
@@ -372,6 +421,7 @@ struct PersonDetailView: View {
         VStack(spacing: 0) {
             if selectMode { selectionBar } else { detailToolbar }
             Divider().overlay(Theme.hairline)
+            if !selectMode { suggestionStrip }
             if pairs.isEmpty {
                 emptyFaces
             } else {
@@ -379,6 +429,45 @@ struct PersonDetailView: View {
             }
         }
         .onAppear { reload() }
+        .onChange(of: state.people) { reload() }   // refresh after suggestions are added/dismissed
+    }
+
+    /// Faces matched to this person's centroid, offered for one-tap confirmation. Tapping a face adds
+    /// just it; "Add all" confirms the lot; "Dismiss" drops them to the Other-faces bucket.
+    @ViewBuilder private var suggestionStrip: some View {
+        if let ids = state.suggestedAdditions[person.id], !ids.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("\(ids.count) face\(ids.count == 1 ? "" : "s") might be \(person.name)")
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.text)
+                    Spacer()
+                    Button("Add all") { state.moveFaces(ids, toPerson: person.id, fromPerson: nil) }
+                        .controlSize(.small)
+                    Button("Dismiss") { state.dismissSuggestions(forPerson: person.id) }
+                        .controlSize(.small)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(ids, id: \.self) { fid in
+                            FaceCropView(state: state, faceID: fid, hash: nil, size: 56, fill: false)
+                                .frame(width: 56, height: 56)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(alignment: .topTrailing) {
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.system(size: 14)).symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, Theme.accent).padding(2)
+                                }
+                                .onTapGesture { state.moveFaces([fid], toPerson: person.id, fromPerson: nil) }
+                                .help("Add to \(person.name)")
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Theme.bg2.opacity(0.4))
+            Divider().overlay(Theme.hairline)
+        }
     }
 
     private var grid: some View {
