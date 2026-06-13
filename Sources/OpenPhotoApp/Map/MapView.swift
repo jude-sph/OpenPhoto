@@ -89,21 +89,27 @@ struct MapView: View {
         .focusEffectDisabled()
         .focused($mapFocused)
         .onAppear { mapFocused = true }
-        .onKeyPress(.upArrow)    { panBy(lat:  0.25, lon:  0);    return .handled }
-        .onKeyPress(.downArrow)  { panBy(lat: -0.25, lon:  0);    return .handled }
-        .onKeyPress(.leftArrow)  { panBy(lat:  0,    lon: -0.25); return .handled }
-        .onKeyPress(.rightArrow) { panBy(lat:  0,    lon:  0.25); return .handled }
-        .onKeyPress(.init("=")) { zoomBy(0.6); return .handled }   // zoom in
-        .onKeyPress(.init("+")) { zoomBy(0.6); return .handled }
-        .onKeyPress(.init("-")) { zoomBy(1.0 / 0.6); return .handled }   // zoom out
-        .onKeyPress(.init("_")) { zoomBy(1.0 / 0.6); return .handled }
+        .onKeyPress(.upArrow)    { panBy(lat:  0.1, lon:  0);   return .handled }
+        .onKeyPress(.downArrow)  { panBy(lat: -0.1, lon:  0);   return .handled }
+        .onKeyPress(.leftArrow)  { panBy(lat:  0,   lon: -0.1); return .handled }
+        .onKeyPress(.rightArrow) { panBy(lat:  0,   lon:  0.1); return .handled }
+        .onKeyPress(.init("=")) { zoomBy(0.8); return .handled }    // zoom in
+        .onKeyPress(.init("+")) { zoomBy(0.8); return .handled }
+        .onKeyPress(.init("-")) { zoomBy(1.25); return .handled }   // zoom out
+        .onKeyPress(.init("_")) { zoomBy(1.25); return .handled }
     }
 
     // MARK: — Keyboard navigation
 
     /// Shift the map centre by a fraction of the current span (arrow keys). Latitude is clamped and
-    /// longitude wraps at the antimeridian. Updates `currentRegion` immediately so rapid presses
-    /// compound predictably before the camera-change callback lands.
+    /// longitude wraps at the antimeridian.
+    ///
+    /// Moves are applied INSTANTLY (no animation) on purpose. An animated camera move makes MapKit
+    /// emit `onMapCameraChange` with intermediate regions for ~0.18s, which would overwrite
+    /// `currentRegion` with a lagging value — so a held key (repeat ~30 Hz) computed each next step
+    /// from a half-moved base and crawled, the in-flight animation outlived the key (a pulse on
+    /// release), and interrupting one ease with another sent the camera off on a blended third
+    /// direction. Instant discrete steps keep `currentRegion` authoritative between repeats.
     private func panBy(lat latFraction: Double, lon lonFraction: Double) {
         let span = currentRegion.span
         let newLat = min(85, max(-85, currentRegion.center.latitude + span.latitudeDelta * latFraction))
@@ -112,10 +118,11 @@ struct MapView: View {
         let region = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: newLat, longitude: newLon), span: span)
         currentRegion = region
-        withAnimation(.easeInOut(duration: 0.18)) { mapPosition = .region(region) }
+        mapPosition = .region(region)
     }
 
-    /// Scale the visible span about the current centre (`factor` < 1 zooms in).
+    /// Scale the visible span about the current centre (`factor` < 1 zooms in). Instant, for the same
+    /// reasons as `panBy`.
     private func zoomBy(_ factor: Double) {
         let span = currentRegion.span
         let region = MKCoordinateRegion(
@@ -124,7 +131,7 @@ struct MapView: View {
                 latitudeDelta: min(150, max(0.002, span.latitudeDelta * factor)),
                 longitudeDelta: min(180, max(0.002, span.longitudeDelta * factor))))
         currentRegion = region
-        withAnimation(.easeInOut(duration: 0.18)) { mapPosition = .region(region) }
+        mapPosition = .region(region)
     }
 
     // MARK: — Cluster bubble annotation
