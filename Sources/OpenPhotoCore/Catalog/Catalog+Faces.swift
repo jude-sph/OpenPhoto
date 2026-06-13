@@ -160,6 +160,23 @@ extension Catalog {
         }
     }
 
+    /// (personID, vector) for every CONFIRMED face carrying a current-model embedding — the input for
+    /// per-person centroids. Faces with stale (dim ≠ 512) vectors are excluded, so a person whose faces
+    /// haven't been re-embedded yet simply contributes no centroid until a rescan refreshes them.
+    public func assignedFacesWithEmbeddings() throws -> [(personID: Int64, vector: [Float])] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT personID, dim, embedding FROM faces
+                WHERE personID IS NOT NULL AND source = 'confirmed' AND dim = \(FaceEmbedder.dimension)
+                """).map { row -> (personID: Int64, vector: [Float]) in
+                    let pid: Int64 = row["personID"]
+                    let dim: Int = row["dim"]
+                    let blob: Data = row["embedding"]
+                    return (pid, Self.unpackF16(blob, dim: dim))
+                }
+        }
+    }
+
     public func createPerson(name: String) throws -> Int64 {
         try dbQueue.write { db in
             try db.execute(sql: "INSERT INTO people (name, createdAtMs) VALUES (?, ?)",
