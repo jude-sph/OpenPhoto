@@ -45,6 +45,8 @@ struct MapView: View {
     @State private var selectedCluster: MapCluster?
     // Items resolved for the grid sheet
     @State private var sheetItems: [TimelineItem] = []
+    // Keyboard navigation: the map is focusable so arrow keys pan and +/- zoom (alongside the mouse).
+    @FocusState private var mapFocused: Bool
 
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
 
@@ -81,6 +83,48 @@ struct MapView: View {
             currentRegion = context.region
             scheduleRecluster()
         }
+        // Keyboard navigation alongside the mouse: arrows pan, +/- zoom. The map takes focus on
+        // appear (click it again to refocus if focus moves elsewhere).
+        .focusable()
+        .focusEffectDisabled()
+        .focused($mapFocused)
+        .onAppear { mapFocused = true }
+        .onKeyPress(.upArrow)    { panBy(lat:  0.25, lon:  0);    return .handled }
+        .onKeyPress(.downArrow)  { panBy(lat: -0.25, lon:  0);    return .handled }
+        .onKeyPress(.leftArrow)  { panBy(lat:  0,    lon: -0.25); return .handled }
+        .onKeyPress(.rightArrow) { panBy(lat:  0,    lon:  0.25); return .handled }
+        .onKeyPress(.init("=")) { zoomBy(0.6); return .handled }   // zoom in
+        .onKeyPress(.init("+")) { zoomBy(0.6); return .handled }
+        .onKeyPress(.init("-")) { zoomBy(1.0 / 0.6); return .handled }   // zoom out
+        .onKeyPress(.init("_")) { zoomBy(1.0 / 0.6); return .handled }
+    }
+
+    // MARK: — Keyboard navigation
+
+    /// Shift the map centre by a fraction of the current span (arrow keys). Latitude is clamped and
+    /// longitude wraps at the antimeridian. Updates `currentRegion` immediately so rapid presses
+    /// compound predictably before the camera-change callback lands.
+    private func panBy(lat latFraction: Double, lon lonFraction: Double) {
+        let span = currentRegion.span
+        let newLat = min(85, max(-85, currentRegion.center.latitude + span.latitudeDelta * latFraction))
+        var newLon = currentRegion.center.longitude + span.longitudeDelta * lonFraction
+        newLon = (newLon + 540).truncatingRemainder(dividingBy: 360) - 180   // wrap to [-180, 180)
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: newLat, longitude: newLon), span: span)
+        currentRegion = region
+        withAnimation(.easeInOut(duration: 0.18)) { mapPosition = .region(region) }
+    }
+
+    /// Scale the visible span about the current centre (`factor` < 1 zooms in).
+    private func zoomBy(_ factor: Double) {
+        let span = currentRegion.span
+        let region = MKCoordinateRegion(
+            center: currentRegion.center,
+            span: MKCoordinateSpan(
+                latitudeDelta: min(150, max(0.002, span.latitudeDelta * factor)),
+                longitudeDelta: min(180, max(0.002, span.longitudeDelta * factor))))
+        currentRegion = region
+        withAnimation(.easeInOut(duration: 0.18)) { mapPosition = .region(region) }
     }
 
     // MARK: — Cluster bubble annotation
