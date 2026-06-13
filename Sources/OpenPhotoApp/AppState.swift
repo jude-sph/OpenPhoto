@@ -265,22 +265,20 @@ final class AppState {
         suggestedAdditions[personID] = nil
     }
 
-    /// Manual "Rescan Faces" (Settings → Library): re-run detection + embedding across the whole
-    /// library with the current model. Drops auto faces + face jobs — named people are kept (confirmed
-    /// faces survive and their identity also lives in the XMP sidecar) — then re-derives in the
-    /// background. The People view empties immediately and repopulates as faces re-derive.
+    /// Manual "Rescan Faces" (Settings → Library): re-run detection + embedding across the library with
+    /// the current model. Named people are kept (confirmed faces survive + their identity lives in the
+    /// XMP sidecar). We do NOT delete the existing auto faces up front — that would make every
+    /// unassigned face vanish until the (slow, whole-library) re-derivation rebuilds them. Instead we
+    /// just re-pend the face jobs; `replaceFaces` swaps each photo's faces in place as it is
+    /// re-processed, so the People screen stays populated and updates progressively.
     func rescanFaces() {
         guard let lib = library else { return }
-        facesLoading = true
-        suggestedClusters = []
         Task {
             await Task.detached(priority: .userInitiated) {
-                try? lib.catalog.resetAutoFaces()
                 try? lib.catalog.clearDerivationJobs(stage: FaceStage.id)
             }.value
-            facesDirty = true
-            loadPeople()        // reflect the now-empty clusterable pool
-            pokeDerivation()    // re-detect + re-embed in the background
+            loadPeople()        // refresh from current state (faces still present)
+            pokeDerivation()    // re-detect + re-embed in the background; drain refreshes People
         }
     }
 
@@ -1643,6 +1641,13 @@ final class AppState {
                 if ok {
                     try? lib.catalog.markDerived(hash: hash, stage: stage.id)
                     progress.done += 1
+                    // Progressive People refresh while faces re-derive (a 10k library takes a long
+                    // time) so unassigned faces appear as they're found, not only at the very end. The
+                    // !facesLoading guard self-throttles — a new reload starts only once the prior one
+                    // finishes, so the O(n²) clustering can't pile up.
+                    if stage.id == FaceStage.id, progress.done % 200 == 0, !facesLoading {
+                        loadPeople()
+                    }
                 } else {
                     try? lib.catalog.markDerivationFailed(hash: hash, stage: stage.id)
                 }
@@ -1652,8 +1657,9 @@ final class AppState {
         }
         derivationProgress = nil
         semanticIndexDirty = true   // embeddings may have grown → refresh the in-memory index
-        facesDirty = true           // faces may have grown → refresh the People clustering
         geocodeDirty = true         // geocoded places may have grown → inspector picks up new rows
+        facesDirty = true
+        loadPeople()                // final refresh so People reflects every newly-derived face
     }
 
     /// Combined remaining work across all stages (sidebar shows the sum).

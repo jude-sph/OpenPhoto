@@ -46,7 +46,10 @@ struct PeopleOverviewView: View {
         VStack(spacing: 0) {
             toolbar
             Divider().overlay(Theme.hairline)
-            if state.facesLoading {
+            if state.facesLoading && state.people.isEmpty
+                && state.suggestedClusters.isEmpty && state.otherFaceIDs.isEmpty {
+                // Full-screen spinner only on the very first load — progressive reloads (during
+                // re-derivation) keep the existing content visible instead of flickering to a spinner.
                 Spacer()
                 ProgressView("Analyzing faces…").foregroundStyle(Theme.textDim)
                 Spacer()
