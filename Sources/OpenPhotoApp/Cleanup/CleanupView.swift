@@ -84,6 +84,7 @@ struct CleanupView: View {
             Picker("Mode", selection: $state.cullMode) {
                 Text("Bursts").tag(CullMode.bursts)
                 Text("Duplicates").tag(CullMode.duplicates)
+                Text("Similar").tag(CullMode.similar)
             }
             .pickerStyle(.segmented).labelsHidden().fixedSize()
             .onChange(of: state.cullMode) { selection.clear(); state.loadCullGroups() }
@@ -123,7 +124,7 @@ struct CleanupView: View {
 
     private func groupRow(_ group: AppState.CullGroup) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(group.items.count) similar · keeping the \(state.cullMode == .bursts ? "sharpest" : "highest-res")")
+            Text("\(group.items.count) \(state.cullMode == .duplicates ? "duplicates" : "similar") · keeping the \(state.cullMode == .bursts ? "sharpest" : "highest-res")")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.textDim)
             ScrollView(.horizontal, showsIndicators: false) {

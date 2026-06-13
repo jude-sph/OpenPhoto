@@ -254,6 +254,13 @@ final class AppState {
                     let items = (try? lib.catalog.embeddingsWithTakenAt(model: EmbedStage().modelID)) ?? []
                     raw = BurstGrouper.group(items, windowMs: 60_000, cosineThreshold: 0.93)
                 case .duplicates:
+                    // Strict: only true same-image copies (re-encode / resize / re-save). A tiny
+                    // Hamming distance keeps merely-similar shots OUT of Duplicates.
+                    let rows = (try? lib.catalog.phashRowsWithDirPath()) ?? []
+                    raw = DuplicateGrouper.group(rows, hammingThreshold: 2)
+                case .similar:
+                    // Looser: visually-similar but distinct shots (same scene, different frame) — still
+                    // useful to review, just not redundant copies.
                     let rows = (try? lib.catalog.phashRowsWithDirPath()) ?? []
                     raw = DuplicateGrouper.group(rows, hammingThreshold: 6)
                 }

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum CullMode: Sendable, Equatable { case bursts, duplicates }
+public enum CullMode: Sendable, Equatable { case bursts, duplicates, similar }
 
 /// Pick the suggested keeper for a redundant group and the rejects to pre-select for deletion.
 /// Duplicates → highest resolution then largest file; bursts → sharpest then resolution.
@@ -24,7 +24,7 @@ public enum KeeperSelector {
         precondition(!c.isEmpty)
         let keep: Candidate = c.max { a, b in
             switch mode {
-            case .duplicates:
+            case .duplicates, .similar:
                 if a.pixelCount != b.pixelCount { return a.pixelCount < b.pixelCount }
                 if a.fileSize != b.fileSize { return a.fileSize < b.fileSize }
                 return a.hash > b.hash
