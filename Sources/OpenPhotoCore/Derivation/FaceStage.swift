@@ -5,69 +5,77 @@ import ImageIO
 
 public struct DetectedFace: Sendable {
     public let rect: CGRect      // Vision normalized boundingBox (bottom-left origin, 0…1)
-    public let embedding: [Float]
+    public let embedding: [Float] // 512-d AdaFace identity vector, or [] when not clusterable
     public let confidence: Float
+    public let quality: Float    // capture quality if the face passed the gate, else 0 (not clusterable)
 }
 
-/// On-device human-face detection + per-face embedding (Apple Vision). Headless + synchronous;
+/// On-device human-face detection + per-face **identity** embedding (AdaFace IR-101 via Core ML).
+/// Pipeline: detect + landmarks → quality gate (size, capture quality, pose) → align to the canonical
+/// template → embed. Faces that fail the gate are still returned (for display + manual assignment) but
+/// with an empty embedding and quality 0, so they never reach the clusterer. Headless + synchronous;
 /// callers run it off the main actor. Human faces only (no pets).
 public enum FaceStage {
     public static let id = "faces"
 
-    /// Detect faces; per face crop the bounding box and run VNGenerateImageFeaturePrint on the crop.
-    /// Returns one DetectedFace per face ([] for a photo with no faces); nil only if the SOURCE image
-    /// can't be decoded (so the runner records a failure, retry-capped).
+    // Quality gate — keep only faces good enough to embed reliably; junk faces otherwise bridge clusters.
+    static let minFaceFraction: CGFloat = 0.025   // shorter side ≥ 2.5% of the image's shorter side …
+    static let minFacePixels: CGFloat = 48        // … and ≥ 48 px, whichever is larger
+    static let minCaptureQuality: Float = 0.3
+    static let maxPoseRadians: Float = 0.7        // ~40° — exclude extreme yaw/roll
+
+    /// Detect faces and embed the clusterable ones. Returns one DetectedFace per face ([] for a photo
+    /// with no faces); nil only if the SOURCE image can't be decoded (runner records a retry-capped
+    /// failure). Per-image and per-face work is wrapped in autorelease pools — bulk re-derivation over
+    /// a whole library otherwise accumulates Vision/CoreImage buffers and has OOM'd before.
     public static func detect(in url: URL) -> [DetectedFace]? {
-        // Decode the source image once; we need a CGImage for pixel-space cropping.
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+        autoreleasepool {
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
 
-        // Run face detection on the full image.
-        let detReq = VNDetectFaceRectanglesRequest()
-        let detHandler = VNImageRequestHandler(cgImage: cg, options: [:])
-        do { try detHandler.perform([detReq]) } catch { return nil }
+            let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+            let landmarksReq = VNDetectFaceLandmarksRequest()
+            do { try handler.perform([landmarksReq]) } catch { return nil }
+            let observations = landmarksReq.results ?? []
+            guard !observations.isEmpty else { return [] }
 
-        let observations = detReq.results ?? []
-        let w = CGFloat(cg.width)
-        let h = CGFloat(cg.height)
-        var out: [DetectedFace] = []
+            // Capture-quality pass. Pass the landmark observations in; results come back in the same
+            // order, so map quality back by index (keeping the landmark-bearing originals for alignment).
+            var captureQuality = [Float](repeating: 0, count: observations.count)
+            let qualityReq = VNDetectFaceCaptureQualityRequest()
+            qualityReq.inputFaceObservations = observations
+            if (try? handler.perform([qualityReq])) != nil {
+                for (i, r) in (qualityReq.results ?? []).enumerated() where i < captureQuality.count {
+                    captureQuality[i] = r.faceCaptureQuality ?? 0
+                }
+            }
 
-        for obs in observations {
-            // Vision boundingBox is normalized, bottom-left origin.
-            // Convert to pixel-space crop region (top-left origin for CGImage).
-            let bb = obs.boundingBox
-            let padX = bb.width  * w * 0.1
-            let padY = bb.height * h * 0.1
-            let cropPixel = CGRect(
-                x: bb.minX * w - padX,
-                y: (1.0 - bb.maxY) * h - padY,
-                width: bb.width  * w + padX * 2,
-                height: bb.height * h + padY * 2
-            ).intersection(CGRect(x: 0, y: 0, width: w, height: h))
+            let w = CGFloat(cg.width), h = CGFloat(cg.height)
+            let minSidePx = max(minFacePixels, min(w, h) * minFaceFraction)
+            var out: [DetectedFace] = []
+            for (i, obs) in observations.enumerated() {
+                autoreleasepool {
+                    let bb = obs.boundingBox
+                    let shorter = min(bb.width * w, bb.height * h)
+                    let capQ = captureQuality[i]
+                    let yaw = abs(obs.yaw?.floatValue ?? 0)
+                    let roll = abs(obs.roll?.floatValue ?? 0)
+                    let passes = shorter >= minSidePx && capQ >= minCaptureQuality
+                              && yaw <= maxPoseRadians && roll <= maxPoseRadians
 
-            guard let crop = cg.cropping(to: cropPixel) else { continue }
-            guard let vec = featurePrint(of: crop) else { continue }
-            out.append(DetectedFace(rect: bb, embedding: vec, confidence: obs.confidence))
+                    if passes,
+                       let buffer = FaceAligner.alignedBuffer(cgImage: cg, observation: obs),
+                       let vec = FaceEmbedder.shared.embed(buffer) {
+                        out.append(DetectedFace(rect: bb, embedding: vec,
+                                                confidence: obs.confidence, quality: capQ))
+                    } else {
+                        out.append(DetectedFace(rect: bb, embedding: [],
+                                                confidence: obs.confidence, quality: 0))
+                    }
+                }
+            }
+            return out
         }
-        return out
-    }
-
-    /// Run VNGenerateImageFeaturePrint on a CGImage crop and return the Float32 vector.
-    private static func featurePrint(of cg: CGImage) -> [Float]? {
-        let req = VNGenerateImageFeaturePrintRequest()
-        let handler = VNImageRequestHandler(cgImage: cg, options: [:])
-        do { try handler.perform([req]) } catch { return nil }
-        guard let obs = req.results?.first as? VNFeaturePrintObservation else { return nil }
-
-        // VNFeaturePrintObservation.elementType is .float (Float32); elementCount gives the dim.
-        let count = obs.elementCount
-        guard count > 0 else { return nil }
-        var vec = [Float](repeating: 0, count: count)
-        obs.data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-            let floats = raw.bindMemory(to: Float.self)
-            for i in 0..<min(count, floats.count) { vec[i] = floats[i] }
-        }
-        return vec
     }
 }
 
@@ -76,12 +84,15 @@ public struct FaceDerivationStage: DerivationStage {
     public let id = "faces"
     public let eligibleKind = "photo"
     public init() {}
-    // isAvailable defaults to true — Vision is built-in (no model file to check).
+    /// Skip the whole stage if the embedding model can't load (leaves jobs pending rather than
+    /// marking every photo failed).
+    public var isAvailable: Bool { FaceEmbedder.shared.isAvailable }
+
     public func run(hash: String, url: URL, catalog: Catalog) async -> Bool {
         guard let faces = FaceStage.detect(in: url) else { return false }  // unreadable → failure
         try? catalog.replaceFaces(forHash: hash, with: faces.map {
             FaceRow(id: nil, hash: hash, rect: $0.rect, embedding: $0.embedding,
-                    confidence: $0.confidence, source: "auto", personID: nil)
+                    confidence: $0.confidence, source: "auto", personID: nil, quality: $0.quality)
         })
         return true  // [] is still success — "analyzed, no faces"
     }
