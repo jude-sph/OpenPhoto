@@ -23,14 +23,24 @@ public enum Scanner {
         // size is optional: URLResourceKey.fileSizeKey may be nil on some filesystems (Fix 1).
         var found: [(rel: String, url: URL, size: Int64?, mtime: Date, kind: MediaKind)] = []
         var skipped = 0
-        let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey, .fileSizeKey, .contentModificationDateKey]
         let enumerator = fm.enumerator(at: vault.rootURL, includingPropertiesForKeys: keys,
                                        options: [.skipsHiddenFiles])!
         for case let url as URL in enumerator {
             do {
                 let values = try url.resourceValues(forKeys: Set(keys))
                 if values.isDirectory == true {
-                    if url.lastPathComponent == Vault.stateDirName { enumerator.skipDescendants() }
+                    // Skip OpenPhoto's own state dir, and skip opaque PACKAGES — most importantly an
+                    // Apple Photos library (`.photoslibrary`), whose internal originals/derivatives are
+                    // not user media. Pointing at ~/Pictures would otherwise index the Photos library's
+                    // guts. `isPackage` also covers .app/.bundle; the extension list is a fallback in
+                    // case the resource key isn't populated for a directory.
+                    let ext = url.pathExtension.lowercased()
+                    let isPackage = values.isPackage == true
+                        || ["photoslibrary", "migratedphotolibrary", "aplibrary", "photolibrary"].contains(ext)
+                    if url.lastPathComponent == Vault.stateDirName || isPackage {
+                        enumerator.skipDescendants()
+                    }
                     continue
                 }
                 guard let kind = MediaKind.of(filename: url.lastPathComponent) else { continue }

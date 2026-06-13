@@ -81,6 +81,24 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     Dictionary(uniqueKeysWithValues: nodes.map { ($0.name, $0) })
 }
 
+@Test func scanSkipsApplePhotosLibraryPackage() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pictures")
+    // A real photo in a normal folder…
+    try makeJPEG(at: pics.appendingPathComponent("travel/real.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:01:01 00:00:00", lat: nil, lon: nil)
+    // …and a photo buried INSIDE an Apple Photos library package — must NOT be indexed.
+    try makeJPEG(at: pics.appendingPathComponent(
+        "Photos Library.photoslibrary/resources/derivatives/0/junk.jpg").creatingParent(),
+                 dateTimeOriginal: "2023:01:01 00:00:00", lat: nil, lon: nil)
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as"))
+    try await lib.scanAll()
+
+    let items = try lib.catalog.timelineItems()
+    #expect(items.count == 1)
+    #expect(items.first?.relPath == "travel/real.jpg")
+}
+
 @Test func folderTreeSurfacesLooseRootPhotosAsTopNode() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let pics = try t.sub("Pictures")
