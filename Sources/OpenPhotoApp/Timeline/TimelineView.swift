@@ -164,7 +164,7 @@ struct TimelineView: View {
             Spacer()
             Button("Select") { selectMode = true }.controlSize(.small)
             Toggle(isOn: Binding(get: { state.videoOnly },
-                                 set: { state.videoOnly = $0; try? state.refreshQueries() })) {
+                                 set: { state.videoOnly = $0 })) {   // didSet refreshes queries
                 Image(systemName: "video.fill")
             }
             .toggleStyle(.button).controlSize(.small)

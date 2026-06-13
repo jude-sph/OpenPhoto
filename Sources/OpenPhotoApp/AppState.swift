@@ -95,7 +95,10 @@ final class AppState {
         }
     }
     var videoOnly: Bool = UserDefaults.standard.bool(forKey: "videoOnly") {
-        didSet { UserDefaults.standard.set(videoOnly, forKey: "videoOnly") }
+        didSet {
+            UserDefaults.standard.set(videoOnly, forKey: "videoOnly")
+            try? refreshQueries()   // rebuild timeline + folder-tree counts so they match the filter
+        }
     }
     /// Folder view: include photos from every descendant folder (the whole subtree), not just the
     /// selected folder.
@@ -1522,7 +1525,7 @@ final class AppState {
         guard let library else { return }
         sections = try library.timelineSections(grouping: grouping, videoOnly: videoOnly)
         flatItems = sections.flatMap(\.items)
-        folderTree = try library.folderTree()
+        folderTree = try library.folderTree(videoOnly: videoOnly)
         if expandedFolders.isEmpty && !folderTree.isEmpty {
             var paths: Set<String> = []
             func collect(_ nodes: [FolderNode]) {

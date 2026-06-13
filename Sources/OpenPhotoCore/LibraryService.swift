@@ -175,8 +175,8 @@ public final class LibraryService: Sendable {
         return dirs
     }
 
-    public func folderTree() throws -> [FolderNode] {
-        var counts = try catalog.folderCounts()
+    public func folderTree(videoOnly: Bool = false) throws -> [FolderNode] {
+        var counts = try catalog.folderCounts(videoOnly: videoOnly)
         // Union in real filesystem directories from the primary vault (so empty dirs appear).
         if let primaryRoot = vaults.first?.rootURL {
             for dir in directoriesUnder(primaryRoot) where counts[dir] == nil {

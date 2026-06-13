@@ -98,14 +98,15 @@ extension Catalog {
     /// dirPath → item count (local instances + drive-only assets, Mac-folder-aligned).
     /// - Parameter vaultID: when non-nil, restricts to that local vault; drive-only branch is
     ///   only included when vaultID is nil (drive-only assets have no local vaultID).
-    public func folderCounts(vaultID: String? = nil) throws -> [String: Int] {
+    public func folderCounts(vaultID: String? = nil, videoOnly: Bool = false) throws -> [String: Int] {
         try dbQueue.read { db in
             // Local branch
             var counts: [String: Int] = [:]
+            let vf = videoOnly ? " AND a.kind = 'video'" : ""   // match the Folders grid's videos-only filter
             var sql = """
                 SELECT i.dirPath AS d, COUNT(*) AS n FROM instances i
                 JOIN assets a ON a.hash = i.hash
-                WHERE a.isLivePairedVideo = 0
+                WHERE a.isLivePairedVideo = 0\(vf)
                 """
             var args: [DatabaseValueConvertible] = []
             if let v = vaultID {
@@ -121,7 +122,7 @@ extension Catalog {
                 let dsql = """
                     SELECT vp.dirPath AS d, COUNT(*) AS n FROM vault_presence vp
                     JOIN assets a ON a.hash = vp.hash
-                    WHERE a.isLivePairedVideo = 0
+                    WHERE a.isLivePairedVideo = 0\(vf)
                       AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.hash = vp.hash)
                       AND vp.rowid = (SELECT MIN(rowid) FROM vault_presence v2 WHERE v2.hash = vp.hash)
                     GROUP BY vp.dirPath
