@@ -23,8 +23,10 @@ private func writeSolidJPEG(_ rgb: (CGFloat, CGFloat, CGFloat), to url: URL) thr
     try writeSolidJPEG((0.5, 0.4, 0.3), to: url)
     let faces = FaceStage.detect(in: url)   // non-nil (image decodes); 0+ faces
     let list = try #require(faces)
-    for f in list {                          // if Vision returns anything, it's well-formed
-        #expect(!f.embedding.isEmpty)
+    for f in list {                          // if Vision returns anything, it's well-formed:
+        // either a 512-d clusterable embedding, or empty + quality 0 (gated out).
+        #expect(f.embedding.isEmpty || f.embedding.count == FaceEmbedder.dimension)
+        if f.embedding.isEmpty { #expect(f.quality == 0) }
         #expect(f.confidence >= 0 && f.confidence <= 1)
     }
 }

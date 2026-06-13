@@ -10,10 +10,12 @@ public struct FaceRow: Sendable, Equatable {
     public var confidence: Float
     public var source: String          // "auto" | "confirmed"
     public var personID: Int64?
+    public var quality: Float          // clusterability: capture quality if gated-in, else 0
     public init(id: Int64?, hash: String, rect: CGRect, embedding: [Float],
-                confidence: Float, source: String, personID: Int64?) {
+                confidence: Float, source: String, personID: Int64?, quality: Float = 1) {
         self.id = id; self.hash = hash; self.rect = rect; self.embedding = embedding
         self.confidence = confidence; self.source = source; self.personID = personID
+        self.quality = quality
     }
 }
 
@@ -50,11 +52,11 @@ extension Catalog {
             for r in rows {
                 try db.execute(sql: """
                     INSERT INTO faces (hash, rectX, rectY, rectW, rectH, embedding, dim,
-                                       personID, confidence, source)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                                       personID, confidence, source, quality)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """, arguments: [r.hash, r.rect.minX, r.rect.minY, r.rect.width, r.rect.height,
                                      Self.packF16(r.embedding), r.embedding.count,
-                                     r.personID, r.confidence, r.source])
+                                     r.personID, r.confidence, r.source, r.quality])
                 ids.append(db.lastInsertedRowID)
             }
             return ids
@@ -62,20 +64,37 @@ extension Catalog {
     }
 
     /// Idempotent re-detection: replace the asset's AUTO faces, KEEP confirmed (and their regions).
+    /// A new auto face that overlaps an existing confirmed face (IoU > 0.4) is skipped, so a full
+    /// re-derivation never inserts a duplicate auto face on top of one the user already named.
     public func replaceFaces(forHash hash: String, with rows: [FaceRow]) throws {
         try dbQueue.write { db in
+            let confirmedRects: [CGRect] = try Row.fetchAll(db, sql:
+                "SELECT rectX, rectY, rectW, rectH FROM faces WHERE hash = ? AND source = 'confirmed'",
+                arguments: [hash]).map {
+                    CGRect(x: $0["rectX"] as Double, y: $0["rectY"] as Double,
+                           width: $0["rectW"] as Double, height: $0["rectH"] as Double)
+                }
             try db.execute(sql: "DELETE FROM faces WHERE hash = ? AND source = 'auto'",
                            arguments: [hash])
-            for r in rows {
+            for r in rows where !confirmedRects.contains(where: { Self.iou($0, r.rect) > 0.4 }) {
                 try db.execute(sql: """
                     INSERT INTO faces (hash, rectX, rectY, rectW, rectH, embedding, dim,
-                                       personID, confidence, source)
-                    VALUES (?,?,?,?,?,?,?,NULL,?,?)
+                                       personID, confidence, source, quality)
+                    VALUES (?,?,?,?,?,?,?,NULL,?,?,?)
                     """, arguments: [hash, r.rect.minX, r.rect.minY, r.rect.width, r.rect.height,
                                      Self.packF16(r.embedding), r.embedding.count,
-                                     r.confidence, r.source])
+                                     r.confidence, r.source, r.quality])
             }
         }
+    }
+
+    /// Intersection-over-union of two boxes (0 = disjoint, 1 = identical).
+    private static func iou(_ a: CGRect, _ b: CGRect) -> Double {
+        let i = a.intersection(b)
+        guard !i.isNull, i.width > 0, i.height > 0 else { return 0 }
+        let inter = Double(i.width * i.height)
+        let union = Double(a.width * a.height + b.width * b.height) - inter
+        return union > 0 ? inter / union : 0
     }
 
     /// Fetch a single face row by its primary-key id.  Returns nil when the id is not found.
@@ -84,7 +103,7 @@ extension Catalog {
             let rows = try Row.fetchAll(db,
                 sql: """
                     SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim,
-                           personID, confidence, source
+                           personID, confidence, source, quality
                     FROM faces WHERE id = ?
                     """,
                 arguments: [id])
@@ -95,7 +114,7 @@ extension Catalog {
     public func faces(forHash hash: String) throws -> [FaceRow] {
         try dbQueue.read { db in
             try Row.fetchAll(db,
-                sql: "SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim, personID, confidence, source FROM faces WHERE hash = ?",
+                sql: "SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim, personID, confidence, source, quality FROM faces WHERE hash = ?",
                 arguments: [hash]).map { Self.faceRow(from: $0) }
         }
     }
@@ -103,16 +122,18 @@ extension Catalog {
     public func faces(forPerson personID: Int64) throws -> [FaceRow] {
         try dbQueue.read { db in
             try Row.fetchAll(db,
-                sql: "SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim, personID, confidence, source FROM faces WHERE personID = ?",
+                sql: "SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim, personID, confidence, source, quality FROM faces WHERE personID = ?",
                 arguments: [personID]).map { Self.faceRow(from: $0) }
         }
     }
 
-    /// (id, vector) for every detected-but-unassigned auto face — the clusterer's input.
+    /// (id, vector) for every detected-but-unassigned auto face that is CLUSTERABLE — current-model
+    /// dimension and quality-gated in. Stale v1 vectors (dim ≠ 512) and gated-out faces are excluded.
     public func unassignedFacesWithEmbeddings() throws -> [(id: Int64, vector: [Float])] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT id, dim, embedding FROM faces WHERE personID IS NULL AND source = 'auto'
+                SELECT id, dim, embedding FROM faces
+                WHERE personID IS NULL AND source = 'auto' AND dim = \(FaceEmbedder.dimension) AND quality > 0
                 """).map { row -> (id: Int64, vector: [Float]) in
                     let id: Int64 = row["id"]
                     let dim: Int = row["dim"]
@@ -229,6 +250,53 @@ extension Catalog {
             embedding: unpackF16(blob, dim: dim),
             confidence: Float(row["confidence"] as Double),
             source: row["source"],
-            personID: personID)
+            personID: personID,
+            quality: Float((row["quality"] as Double?) ?? 1))
+    }
+
+    // MARK: Model versioning + rescan support
+
+    /// Read a `catalog_meta` value (nil if absent).
+    public func meta(_ key: String) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM catalog_meta WHERE key = ?", arguments: [key])
+        }
+    }
+
+    /// Upsert a `catalog_meta` value.
+    public func setMeta(_ key: String, _ value: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO catalog_meta (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """, arguments: [key, value])
+        }
+    }
+
+    /// Drop every AUTO face (confirmed/named faces are kept). Used by the face rescan to clear the
+    /// stale-model clusterable pool before re-derivation repopulates it.
+    public func resetAutoFaces() throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM faces WHERE source = 'auto'")
+        }
+    }
+
+    /// One-time face re-derivation when the embedding model changes (mirrors `reconcileEmbeddingModel`).
+    /// If the stored `faceModelVersion` differs from `current`, atomically drop AUTO faces (named faces
+    /// are kept), clear the face derivation jobs so every photo re-embeds with the new model, and record
+    /// the new version. Returns true if a reset happened. Called on library open.
+    @discardableResult
+    public func reconcileFaceModel(current: String) throws -> Bool {
+        let stored = try meta("faceModelVersion")
+        guard stored != current else { return false }
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM faces WHERE source = 'auto'")
+            try db.execute(sql: "DELETE FROM derivation_jobs WHERE stage = 'faces'")
+            try db.execute(sql: """
+                INSERT INTO catalog_meta (key, value) VALUES ('faceModelVersion', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """, arguments: [current])
+        }
+        return true
     }
 }

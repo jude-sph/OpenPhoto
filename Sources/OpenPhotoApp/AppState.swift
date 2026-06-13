@@ -198,9 +198,12 @@ final class AppState {
     var facesLoading = false
     private var facesDirty = true
     private var geocodeDirty = true
-    /// Cosine-distance threshold for suggesting clusters (tuned default; an adjustable slider is
-    /// optional future polish).
-    private let faceClusterThreshold = 0.4
+    /// DBSCAN parameters for face clustering over AdaFace identity vectors (cosine distance).
+    /// `eps` = max distance for two faces to be neighbours; `minPts` = neighbours required to seed a
+    /// cluster. minPts ≥ 3 gives the density requirement that resists the single-link chaining which
+    /// produced the old 1700-photo blob. Reasonable starting defaults — tune on a real library.
+    private let faceClusterEps = 0.5
+    private let faceClusterMinPts = 3
 
     /// Compute named-people cards (Catalog.people()) and suggested unnamed clusters
     /// (FaceClusterer over unassignedFacesWithEmbeddings()) off the main actor. Called when the
@@ -208,13 +211,14 @@ final class AppState {
     func loadPeople() {
         guard let lib = library else { return }
         facesLoading = true
-        let threshold = faceClusterThreshold
+        let eps = faceClusterEps
+        let minPts = faceClusterMinPts
         Task {
             let (ppl, clusters): ([PersonRow], [FaceCluster]) =
                 await Task.detached(priority: .userInitiated) {
                     let ppl = (try? lib.catalog.people()) ?? []
                     let unassigned = (try? lib.catalog.unassignedFacesWithEmbeddings()) ?? []
-                    let groups = FaceClusterer.cluster(unassigned, threshold: threshold)
+                    let groups = DBSCAN.groups(unassigned, eps: eps, minPts: minPts)
                     let conf = groups.map { ids -> FaceCluster in
                         FaceCluster(faceIDs: ids, representativeFaceID: ids.first ?? 0,
                                     count: ids.count)
@@ -225,6 +229,25 @@ final class AppState {
             self.suggestedClusters = clusters
             self.facesLoading = false
             self.facesDirty = false
+        }
+    }
+
+    /// Manual "Rescan Faces" (Settings → Library): re-run detection + embedding across the whole
+    /// library with the current model. Drops auto faces + face jobs — named people are kept (confirmed
+    /// faces survive and their identity also lives in the XMP sidecar) — then re-derives in the
+    /// background. The People view empties immediately and repopulates as faces re-derive.
+    func rescanFaces() {
+        guard let lib = library else { return }
+        facesLoading = true
+        suggestedClusters = []
+        Task {
+            await Task.detached(priority: .userInitiated) {
+                try? lib.catalog.resetAutoFaces()
+                try? lib.catalog.clearDerivationJobs(stage: FaceStage.id)
+            }.value
+            facesDirty = true
+            loadPeople()        // reflect the now-empty clusterable pool
+            pokeDerivation()    // re-detect + re-embed in the background
         }
     }
 
@@ -1423,6 +1446,10 @@ final class AppState {
                 Task { @MainActor in await self?.reverifySentToConnectedDevices() }
             }
             try? library?.catalog.reconcileEmbeddingModel(current: EmbedStage().modelID)
+            // One-time face re-derivation when the recognition model changes (e.g. after this update):
+            // drops stale auto faces + face jobs so every photo re-embeds with the current model.
+            // Named people are kept. The drain below repopulates the People view.
+            try? library?.catalog.reconcileFaceModel(current: FaceEmbedder.modelVersion)
             Task { await rescan(); pokeDerivation() }
             // Badge presence from the persisted catalog (drives were loaded above), then
             // auto-scan connected drives so badges + status reflect reality without a

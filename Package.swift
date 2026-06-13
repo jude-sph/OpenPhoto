@@ -12,6 +12,7 @@ let package = Package(
         .target(
             name: "OpenPhotoCore",
             dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
+            resources: [.copy("Resources/AdaFaceIR101.mlpackage")],
             linkerSettings: [.linkedFramework("ImageCaptureCore")]
         ),
         .executableTarget(

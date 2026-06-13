@@ -12,9 +12,16 @@ private let A = "sha256:" + String(repeating: "a", count: 64)
 private let B = "sha256:" + String(repeating: "b", count: 64)
 
 private func face(_ hash: String, _ vec: [Float], source: String = "auto",
-                  personID: Int64? = nil, conf: Float = 0.9) -> FaceRow {
-    FaceRow(id: nil, hash: hash, rect: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.3),
-            embedding: vec, confidence: conf, source: source, personID: personID)
+                  personID: Int64? = nil, conf: Float = 0.9, quality: Float = 1,
+                  rect: CGRect = CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.3)) -> FaceRow {
+    // Pad to the production dimension so the `dim = 512` clusterable filter keeps these synthetic
+    // faces (zero-padding preserves dot products / norms among the leading components).
+    var v = vec
+    if v.count < FaceEmbedder.dimension {
+        v += Array(repeating: 0, count: FaceEmbedder.dimension - v.count)
+    }
+    return FaceRow(id: nil, hash: hash, rect: rect, embedding: v,
+                   confidence: conf, source: source, personID: personID, quality: quality)
 }
 
 @Test func replaceFacesKeepsConfirmedDropsAuto() throws {
@@ -24,11 +31,86 @@ private func face(_ hash: String, _ vec: [Float], source: String = "auto",
     // Seed one auto + one confirmed face on A.
     let ids = try cat.insertFaces([face(A, [1, 0]), face(A, [0, 1], source: "confirmed")])
     #expect(ids.count == 2)
-    // Re-detect → replaceFaces with a fresh auto row.
-    try cat.replaceFaces(forHash: A, with: [face(A, [0.5, 0.5])])
+    // Re-detect → replaceFaces with a fresh auto row at a DIFFERENT location (so the confirmed-overlap
+    // guard doesn't drop it — that guard is exercised separately below).
+    try cat.replaceFaces(forHash: A, with: [
+        face(A, [0.5, 0.5], rect: CGRect(x: 0.6, y: 0.6, width: 0.2, height: 0.2))])
     let rows = try cat.faces(forHash: A)
     #expect(rows.filter { $0.source == "confirmed" }.count == 1)  // confirmed survived
     #expect(rows.filter { $0.source == "auto" }.count == 1)       // old auto replaced by new auto
+}
+
+@Test func replaceFacesSkipsAutoOverlappingConfirmed() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.upsert(assets: [photo(A)])
+    _ = try cat.insertFaces([face(A, [0, 1], source: "confirmed",
+                                  rect: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3))])
+    // Re-detection re-finds the named face (overlapping rect) AND a genuinely new face elsewhere.
+    try cat.replaceFaces(forHash: A, with: [
+        face(A, [1, 0], rect: CGRect(x: 0.21, y: 0.21, width: 0.3, height: 0.3)),  // overlaps confirmed
+        face(A, [0, 0, 1], rect: CGRect(x: 0.7, y: 0.1, width: 0.2, height: 0.2)),  // new face
+    ])
+    let rows = try cat.faces(forHash: A)
+    #expect(rows.filter { $0.source == "confirmed" }.count == 1)  // named face untouched, not duplicated
+    #expect(rows.filter { $0.source == "auto" }.count == 1)       // only the non-overlapping new auto
+}
+
+@Test func unassignedExcludesStaleDimAndGatedFaces() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.upsert(assets: [photo(A)])
+    _ = try cat.insertFaces([
+        face(A, [1, 0]),                                              // good: dim 512, quality 1
+        FaceRow(id: nil, hash: A, rect: CGRect(x: 0, y: 0, width: 0.1, height: 0.1),
+                embedding: [0.1, 0.2, 0.3], confidence: 0.9, source: "auto",
+                personID: nil, quality: 1),                          // stale v1 dim (3) → excluded
+        face(A, [0, 1], quality: 0),                                 // gated out (quality 0) → excluded
+    ])
+    #expect(try cat.unassignedFacesWithEmbeddings().count == 1)
+}
+
+@Test func catalogMetaRoundTrips() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    #expect(try cat.meta("faceModelVersion") == nil)
+    try cat.setMeta("faceModelVersion", "adaface-ir101-v1")
+    #expect(try cat.meta("faceModelVersion") == "adaface-ir101-v1")
+    try cat.setMeta("faceModelVersion", "next")              // upsert overwrites
+    #expect(try cat.meta("faceModelVersion") == "next")
+}
+
+@Test func reconcileFaceModelResetsOnceOnVersionChange() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.upsert(assets: [photo(A)])
+    _ = try cat.insertFaces([
+        face(A, [1, 0]),
+        face(A, [0, 1], source: "confirmed", rect: CGRect(x: 0.6, y: 0.6, width: 0.2, height: 0.2))])
+    try cat.markDerived(hash: A, stage: "faces")
+
+    // No stored version yet → reconcile resets: drops auto, keeps confirmed, re-pends the job, stamps.
+    #expect(try cat.reconcileFaceModel(current: "adaface-ir101-v1") == true)
+    let rows = try cat.faces(forHash: A)
+    #expect(rows.filter { $0.source == "auto" }.isEmpty)
+    #expect(rows.filter { $0.source == "confirmed" }.count == 1)
+    #expect(try cat.pendingDerivation(stage: "faces") == [A])   // job cleared → faces re-pend
+    #expect(try cat.meta("faceModelVersion") == "adaface-ir101-v1")
+
+    // Same version again → no-op (doesn't re-clear on every launch).
+    #expect(try cat.reconcileFaceModel(current: "adaface-ir101-v1") == false)
+}
+
+@Test func resetAutoFacesKeepsConfirmed() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.upsert(assets: [photo(A)])
+    _ = try cat.insertFaces([
+        face(A, [1, 0]),
+        face(A, [0, 1], source: "confirmed", rect: CGRect(x: 0.6, y: 0.6, width: 0.2, height: 0.2))])
+    try cat.resetAutoFaces()
+    let rows = try cat.faces(forHash: A)
+    #expect(rows.count == 1 && rows[0].source == "confirmed")
 }
 
 @Test func unassignedFacesRoundTripVectors() throws {

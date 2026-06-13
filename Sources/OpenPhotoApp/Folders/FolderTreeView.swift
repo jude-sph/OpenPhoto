@@ -49,13 +49,17 @@ struct FolderTreeView: View {
     // Pinned header. The leading area (title + spacer) doubles as the drop target for un-nesting:
     // drag a folder there to move it to the top level (library root). Kept outside the scroll view so
     // it stays reachable in a long tree.
+    //
+    // The header MUST be `Theme.toolbarHeight` tall (like every other top toolbar). The window is
+    // `.hiddenTitleBar` and `detail` ignores the top safe area, so this header is pulled flush to the
+    // window top — and the top ~28pt is AppKit's title-bar drag band (it intercepts mouse-down for
+    // window drag/zoom). A compact header put the "+" button entirely inside that band, so clicks were
+    // eaten (double-clicks zoomed the window). At toolbar height the button centers at ~26pt, its hit
+    // area extends below the band, and AppKit hit-tests it to the control — exactly like the working
+    // toolbars on the other views. (The "+" is also a SEPARATE trailing sibling of the drop zone, never
+    // overlapping it, so the un-nest `.dropDestination` can't eat the click either.)
     private var header: some View {
         HStack(spacing: 5) {
-            // Leading: the un-nest drop zone. The "+" button is a SEPARATE trailing sibling, OUTSIDE
-            // this zone — the drop target must never overlap the button's hit area, or it eats the
-            // click. (An earlier fix tried to fix this by putting the drop target in `.background`
-            // behind the button; macOS `.dropDestination` hit-testing does not cede the click to a
-            // foreground sibling that way, so the button stayed dead. Non-overlap is the robust fix.)
             HStack(spacing: 5) {
                 Image(systemName: "arrow.up.to.line")
                     .font(.system(size: 10, weight: .semibold))
@@ -67,6 +71,7 @@ struct FolderTreeView: View {
                     .textCase(.uppercase)
                 Spacer(minLength: 0)
             }
+            .frame(maxHeight: .infinity)              // fill the bar so the drop zone is full-height
             .contentShape(Rectangle())
             .dropDestination(for: String.self) { items, _ in
                 moveToRoot(items.first)
@@ -79,13 +84,14 @@ struct FolderTreeView: View {
                 Image(systemName: "folder.badge.plus")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.textDim)
-                    .contentShape(Rectangle())            // make the whole icon box clickable
+                    .frame(width: 30, height: 30)         // generous hit target, centered in the bar so
+                    .contentShape(Rectangle())            // it clears the title-bar drag band
             }
             .buttonStyle(.plain)
             .help("New Folder at library root")
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 7)
+        .frame(height: Theme.toolbarHeight)
         .background(rootDropTargeted ? Theme.accent.opacity(0.16) : .clear)
         .overlay(alignment: .bottom) { Divider().overlay(Theme.hairline) }
     }
@@ -121,15 +127,16 @@ private struct FolderRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 if node.children.isEmpty {
-                    Spacer().frame(width: 14)
-                } else {
+                    Spacer().frame(width: 22)             // match the disclosure button's width so
+                } else {                                  // leaf rows stay aligned with parent rows
                     Button {
                         state.expandedFolders.formSymmetricDifference([node.path])
                     } label: {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(Theme.textFaint)
-                            .frame(width: 14)
+                            .frame(width: 22, height: 22)  // small glyph, generous click target
+                            .contentShape(Rectangle())
                     }.buttonStyle(.plain)
                 }
                 Image(systemName: "folder")
