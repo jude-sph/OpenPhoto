@@ -46,19 +46,32 @@ struct FolderTreeView: View {
         }
     }
 
-    // Pinned header that doubles as the drop target for un-nesting: drag a folder here to move it to
-    // the top level (library root). Kept outside the scroll view so it stays reachable in a long tree.
+    // Pinned header. The leading area (title + spacer) doubles as the drop target for un-nesting:
+    // drag a folder there to move it to the top level (library root). Kept outside the scroll view so
+    // it stays reachable in a long tree.
     private var header: some View {
         HStack(spacing: 5) {
-            Image(systemName: "arrow.up.to.line")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-                .opacity(rootDropTargeted ? 1 : 0)        // reserve width so the title doesn't shift
-            Text(rootDropTargeted ? "Move to top level" : "Folders")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(rootDropTargeted ? Theme.accent : Theme.textFaint)
-                .textCase(.uppercase)
-            Spacer()
+            // Leading: the un-nest drop zone. The "+" button is a SEPARATE trailing sibling, OUTSIDE
+            // this zone — the drop target must never overlap the button's hit area, or it eats the
+            // click. (An earlier fix tried to fix this by putting the drop target in `.background`
+            // behind the button; macOS `.dropDestination` hit-testing does not cede the click to a
+            // foreground sibling that way, so the button stayed dead. Non-overlap is the robust fix.)
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.up.to.line")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .opacity(rootDropTargeted ? 1 : 0)    // reserve width so the title doesn't shift
+                Text(rootDropTargeted ? "Move to top level" : "Folders")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(rootDropTargeted ? Theme.accent : Theme.textFaint)
+                    .textCase(.uppercase)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .dropDestination(for: String.self) { items, _ in
+                moveToRoot(items.first)
+            } isTargeted: { rootDropTargeted = $0 }
+
             Button {
                 newRootFolderName = ""
                 showNewRootFolder = true
@@ -66,6 +79,7 @@ struct FolderTreeView: View {
                 Image(systemName: "folder.badge.plus")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.textDim)
+                    .contentShape(Rectangle())            // make the whole icon box clickable
             }
             .buttonStyle(.plain)
             .help("New Folder at library root")
@@ -74,16 +88,6 @@ struct FolderTreeView: View {
         .padding(.vertical, 7)
         .background(rootDropTargeted ? Theme.accent.opacity(0.16) : .clear)
         .overlay(alignment: .bottom) { Divider().overlay(Theme.hairline) }
-        // Put the drop target BEHIND the header content so the "+" (New Folder) button still receives
-        // clicks. Wrapping the whole header in .contentShape + .dropDestination was swallowing the
-        // button's tap (clicking it did nothing).
-        .background {
-            Color.clear
-                .contentShape(Rectangle())
-                .dropDestination(for: String.self) { items, _ in
-                    moveToRoot(items.first)
-                } isTargeted: { rootDropTargeted = $0 }
-        }
     }
 
     /// Header + empty-space drops: photos move to the library root; a dragged folder
