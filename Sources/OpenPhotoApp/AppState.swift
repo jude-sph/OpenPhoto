@@ -1449,7 +1449,7 @@ final class AppState {
             // One-time face re-derivation when the recognition model changes (e.g. after this update):
             // drops stale auto faces + face jobs so every photo re-embeds with the current model.
             // Named people are kept. The drain below repopulates the People view.
-            try? library?.catalog.reconcileFaceModel(current: FaceEmbedder.modelVersion)
+            _ = try? library?.catalog.reconcileFaceModel(current: FaceEmbedder.modelVersion)
             Task { await rescan(); pokeDerivation() }
             // Badge presence from the persisted catalog (drives were loaded above), then
             // auto-scan connected drives so badges + status reflect reality without a
