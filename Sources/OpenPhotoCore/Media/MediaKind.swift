@@ -9,6 +9,9 @@ public enum MediaKind: String, Codable, Sendable {
     ]
     private static let videoExts: Set<String> = [
         "mov", "mp4", "m4v", "avi", "mkv", "mts", "m2ts", "3gp", "webm",
+        // Older camcorder / misc container formats (so "Home Videos" aren't skipped). OpenPhoto
+        // indexes these even when macOS can't *play* the codec inside — they still count + show.
+        "mpg", "mpeg", "mpe", "m2v", "wmv", "flv", "vob", "ogv", "3g2", "dv", "mod", "tod", "ts", "qt", "asf",
     ]
 
     public static func of(filename: String) -> MediaKind? {
