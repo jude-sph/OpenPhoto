@@ -726,8 +726,10 @@ struct FacePhotoTile: View {
                                onReassign: onReassign, onUseAsThumbnail: onUseAsThumbnail))
     }
 
+    // Face *quality* (capture clarity/frontality), 0–100%. Replaces the old detection-confidence
+    // badge, which the v2 landmark detector reports as ~100% for every accepted face (uninformative).
     private var confidenceBadge: some View {
-        Text("\(Int(face.confidence * 100))%")
+        Text("\(Int(face.quality * 100))%")
             .font(.system(size: 9, weight: .semibold).monospacedDigit())
             .foregroundStyle(.white)
             .padding(.horizontal, 4).padding(.vertical, 2)
@@ -796,6 +798,7 @@ struct FaceCropView: View {
     var fill: Bool = false
 
     @State private var croppedImage: CGImage?
+    @State private var rotation = 0   // the asset's display rotation, applied so the crop matches the photo
 
     private var cacheID: String {
         if let faceID { return "face-\(faceID)@\(Int(size))" }
@@ -810,6 +813,7 @@ struct FaceCropView: View {
                 Image(decorative: img, scale: 1)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    .rotationEffect(.degrees(Double(rotation)))   // match the photo's display rotation
             } else {
                 Image(systemName: "person.crop.circle")
                     .font(.system(size: size * 0.45))
@@ -839,6 +843,7 @@ struct FaceCropView: View {
         }
 
         guard let assetHash = resolvedHash, !assetHash.isEmpty else { return }
+        rotation = (try? lib.catalog.rotation(forHash: assetHash)) ?? 0
 
         // Load the thumbnail from cache or source.
         let contentHash = ContentHash(stringValue: assetHash)

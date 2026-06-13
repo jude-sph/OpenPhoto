@@ -487,13 +487,20 @@ final class AppState {
         guard let lib = library else { return }
         let target = item.rotation + delta
         Task.detached(priority: .userInitiated) { [weak self] in
-            _ = try? lib.setRotation(for: item, rotation: target)
+            let norm = (try? lib.setRotation(for: item, rotation: target))
+                       ?? (((target % 360) + 360) % 360)
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                if self.openedItem?.hash == item.hash {
-                    self.openedItem = (try? lib.item(hash: item.hash)) ?? self.openedItem
+                // Rotation lives per-asset in the catalog, but every TimelineItem snapshot caches it.
+                // refreshQueries() rebuilds the timeline/folder queries — but NOT `viewerItems` (the
+                // array the open viewer navigates) or the already-bound `openedItem`. Update those in
+                // place too, or the rotation reverts the moment you navigate or re-open the photo.
+                if self.openedItem?.hash == item.hash { self.openedItem?.rotation = norm }
+                for i in self.viewerItems.indices where self.viewerItems[i].hash == item.hash {
+                    self.viewerItems[i].rotation = norm
                 }
                 try? self.refreshQueries()
+                self.refreshToken &+= 1   // folder grids + face thumbnails re-read the new rotation
             }
         }
     }

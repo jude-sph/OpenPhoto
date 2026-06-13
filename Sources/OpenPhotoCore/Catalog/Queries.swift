@@ -193,6 +193,13 @@ extension Catalog {
         }
     }
 
+    /// The display rotation (0/90/180/270 CW) stored for an asset, or 0 if unknown.
+    public func rotation(forHash hash: String) throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT rotation FROM assets WHERE hash = ?", arguments: [hash]) ?? 0
+        }
+    }
+
     /// Mirror the sidecar's display rotation (0/90/180/270 CW) into the catalog for fast display.
     public func setRotation(hash: String, rotation: Int) throws {
         try dbQueue.write { db in

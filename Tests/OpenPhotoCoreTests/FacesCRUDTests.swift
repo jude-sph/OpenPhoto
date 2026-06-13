@@ -40,20 +40,26 @@ private func face(_ hash: String, _ vec: [Float], source: String = "auto",
     #expect(rows.filter { $0.source == "auto" }.count == 1)       // old auto replaced by new auto
 }
 
-@Test func replaceFacesSkipsAutoOverlappingConfirmed() throws {
+@Test func replaceFacesRefreshesConfirmedFromOverlappingDetection() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
     try cat.upsert(assets: [photo(A)])
-    _ = try cat.insertFaces([face(A, [0, 1], source: "confirmed",
-                                  rect: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3))])
-    // Re-detection re-finds the named face (overlapping rect) AND a genuinely new face elsewhere.
+    let ids = try cat.insertFaces([face(A, [0, 1], source: "confirmed", quality: 0.4,
+                                        rect: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3))])
+    let confirmedID = ids[0]
+    // Re-detection re-finds the named face (overlapping rect) with a fresh vector + a new face elsewhere.
     try cat.replaceFaces(forHash: A, with: [
-        face(A, [1, 0], rect: CGRect(x: 0.21, y: 0.21, width: 0.3, height: 0.3)),  // overlaps confirmed
-        face(A, [0, 0, 1], rect: CGRect(x: 0.7, y: 0.1, width: 0.2, height: 0.2)),  // new face
+        face(A, [1, 0], quality: 0.9, rect: CGRect(x: 0.21, y: 0.21, width: 0.3, height: 0.3)),  // overlaps
+        face(A, [0, 0, 1], quality: 0.8, rect: CGRect(x: 0.7, y: 0.1, width: 0.2, height: 0.2)),  // new
     ])
     let rows = try cat.faces(forHash: A)
-    #expect(rows.filter { $0.source == "confirmed" }.count == 1)  // named face untouched, not duplicated
+    #expect(rows.filter { $0.source == "confirmed" }.count == 1)  // named face kept, not duplicated
     #expect(rows.filter { $0.source == "auto" }.count == 1)       // only the non-overlapping new auto
+    // The named face kept its identity but took the fresh embedding + quality from the new detection.
+    let refreshed = try #require(try cat.face(forID: confirmedID))
+    #expect(refreshed.source == "confirmed")
+    #expect(abs(refreshed.quality - 0.9) < 0.01)
+    #expect((refreshed.embedding.first ?? 0) > 0.5)   // now ~[1,0,…], was [0,1,…]
 }
 
 @Test func unassignedExcludesStaleDimAndGatedFaces() throws {

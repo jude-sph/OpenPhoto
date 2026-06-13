@@ -64,19 +64,36 @@ extension Catalog {
     }
 
     /// Idempotent re-detection: replace the asset's AUTO faces, KEEP confirmed (and their regions).
-    /// A new auto face that overlaps an existing confirmed face (IoU > 0.4) is skipped, so a full
-    /// re-derivation never inserts a duplicate auto face on top of one the user already named.
+    /// A new detection that overlaps an existing confirmed face (IoU > 0.4) does NOT become a duplicate
+    /// auto face — instead it REFRESHES that named face's embedding/quality (keeping its person, source,
+    /// and rect) when the new detection is clusterable. This lets a rescan re-embed named people with the
+    /// current model, not just the unassigned pool.
     public func replaceFaces(forHash hash: String, with rows: [FaceRow]) throws {
         try dbQueue.write { db in
-            let confirmedRects: [CGRect] = try Row.fetchAll(db, sql:
-                "SELECT rectX, rectY, rectW, rectH FROM faces WHERE hash = ? AND source = 'confirmed'",
+            let confirmed: [(id: Int64, rect: CGRect)] = try Row.fetchAll(db, sql:
+                "SELECT id, rectX, rectY, rectW, rectH FROM faces WHERE hash = ? AND source = 'confirmed'",
                 arguments: [hash]).map {
-                    CGRect(x: $0["rectX"] as Double, y: $0["rectY"] as Double,
-                           width: $0["rectW"] as Double, height: $0["rectH"] as Double)
+                    (id: $0["id"],
+                     rect: CGRect(x: $0["rectX"] as Double, y: $0["rectY"] as Double,
+                                  width: $0["rectW"] as Double, height: $0["rectH"] as Double))
                 }
             try db.execute(sql: "DELETE FROM faces WHERE hash = ? AND source = 'auto'",
                            arguments: [hash])
-            for r in rows where !confirmedRects.contains(where: { Self.iou($0, r.rect) > 0.4 }) {
+            var refreshed = Set<Int64>()
+            for r in rows {
+                if let match = confirmed.first(where: {
+                    !refreshed.contains($0.id) && Self.iou($0.rect, r.rect) > 0.4
+                }) {
+                    refreshed.insert(match.id)
+                    if !r.embedding.isEmpty {   // only refresh from a clusterable (embedded) detection
+                        try db.execute(sql: """
+                            UPDATE faces SET embedding = ?, dim = ?, quality = ?, confidence = ?
+                            WHERE id = ?
+                            """, arguments: [Self.packF16(r.embedding), r.embedding.count,
+                                             r.quality, r.confidence, match.id])
+                    }
+                    continue   // never insert an auto duplicate over a named face
+                }
                 try db.execute(sql: """
                     INSERT INTO faces (hash, rectX, rectY, rectW, rectH, embedding, dim,
                                        personID, confidence, source, quality)
