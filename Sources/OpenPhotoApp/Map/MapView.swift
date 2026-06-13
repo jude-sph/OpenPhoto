@@ -11,7 +11,12 @@ import OpenPhotoCore
 /// boilerplate of NSViewRepresentable + MKMapView; the SwiftUI `Map { Annotation }` API on
 /// macOS 15 is sufficient for our use (thumbnail bubbles + count badges).
 struct MapCluster: Identifiable {
-    let id: UUID
+    // Stable identity = the representative photo's hash. A cluster that persists across a recluster
+    // (small pan) keeps the SAME identity, so SwiftUI/MapKit reuse its annotation view — and its
+    // thumbnail — instead of recycling. (Was `UUID()` regenerated every recluster, which churned
+    // identities so MapKit showed other pins' thumbnails until tapped.) Each asset is the rep of at
+    // most one bucket, so this is unique within a clustering.
+    var id: String { representativeHash }
     let lat: Double
     let lon: Double
     let count: Int
@@ -374,7 +379,6 @@ struct MapView: View {
             let lat = members.map(\.lat).reduce(0, +) / Double(members.count)
             let lon = members.map(\.lon).reduce(0, +) / Double(members.count)
             return MapCluster(
-                id: UUID(),
                 lat: lat,
                 lon: lon,
                 count: members.count,
