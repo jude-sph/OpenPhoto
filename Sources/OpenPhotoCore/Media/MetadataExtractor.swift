@@ -24,30 +24,35 @@ public enum MetadataExtractor {
     }
 
     private static func extractImage(_ url: URL, into m: inout MediaMetadata) {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
-        else { return }
-        m.pixelWidth = props[kCGImagePropertyPixelWidth] as? Int
-        m.pixelHeight = props[kCGImagePropertyPixelHeight] as? Int
-        if let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any] {
-            if let s = exif[kCGImagePropertyExifDateTimeOriginal] as? String,
-               let d = exifDate.date(from: s) { m.takenAt = d }
-            m.lensModel = exif[kCGImagePropertyExifLensModel] as? String
-        }
-        if let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
-            m.cameraModel = tiff[kCGImagePropertyTIFFModel] as? String
-        }
-        if let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any],
-           let lat = gps[kCGImagePropertyGPSLatitude] as? Double,
-           let lon = gps[kCGImagePropertyGPSLongitude] as? Double {
-            let latRef = gps[kCGImagePropertyGPSLatitudeRef] as? String ?? "N"
-            let lonRef = gps[kCGImagePropertyGPSLongitudeRef] as? String ?? "E"
-            m.latitude = latRef == "S" ? -lat : lat
-            m.longitude = lonRef == "W" ? -lon : lon
-        }
-        if let apple = props[kCGImagePropertyMakerAppleDictionary] as? [CFString: Any] {
-            // Key "17" holds the Live Photo content identifier in Apple maker notes.
-            m.contentIdentifier = apple["17" as CFString] as? String
+        // Pool the ImageIO source + bridged CFDictionaries so they drain per file. Without it these
+        // autoreleased property dicts accumulate across the whole scan — a major cause of runaway
+        // memory while indexing a large library.
+        autoreleasepool {
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+            else { return }
+            m.pixelWidth = props[kCGImagePropertyPixelWidth] as? Int
+            m.pixelHeight = props[kCGImagePropertyPixelHeight] as? Int
+            if let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any] {
+                if let s = exif[kCGImagePropertyExifDateTimeOriginal] as? String,
+                   let d = exifDate.date(from: s) { m.takenAt = d }
+                m.lensModel = exif[kCGImagePropertyExifLensModel] as? String
+            }
+            if let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
+                m.cameraModel = tiff[kCGImagePropertyTIFFModel] as? String
+            }
+            if let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any],
+               let lat = gps[kCGImagePropertyGPSLatitude] as? Double,
+               let lon = gps[kCGImagePropertyGPSLongitude] as? Double {
+                let latRef = gps[kCGImagePropertyGPSLatitudeRef] as? String ?? "N"
+                let lonRef = gps[kCGImagePropertyGPSLongitudeRef] as? String ?? "E"
+                m.latitude = latRef == "S" ? -lat : lat
+                m.longitude = lonRef == "W" ? -lon : lon
+            }
+            if let apple = props[kCGImagePropertyMakerAppleDictionary] as? [CFString: Any] {
+                // Key "17" holds the Live Photo content identifier in Apple maker notes.
+                m.contentIdentifier = apple["17" as CFString] as? String
+            }
         }
     }
 

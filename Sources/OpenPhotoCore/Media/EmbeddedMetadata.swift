@@ -74,11 +74,15 @@ public enum EmbeddedMetadata {
     /// Read the embedded XMP packet (if any) back into a `SidecarData`. Nil when the
     /// file has no XMP or it carries no human metadata.
     public static func read(from url: URL) -> SidecarData? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let meta = CGImageSourceCopyMetadataAtIndex(src, 0, nil),
-              let xmp = CGImageMetadataCreateXMPData(meta, nil) as Data? else { return nil }
-        guard let parsed = try? XMP.parse(xmp), parsed != .empty else { return nil }
-        return parsed
+        // Pool the ImageIO source + metadata per call so they drain immediately; this runs once per
+        // photo during the scan, and without a pool the temporaries accumulate across the library.
+        autoreleasepool {
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let meta = CGImageSourceCopyMetadataAtIndex(src, 0, nil),
+                  let xmp = CGImageMetadataCreateXMPData(meta, nil) as Data? else { return nil }
+            guard let parsed = try? XMP.parse(xmp), parsed != .empty else { return nil }
+            return parsed
+        }
     }
 
     /// The bare `<x:xmpmeta>…</x:xmpmeta>` element from a full XMP packet, dropping
