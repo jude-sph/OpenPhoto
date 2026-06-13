@@ -280,4 +280,23 @@ extension Catalog {
             try db.execute(sql: "DELETE FROM faces WHERE source = 'auto'")
         }
     }
+
+    /// One-time face re-derivation when the embedding model changes (mirrors `reconcileEmbeddingModel`).
+    /// If the stored `faceModelVersion` differs from `current`, atomically drop AUTO faces (named faces
+    /// are kept), clear the face derivation jobs so every photo re-embeds with the new model, and record
+    /// the new version. Returns true if a reset happened. Called on library open.
+    @discardableResult
+    public func reconcileFaceModel(current: String) throws -> Bool {
+        let stored = try meta("faceModelVersion")
+        guard stored != current else { return false }
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM faces WHERE source = 'auto'")
+            try db.execute(sql: "DELETE FROM derivation_jobs WHERE stage = 'faces'")
+            try db.execute(sql: """
+                INSERT INTO catalog_meta (key, value) VALUES ('faceModelVersion', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """, arguments: [current])
+        }
+        return true
+    }
 }

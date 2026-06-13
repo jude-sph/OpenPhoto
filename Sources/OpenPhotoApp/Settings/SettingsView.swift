@@ -62,11 +62,27 @@ struct SettingsView: View {
             Text("Switching forgets OpenPhoto's index of the old folder and indexes the new one. Your photo files and any edits (favorites, tags, captions, people) are never touched — they live with the files.")
                 .font(.system(size: 11)).foregroundStyle(Theme.textDim)
                 .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            Text("People & Faces").font(.system(size: 12, weight: .semibold))
+            Button("Rescan Faces\u{2026}") { confirmRescanFaces() }
+                .disabled(state.library == nil)
+            Text("Re-detects and re-groups faces across your whole library with the current recognition model. People you've named are kept. Runs in the background and can take a while on a large library.")
+                .font(.system(size: 11)).foregroundStyle(Theme.textDim)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding()
         .task(id: state.refreshToken) {
             libStats = state.library.flatMap { try? $0.catalog.librarySize() }
         }
+    }
+
+    private func confirmRescanFaces() {
+        let alert = NSAlert()
+        alert.messageText = "Rescan all faces?"
+        alert.informativeText = "OpenPhoto will re-detect and re-group faces across your entire library using the current recognition model. People you've named are kept. This runs in the background and can take a while."
+        alert.addButton(withTitle: "Rescan")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { state.rescanFaces() }
     }
 
     private func changeRootViaPanel() {

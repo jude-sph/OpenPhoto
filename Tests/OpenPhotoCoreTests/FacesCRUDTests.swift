@@ -80,6 +80,27 @@ private func face(_ hash: String, _ vec: [Float], source: String = "auto",
     #expect(try cat.meta("faceModelVersion") == "next")
 }
 
+@Test func reconcileFaceModelResetsOnceOnVersionChange() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.upsert(assets: [photo(A)])
+    _ = try cat.insertFaces([
+        face(A, [1, 0]),
+        face(A, [0, 1], source: "confirmed", rect: CGRect(x: 0.6, y: 0.6, width: 0.2, height: 0.2))])
+    try cat.markDerived(hash: A, stage: "faces")
+
+    // No stored version yet → reconcile resets: drops auto, keeps confirmed, re-pends the job, stamps.
+    #expect(try cat.reconcileFaceModel(current: "adaface-ir101-v1") == true)
+    let rows = try cat.faces(forHash: A)
+    #expect(rows.filter { $0.source == "auto" }.isEmpty)
+    #expect(rows.filter { $0.source == "confirmed" }.count == 1)
+    #expect(try cat.pendingDerivation(stage: "faces") == [A])   // job cleared → faces re-pend
+    #expect(try cat.meta("faceModelVersion") == "adaface-ir101-v1")
+
+    // Same version again → no-op (doesn't re-clear on every launch).
+    #expect(try cat.reconcileFaceModel(current: "adaface-ir101-v1") == false)
+}
+
 @Test func resetAutoFacesKeepsConfirmed() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
