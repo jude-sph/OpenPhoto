@@ -66,30 +66,46 @@ public struct SelectionModel: Equatable, Sendable {
     /// Whether the current rubber-band drag is in subtract mode (shift held at start).
     public private(set) var isDragSubtracting: Bool = false
 
-    /// Begin a rubber-band drag (clears the shift-anchor). Pass `subtracting: true`
-    /// when ⇧ is held at drag start to latch this drag into subtract mode; intersecting
-    /// cells will be *removed* from the selection instead of added. Default `false`
-    /// keeps every existing call site compiling and behaving identically.
+    /// The selection as it was when the current rubber-band drag began. The live drag is
+    /// recomputed from this baseline on every `updateDrag`, so a cell the marquee no longer
+    /// covers reverts to its pre-drag state — the drag is only "finalised" on `endDrag`.
+    /// nil when no drag is in progress.
+    private var dragBaseline: Set<String>?
+
+    /// Begin a rubber-band drag (clears the shift-anchor) and snapshot the current selection
+    /// as the baseline. Pass `subtracting: true` when ⇧ is held at drag start to latch this
+    /// drag into subtract mode; cells the marquee covers are *removed* instead of added.
     public mutating func beginDrag(subtracting: Bool = false) {
         anchor = nil
         isDragSubtracting = subtracting
+        dragBaseline = selected
     }
 
-    /// Add (or subtract) every item whose frame intersects `rect` (with partners).
-    /// In add mode (default) a drag only ever grows the selection. In subtract mode
-    /// (shift held at drag start) intersecting items are removed from the selection.
+    /// Recompute the live selection from the drag baseline + the cells the marquee currently
+    /// covers. A cell that *leaves* the marquee reverts to its baseline state (add mode →
+    /// back to unselected; subtract mode → back to selected); the selection isn't finalised
+    /// until `endDrag`. Cells with no measured frame — e.g. scrolled out of view during
+    /// auto-scroll — are left untouched so long sweeps keep what they already gathered.
     public mutating func updateDrag(rect: CGRect, frames: [String: CGRect],
                                     items: [SelectableItem]) {
-        for it in items where frames[it.id]?.intersects(rect) == true {
-            if isDragSubtracting {
-                selected.remove(it.id)
-                if let p = it.partnerID { selected.remove(p) }
-            } else {
+        let base = dragBaseline ?? selected
+        for it in items {
+            guard let frame = frames[it.id] else { continue }
+            let inRect = frame.intersects(rect)
+            let keep = isDragSubtracting ? (base.contains(it.id) && !inRect)
+                                         : (base.contains(it.id) || inRect)
+            if keep {
                 selected.insert(it.id)
                 if let p = it.partnerID { selected.insert(p) }
+            } else {
+                selected.remove(it.id)
+                if let p = it.partnerID { selected.remove(p) }
             }
         }
     }
 
-    public mutating func endDrag() { isDragSubtracting = false }
+    public mutating func endDrag() {
+        isDragSubtracting = false
+        dragBaseline = nil
+    }
 }

@@ -76,20 +76,56 @@ private func items(_ ids: String...) -> [SelectableItem] { ids.map { SelectableI
     #expect(s.count == 0 && s.anchor == nil)
 }
 
-@Test func dragIsAdditiveAndDoesNotDropCells() {
-    // A drag only grows the selection — a cell once inside the band stays selected
-    // even if a later (smaller) rect no longer covers it. This is what lets the
-    // selection accumulate while the grid auto-scrolls under the pointer.
+private let abcFrames: [String: CGRect] = [
+    "a": CGRect(x: 0, y: 0, width: 10, height: 10),
+    "b": CGRect(x: 20, y: 0, width: 10, height: 10),
+    "c": CGRect(x: 40, y: 0, width: 10, height: 10),
+]
+
+@Test func dragRevertsVisibleCellsThatLeaveTheBand() {
+    // Live marquee: the selection tracks the CURRENT rect, not the union of every rect
+    // swept. A visible cell the band no longer covers reverts to its pre-drag state; the
+    // selection is only finalised on endDrag.
     var s = SelectionModel()
     let list = items("a", "b", "c")
-    let frames: [String: CGRect] = [
-        "a": CGRect(x: 0, y: 0, width: 10, height: 10),
-        "b": CGRect(x: 20, y: 0, width: 10, height: 10),
-        "c": CGRect(x: 40, y: 0, width: 10, height: 10),
-    ]
     s.beginDrag()
-    s.updateDrag(rect: CGRect(x: 0, y: 0, width: 50, height: 10), frames: frames, items: list)  // all
+    s.updateDrag(rect: CGRect(x: 0, y: 0, width: 50, height: 10), frames: abcFrames, items: list)  // sweeps all
     #expect(s.contains("a") && s.contains("b") && s.contains("c"))
-    s.updateDrag(rect: CGRect(x: 0, y: 0, width: 5, height: 10), frames: frames, items: list)    // only a
-    #expect(s.contains("a") && s.contains("b") && s.contains("c"))   // b, c retained (additive)
+    s.updateDrag(rect: CGRect(x: 0, y: 0, width: 5, height: 10), frames: abcFrames, items: list)    // band shrinks to a
+    #expect(s.contains("a") && !s.contains("b") && !s.contains("c"),
+            "b and c left the band while still visible — they must revert to unselected")
+    s.endDrag()
+}
+
+@Test func subtractDragReAddsVisibleCellsThatLeaveTheBand() {
+    // Symmetric for subtract mode (⇧ at drag start): a selected cell swept out then no
+    // longer covered returns to its baseline selected state.
+    var s = SelectionModel()
+    let list = items("a", "b", "c")
+    s.selectAll(list)
+    s.beginDrag(subtracting: true)
+    s.updateDrag(rect: CGRect(x: 0, y: 0, width: 50, height: 10), frames: abcFrames, items: list)  // removes all
+    #expect(s.count == 0)
+    s.updateDrag(rect: CGRect(x: 0, y: 0, width: 5, height: 10), frames: abcFrames, items: list)   // band shrinks to a
+    #expect(!s.contains("a") && s.contains("b") && s.contains("c"),
+            "b and c left the subtract band while visible — they must return to selected")
+    s.endDrag()
+}
+
+@Test func dragKeepsCellsScrolledOutOfView() {
+    // Cells with no measured frame (recycled by LazyVGrid during auto-scroll) keep whatever
+    // state they already gathered — only currently-visible cells track the live band — so a
+    // long sweep doesn't lose earlier cells when they scroll off screen.
+    var s = SelectionModel()
+    let list = items("a", "b", "c")
+    s.beginDrag()
+    s.updateDrag(rect: CGRect(x: 0, y: 0, width: 50, height: 10), frames: abcFrames, items: list)  // sweeps all
+    #expect(s.contains("a") && s.contains("b") && s.contains("c"))
+    // "a" scrolls out of view → no frame; the band now only covers c.
+    let afterScroll: [String: CGRect] = ["b": abcFrames["b"]!, "c": abcFrames["c"]!]
+    s.updateDrag(rect: CGRect(x: 40, y: 0, width: 10, height: 10), frames: afterScroll, items: list)
+    #expect(s.contains("a"), "a has no frame (scrolled out) — keeps its gathered selection")
+    #expect(s.contains("c"))
+    #expect(!s.contains("b"), "b is visible and outside the band — reverts")
+    s.endDrag()
 }
