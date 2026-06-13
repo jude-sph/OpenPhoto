@@ -5,10 +5,11 @@ import Foundation
 @Test func sidecarExporterWritesMirrorTreeSkippingEmpties() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let pics = try t.sub("pics")
+    // Distinct EXIF dates → distinct content hashes (else byte-identical files dedupe to one).
     try makeJPEG(at: pics.appendingPathComponent("rome/IMG.jpg").creatingParent(),
-                 dateTimeOriginal: nil, lat: nil, lon: nil)
+                 dateTimeOriginal: "2022:06:01 10:00:00", lat: nil, lon: nil)
     try makeJPEG(at: pics.appendingPathComponent("paris/PLAIN.jpg").creatingParent(),
-                 dateTimeOriginal: nil, lat: nil, lon: nil)
+                 dateTimeOriginal: "2022:07:01 10:00:00", lat: nil, lon: nil)
     let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("app"))
     try await lib.scanAll()
     let rome = try lib.catalog.timelineItems().first { $0.relPath == "rome/IMG.jpg" }!

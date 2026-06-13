@@ -17,6 +17,7 @@ struct InspectorView: View {
     @State private var showDelete = false
     @State private var showEvict = false
     @State private var imageFaces: [FaceRow] = []
+    @State private var instances: [InstanceRecord] = []   // all files of this content (multi-folder)
     @State private var peopleByID: [Int64: PersonRow] = [:]
     @FocusState private var renameFocused: Bool
 
@@ -237,16 +238,40 @@ struct InspectorView: View {
                         .disabled(state.fullResURL(for: item) == nil)  // unreachable (drive ejected / missing)
                     }
                 }
+
+                // This content also lives in other folders (same sha256, different file). The timeline
+                // shows it once; here are its other locations.
+                if instances.count > 1 {
+                    let others = instances.filter { !($0.vaultID == item.vaultID && $0.relPath == item.relPath) }
+                    section("Also in \(others.count) other folder\(others.count == 1 ? "" : "s")") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(others, id: \.relPath) { inst in
+                                HStack(alignment: .top) {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        let folder = (inst.relPath as NSString).deletingLastPathComponent
+                                        Text(folder.isEmpty ? "(library root)" : folder)
+                                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.textFaint)
+                                        Text((inst.relPath as NSString).lastPathComponent)
+                                            .font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.text)
+                                    }
+                                    Spacer()
+                                    Button("Reveal") { revealInstance(inst) }.controlSize(.small)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 deleteEvictActions
             }
             .padding(16)
         }
         .background(Theme.bg2)
-        .task(id: item.hash) { load(); loadFaces() }
+        .task(id: item.hash) { load(); loadFaces(); loadInstances() }
         .alert("Delete this photo?", isPresented: $showDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                state.removeOpenedItem { await state.delete($0) }   // advance to next, like the keyboard
+                state.removeOpenedItem { await state.deletePhotos($0) }   // advance to next; delete the photo everywhere
             }
         } message: {
             Text("It moves to the bin (restore anytime). On connected drives, its copy is then queued for removal — review under the drive before anything is deleted there.")
@@ -427,6 +452,17 @@ struct InspectorView: View {
             let an = $0.personID != nil, bn = $1.personID != nil
             if an != bn { return an }                 // named chips first
             return $0.confidence > $1.confidence
+        }
+    }
+
+    private func loadInstances() {
+        instances = (try? state.library?.catalog.instances(forHash: item.hash)) ?? []
+    }
+
+    private func revealInstance(_ inst: InstanceRecord) {
+        if let url = state.library?.vault(id: inst.vaultID)?.absoluteURL(forRelativePath: inst.relPath),
+           FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
         }
     }
 

@@ -12,11 +12,13 @@ struct TimelineView: View {
     @State private var sendChooser = false
     @State private var chosenSendDevice: ConnectedDevice?
 
+    // Timeline is deduped by content, so a tile is identified by its content `hash` (unique here),
+    // not `instanceID` — so a photo in two folders is one tile/one selectable.
     private var orderedSelectable: [SelectableItem] {
-        state.flatItems.map { SelectableItem(id: $0.instanceID) }
+        state.flatItems.map { SelectableItem(id: $0.hash) }
     }
     private var selectedItems: [TimelineItem] {
-        state.flatItems.filter { selection.contains($0.instanceID) }
+        state.flatItems.filter { selection.contains($0.hash) }
     }
     /// Evict/move-to-bin only applies to local files; drive-only assets are view-only.
     private var evictableItems: [TimelineItem] { selectedItems.filter { $0.driveRelPath == nil } }
@@ -48,7 +50,7 @@ struct TimelineView: View {
             Button("Delete", role: .destructive) {
                 let items = evictableItems
                 Task {
-                    await state.delete(items)
+                    await state.deletePhotos(items)   // timeline is deduped → delete the photo everywhere
                     selection.clear(); selectMode = false
                 }
             }
@@ -83,7 +85,7 @@ struct TimelineView: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: state.gridMinSize),
                                                      spacing: Theme.gridGap)],
                                   spacing: Theme.gridGap) {
-                            ForEach(section.items, id: \.instanceID) { item in
+                            ForEach(section.items, id: \.hash) { item in
                                 cell(item)
                             }
                         }
@@ -101,15 +103,15 @@ struct TimelineView: View {
 
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
         MediaTile(
-            id: item.instanceID,
+            id: item.hash,
             selectMode: selectMode,
-            selected: selection.contains(item.instanceID),
+            selected: selection.contains(item.hash),
             rubberBandSpace: "timelinegrid",
             thumbnail: ThumbnailImage(timelineItem: item, library: state.library!, targetPixel: thumbPixels),
             badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
             onTap: {
                 if selectMode {
-                    if let idx = state.flatItems.firstIndex(where: { $0.instanceID == item.instanceID }) {
+                    if let idx = state.flatItems.firstIndex(where: { $0.hash == item.hash }) {
                         selection.tap(index: idx, items: orderedSelectable,
                                       extendingRange: NSEvent.modifierFlags.contains(.shift))
                     }

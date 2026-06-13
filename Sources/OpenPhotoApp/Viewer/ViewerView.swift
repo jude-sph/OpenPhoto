@@ -212,7 +212,7 @@ struct ViewerView: View {
     private func deleteCurrent() {
         // Drive-only assets are view-only — they have no local copy to move to a bin.
         guard let item = state.openedItem, !state.isDriveOnly(item) else { return }
-        state.removeOpenedItem { await state.delete($0) }   // advance to next, delete in background
+        state.removeOpenedItem { await state.deletePhotos($0) }   // advance to next; delete the photo everywhere
     }
 
     /// Stop and release the current AV player. Pausing (and clearing the item) is required — merely

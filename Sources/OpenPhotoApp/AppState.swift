@@ -231,12 +231,15 @@ final class AppState {
     // MARK: — Tidy Up (cull)
 
     struct CullGroup: Identifiable {
-        let id: String                 // the keeper hash
+        let id: String                  // stable group id = the keeper's instanceID
         let items: [TimelineItem]
-        let keep: String
-        let suggestedEvict: Set<String>
+        let keepInstanceID: String      // the tile to keep; every other tile is pre-selected for deletion
+        let suggestedEvict: Set<String> // instanceIDs pre-selected for deletion
     }
+    /// Scope for the exact-content Duplicates finder: same-folder redundant copies, or anywhere.
+    enum CullDuplicateScope: Sendable, Hashable { case withinFolder, anywhere }
     var cullMode: CullMode = .bursts
+    var cullDuplicateScope: CullDuplicateScope = .withinFolder
     var cullGroups: [CullGroup] = []
     var cullLoading = false
     private var cullLoadToken = 0   // bumped per load; a stale detached result is dropped if a newer switch superseded it
@@ -246,48 +249,63 @@ final class AppState {
     func loadCullGroups() {
         guard let lib = library else { return }
         let mode = cullMode
+        let dupScope: Catalog.DuplicateScope = cullDuplicateScope == .anywhere ? .anywhere : .withinFolder
         cullLoadToken &+= 1
         let token = cullLoadToken
         cullGroups = []          // drop the previous mode's groups now — don't show them stale under the new label
         cullLoading = true
         Task {
             let groups: [CullGroup] = await Task.detached(priority: .userInitiated) {
-                let raw: [[String]]
-                switch mode {
-                case .bursts:
-                    let items = (try? lib.catalog.embeddingsWithTakenAt(model: EmbedStage().modelID)) ?? []
-                    raw = BurstGrouper.group(items, windowMs: 60_000, cosineThreshold: 0.93)
-                case .duplicates:
-                    // Strict: only true same-image copies (re-encode / resize / re-save). A tiny
-                    // Hamming distance keeps merely-similar shots OUT of Duplicates.
-                    let rows = (try? lib.catalog.phashRowsWithDirPath()) ?? []
-                    raw = DuplicateGrouper.group(rows, hammingThreshold: 2)
-                case .similar:
-                    // Looser: visually-similar but distinct shots (same scene, different frame) — still
-                    // useful to review, just not redundant copies.
-                    let rows = (try? lib.catalog.phashRowsWithDirPath()) ?? []
-                    raw = DuplicateGrouper.group(rows, hammingThreshold: 6)
-                }
                 var out: [CullGroup] = []
-                for g in raw {
-                    let items = (try? lib.catalog.items(forHashes: g, preservingOrder: true)) ?? []
-                    guard items.count >= 2 else { continue }
-                    var cands: [KeeperSelector.Candidate] = []
-                    for it in items {
-                        var sharp: Double? = nil
-                        if mode == .bursts,
-                           let img = await lib.thumbnails.cachedDisplayImage(
-                               for: ContentHash(stringValue: it.hash), maxPixel: ThumbnailStore.maxPixel) {
-                            sharp = FocusMeasure.varianceOfLaplacian(img)
+                switch mode {
+                case .duplicates:
+                    // Exact same-content files (same sha256), as instanceID groups, scoped. Identical
+                    // content, so keep one deterministically (shortest path) and evict the other files.
+                    for ids in (try? lib.catalog.duplicateInstanceGroups(scope: dupScope)) ?? [] {
+                        let items = (try? lib.catalog.items(instanceIDs: ids)) ?? []
+                        guard items.count >= 2 else { continue }
+                        let ordered = items.sorted {
+                            $0.relPath.count != $1.relPath.count
+                                ? $0.relPath.count < $1.relPath.count
+                                : $0.instanceID < $1.instanceID
                         }
-                        cands.append(.init(hash: it.hash,
-                                           pixelCount: (it.pixelWidth ?? 0) * (it.pixelHeight ?? 0),
-                                           fileSize: it.size, favorite: it.favorite,
-                                           rating: it.rating, sharpness: sharp))
+                        let keep = ordered[0].instanceID
+                        out.append(CullGroup(id: keep, items: items, keepInstanceID: keep,
+                                             suggestedEvict: Set(ordered.dropFirst().map(\.instanceID))))
                     }
-                    let s = KeeperSelector.suggestion(cands, mode: mode)
-                    out.append(CullGroup(id: s.keep, items: items, keep: s.keep,
-                                         suggestedEvict: Set(s.evict)))
+                case .bursts, .similar:
+                    // Perceptual grouping of DISTINCT photos (different hashes). Keeper picked by
+                    // KeeperSelector (sharpest/highest-res), mapped to its tile's instanceID.
+                    let raw: [[String]]
+                    if mode == .bursts {
+                        let emb = (try? lib.catalog.embeddingsWithTakenAt(model: EmbedStage().modelID)) ?? []
+                        raw = BurstGrouper.group(emb, windowMs: 60_000, cosineThreshold: 0.93)
+                    } else {
+                        let rows = (try? lib.catalog.phashRowsWithDirPath()) ?? []
+                        raw = DuplicateGrouper.group(rows, hammingThreshold: 6)
+                    }
+                    for g in raw {
+                        let items = (try? lib.catalog.items(forHashes: g, preservingOrder: true)) ?? []
+                        guard items.count >= 2 else { continue }
+                        var cands: [KeeperSelector.Candidate] = []
+                        for it in items {
+                            var sharp: Double? = nil
+                            if mode == .bursts,
+                               let img = await lib.thumbnails.cachedDisplayImage(
+                                   for: ContentHash(stringValue: it.hash), maxPixel: ThumbnailStore.maxPixel) {
+                                sharp = FocusMeasure.varianceOfLaplacian(img)
+                            }
+                            cands.append(.init(hash: it.hash,
+                                               pixelCount: (it.pixelWidth ?? 0) * (it.pixelHeight ?? 0),
+                                               fileSize: it.size, favorite: it.favorite,
+                                               rating: it.rating, sharpness: sharp))
+                        }
+                        let s = KeeperSelector.suggestion(cands, mode: mode)
+                        let keepID = items.first { $0.hash == s.keep }?.instanceID ?? items[0].instanceID
+                        let evictIDs = Set(items.filter { s.evict.contains($0.hash) }.map(\.instanceID))
+                        out.append(CullGroup(id: keepID, items: items, keepInstanceID: keepID,
+                                             suggestedEvict: evictIDs))
+                    }
                 }
                 return out
             }.value
@@ -1671,6 +1689,18 @@ final class AppState {
     /// Delete a selection: move to the bin AND record the intent so it can be propagated to
     /// drives (via Review Deletions). Refreshes all queries — including the pending-deletions
     /// indicator. Unlike evict, this is how a removal reaches the canonical drive.
+    /// Delete a CONTENT (timeline/viewer semantic): bin EVERY instance of each item's hash — the photo
+    /// and all its folder copies. Folder-grid and Duplicates deletes bin a single file via `delete`.
+    func deletePhotos(_ items: [TimelineItem]) async {
+        guard let library else { return }
+        let ids = Set(items.flatMap { it -> [String] in
+            let insts = (try? library.catalog.instances(forHash: it.hash)) ?? []
+            return insts.isEmpty ? [it.instanceID] : insts.map { $0.vaultID + "|" + $0.relPath }
+        })
+        let all = (try? library.catalog.items(instanceIDs: Array(ids))) ?? []
+        await delete(all.isEmpty ? items : all)
+    }
+
     func delete(_ items: [TimelineItem]) async {
         guard let library else { return }
         // Captured BEFORE the delete: asset hashes (incl. Live partners) drive the bin-restore

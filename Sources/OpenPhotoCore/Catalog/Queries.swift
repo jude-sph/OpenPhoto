@@ -27,12 +27,24 @@ extension Catalog {
 
     // Full union: local rows (with NULL driveRelPath) UNION ALL drive-only rows.
     // Internal so that Catalog+Search.swift can reuse the union for filter/fetch queries.
-    static var timelineSQL: String { "\(localSelect) UNION ALL \(driveSelect)" }
+
+    /// Per-INSTANCE rows (one per file) — the same photo in two folders appears twice. Used by the
+    /// Folders views and instance resolution, where each physical file is its own row.
+    static var instanceSQL: String { "\(localSelect) UNION ALL \(driveSelect)" }
+
+    /// Deduped by CONTENT (one row per asset hash). The local branch keeps a single representative
+    /// instance (lowest rowid); the drive-only branch already dedupes via MIN(rowid). Timeline + Search
+    /// use this so a photo present in multiple folders shows once (its other locations live in the
+    /// Inspector). `instanceSQL` and `browseSQL` differ ONLY in the local-branch dedupe clause.
+    static var browseSQL: String {
+        "\(localSelect) AND i.rowid = (SELECT MIN(rowid) FROM instances i2 WHERE i2.hash = a.hash)"
+            + " UNION ALL \(driveSelect)"
+    }
 
     /// Whole-library browse rows, newest first. `videoOnly` restricts to videos.
     public func timelineItems(videoOnly: Bool = false) throws -> [TimelineItem] {
         try dbQueue.read { db in
-            var sql = "SELECT * FROM (\(Self.timelineSQL))"
+            var sql = "SELECT * FROM (\(Self.browseSQL))"
             if videoOnly { sql += " WHERE kind = 'video'" }
             sql += " ORDER BY takenAtMs DESC"
             return try TimelineItem.fetchAll(db, sql: sql)
@@ -46,7 +58,7 @@ extension Catalog {
     public func knownSizeDateKeys() throws -> Set<String> {
         try dbQueue.read { db in
             var keys = Set<String>()
-            for row in try Row.fetchAll(db, sql: "SELECT size, takenAtMs FROM (\(Self.timelineSQL))") {
+            for row in try Row.fetchAll(db, sql: "SELECT size, takenAtMs FROM (\(Self.browseSQL))") {
                 let size: Int64 = row["size"]; let ms: Int64 = row["takenAtMs"]
                 keys.insert("\(size)|\(ms / 1000)")
             }
@@ -61,7 +73,7 @@ extension Catalog {
     public func items(inDir dirPath: String, vaultID: String? = nil,
                       recursive: Bool = false) throws -> [TimelineItem] {
         try dbQueue.read { db in
-            var sql = "SELECT * FROM (\(Self.timelineSQL)) WHERE "
+            var sql = "SELECT * FROM (\(Self.instanceSQL)) WHERE "
             var args: [DatabaseValueConvertible] = []
             if recursive {
                 // The folder itself plus every descendant. GLOB "<dir>/*" matches only paths under
@@ -90,7 +102,7 @@ extension Catalog {
         return try dbQueue.read { db in
             let marks = databaseQuestionMarks(count: instanceIDs.count)
             return try TimelineItem.fetchAll(db, sql: """
-                SELECT * FROM (\(Self.timelineSQL)) WHERE vaultID || '|' || relPath IN (\(marks))
+                SELECT * FROM (\(Self.instanceSQL)) WHERE vaultID || '|' || relPath IN (\(marks))
                 """, arguments: StatementArguments(instanceIDs))
         }
     }
@@ -138,7 +150,7 @@ extension Catalog {
     public func item(hash: String) throws -> TimelineItem? {
         try dbQueue.read { db in
             try TimelineItem.fetchOne(db,
-                sql: "SELECT * FROM (\(Self.timelineSQL)) WHERE hash = ? LIMIT 1",
+                sql: "SELECT * FROM (\(Self.browseSQL)) WHERE hash = ? LIMIT 1",
                 arguments: [hash])
         }
     }
@@ -196,6 +208,33 @@ extension Catalog {
                 UPDATE assets SET favorite = ?, rating = ?, caption = ?, tagsJSON = ?
                 WHERE hash = ?
                 """, arguments: [favorite, rating, caption, tagsJSON, hash])
+        }
+    }
+
+    public enum DuplicateScope: Sendable { case withinFolder, anywhere }
+
+    /// Exact-content duplicate groups: instanceIDs ("vaultID|relPath") of files sharing the same
+    /// content hash, in groups of 2+. `withinFolder` requires the same dirPath (truly redundant
+    /// copies, safe to bin extras); `anywhere` groups the same content across folders.
+    public func duplicateInstanceGroups(scope: DuplicateScope) throws -> [[String]] {
+        struct GroupKey: Hashable { let hash: String; let dir: String }
+        return try dbQueue.read { db in
+            let dupFilter = scope == .withinFolder
+                ? "(hash, dirPath) IN (SELECT hash, dirPath FROM instances GROUP BY hash, dirPath HAVING COUNT(*) >= 2)"
+                : "hash IN (SELECT hash FROM instances GROUP BY hash HAVING COUNT(*) >= 2)"
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT vaultID, relPath, hash, dirPath FROM instances
+                WHERE \(dupFilter)
+                ORDER BY hash, dirPath, rowid
+                """)
+            var groups: [GroupKey: [String]] = [:]
+            for r in rows {
+                let vaultID: String = r["vaultID"], relPath: String = r["relPath"]
+                let hash: String = r["hash"], dirPath: String = r["dirPath"]
+                let key = GroupKey(hash: hash, dir: scope == .withinFolder ? dirPath : "")
+                groups[key, default: []].append("\(vaultID)|\(relPath)")
+            }
+            return groups.values.filter { $0.count >= 2 }.sorted { ($0.first ?? "") < ($1.first ?? "") }
         }
     }
 

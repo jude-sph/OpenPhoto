@@ -16,7 +16,7 @@ extension Catalog {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT u.hash AS hash, u.dirPath AS dirPath, p.value AS value
-                FROM (\(Self.timelineSQL)) u JOIN phash p ON p.hash = u.hash
+                FROM (\(Self.instanceSQL)) u JOIN phash p ON p.hash = u.hash
                 """).map { ($0["hash"], $0["dirPath"], $0["value"]) }
         }
     }

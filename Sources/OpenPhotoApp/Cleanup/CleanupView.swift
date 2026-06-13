@@ -27,18 +27,18 @@ struct CleanupView: View {
     }
     /// Every tile any group suggests evicting (the union the "Apply all suggestions" action acts on).
     private var allSuggested: [TimelineItem] {
-        state.cullGroups.flatMap { g in g.items.filter { g.suggestedEvict.contains($0.hash) } }
+        state.cullGroups.flatMap { g in g.items.filter { g.suggestedEvict.contains($0.instanceID) } }
     }
     /// Changes whenever the group set is (re)loaded, so the shared selection can be re-seeded.
     private var groupsSignature: [String] {
-        state.cullGroups.map { $0.keep + "#\($0.items.count)" }
+        state.cullGroups.map { $0.keepInstanceID + "#\($0.items.count)" }
     }
 
     /// Pre-select every group's suggested rejects (keyed by instanceID — keepers stay unselected).
     private func seedSelection() {
         var sel = SelectionModel()
         for group in state.cullGroups {
-            for item in group.items where group.suggestedEvict.contains(item.hash) {
+            for item in group.items where group.suggestedEvict.contains(item.instanceID) {
                 sel.add(SelectableItem(id: item.instanceID))
             }
         }
@@ -88,6 +88,15 @@ struct CleanupView: View {
             }
             .pickerStyle(.segmented).labelsHidden().fixedSize()
             .onChange(of: state.cullMode) { selection.clear(); state.loadCullGroups() }
+            if state.cullMode == .duplicates {
+                Picker("Scope", selection: $state.cullDuplicateScope) {
+                    Text("Within folder").tag(AppState.CullDuplicateScope.withinFolder)
+                    Text("Anywhere").tag(AppState.CullDuplicateScope.anywhere)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .onChange(of: state.cullDuplicateScope) { selection.clear(); state.loadCullGroups() }
+                .help("Within folder: redundant copies in one folder. Anywhere: the same file across folders.")
+            }
             if !state.cullGroups.isEmpty {
                 Text("\(state.cullGroups.count) group\(state.cullGroups.count == 1 ? "" : "s")")
                     .font(.system(size: 12).monospacedDigit())
@@ -122,15 +131,23 @@ struct CleanupView: View {
         }
     }
 
+    private func groupLabel(_ g: AppState.CullGroup) -> String {
+        switch state.cullMode {
+        case .duplicates: return "\(g.items.count) exact copies · keeping one"
+        case .similar:    return "\(g.items.count) similar · keeping the highest-res"
+        case .bursts:     return "\(g.items.count) burst frames · keeping the sharpest"
+        }
+    }
+
     private func groupRow(_ group: AppState.CullGroup) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(group.items.count) \(state.cullMode == .duplicates ? "duplicates" : "similar") · keeping the \(state.cullMode == .bursts ? "sharpest" : "highest-res")")
+            Text(groupLabel(group))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.textDim)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Theme.gridGap) {
                     ForEach(group.items, id: \.instanceID) { item in
-                        tile(item, isKeeper: item.hash == group.keep)
+                        tile(item, isKeeper: item.instanceID == group.keepInstanceID)
                             .frame(width: cellMin, height: cellMin)
                     }
                 }
@@ -225,8 +242,20 @@ struct CleanupView: View {
         ContentUnavailableView {
             Label("Nothing to tidy up", systemImage: "sparkles")
         } description: {
-            Text("No \(state.cullMode == .bursts ? "bursts" : "duplicates") found.\nAnalysis may still be running — bursts need photo embeddings, duplicates need the perceptual-hash backfill.")
+            Text(emptyStateText)
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private var emptyStateText: String {
+        switch state.cullMode {
+        case .duplicates:
+            let scope = state.cullDuplicateScope == .withinFolder ? "within any folder" : "anywhere in your library"
+            return "No exact duplicate files \(scope) — every photo here is a unique file."
+        case .similar:
+            return "No similar photos found.\nAnalysis may still be running — this needs the perceptual-hash backfill."
+        case .bursts:
+            return "No bursts found.\nAnalysis may still be running — bursts need photo embeddings."
+        }
     }
 }

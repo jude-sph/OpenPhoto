@@ -108,9 +108,9 @@ struct SearchView: View {
                     columns: [GridItem(.adaptive(minimum: state.gridMinSize), spacing: Theme.gridGap)],
                     spacing: Theme.gridGap
                 ) {
-                    ForEach(state.searchResults, id: \.instanceID) { item in
+                    ForEach(state.searchResults, id: \.hash) { item in   // search is deduped by content
                         MediaTile(
-                            id: item.instanceID,
+                            id: item.hash,
                             selectMode: false,
                             selected: false,
                             rubberBandSpace: nil,

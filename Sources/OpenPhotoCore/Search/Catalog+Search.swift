@@ -98,7 +98,7 @@ extension Catalog {
 
             let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
             let sql = """
-                SELECT hash FROM (\(Self.timelineSQL))
+                SELECT hash FROM (\(Self.browseSQL))
                 \(whereClause)
                 ORDER BY takenAtMs DESC
                 """
@@ -166,7 +166,7 @@ extension Catalog {
         return try dbQueue.read { db in
             let marks = databaseQuestionMarks(count: hashes.count)
             let sql = """
-                SELECT * FROM (\(Self.timelineSQL))
+                SELECT * FROM (\(Self.browseSQL))
                 WHERE hash IN (\(marks))
                 """
             let rows = try TimelineItem.fetchAll(db, sql: sql,
@@ -187,7 +187,7 @@ extension Catalog {
     public func allHashesNewestFirst() throws -> [String] {
         try dbQueue.read { db in
             try String.fetchAll(db,
-                sql: "SELECT hash FROM (\(Self.timelineSQL)) ORDER BY takenAtMs DESC")
+                sql: "SELECT hash FROM (\(Self.browseSQL)) ORDER BY takenAtMs DESC")
         }
     }
 }
