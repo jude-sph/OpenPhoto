@@ -132,7 +132,8 @@ struct PeopleOverviewView: View {
                                 onSelectPerson(person)
                             }
                         },
-                        onRemove: { state.removePerson(person.id) }
+                        onRemove: { state.removePerson(person.id) },
+                        onRename: { state.renamePerson(person.id, to: $0) }
                     )
                 }
             }
@@ -227,6 +228,9 @@ struct PersonCard: View {
     var mergeSelected: Bool
     var onTap: () -> Void
     var onRemove: () -> Void
+    var onRename: (String) -> Void
+    @State private var renaming = false
+    @State private var nameField = ""
 
     var body: some View {
         Button(action: onTap) {
@@ -267,9 +271,20 @@ struct PersonCard: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button { nameField = person.name; renaming = true } label: {
+                Label("Rename\u{2026}", systemImage: "pencil")
+            }
             Button(role: .destructive) { onRemove() } label: {
                 Label("Remove person", systemImage: "person.badge.minus")
             }
+        }
+        .alert("Rename person", isPresented: $renaming) {
+            TextField("Name", text: $nameField)
+            Button("Rename") {
+                let n = nameField.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !n.isEmpty, n != person.name { onRename(n) }
+            }
+            Button("Cancel", role: .cancel) {}
         }
     }
 }
@@ -340,6 +355,9 @@ struct PersonDetailView: View {
     @State private var selection = SelectionModel()
     @State private var splitName = ""
     @State private var showSplitField = false
+    @State private var showFaces = true
+    @State private var renaming = false
+    @State private var renameField = ""
 
     private let gridColumns = [GridItem(.adaptive(minimum: 108), spacing: Theme.gridGap)]
     private let space = "persongrid"
@@ -376,6 +394,7 @@ struct PersonDetailView: View {
                         selected: selection.contains(pair.id),
                         space: space,
                         thumbPixels: thumbPixels,
+                        showFace: showFaces,
                         onTap: { tap(pair) },
                         onReassign: { target in
                             guard let id = pair.face.id else { return }
@@ -423,19 +442,47 @@ struct PersonDetailView: View {
             }
             .buttonStyle(.plain)
             Divider().frame(height: 16)
-            Text(person.name)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.text)
+            if renaming {
+                TextField("Name", text: $renameField)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                    .frame(width: 200)
+                    .onSubmit { commitRename() }
+                    .onExitCommand { renaming = false }
+            } else {
+                Text(person.name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                    .onTapGesture(count: 2) { beginRename() }
+                    .help("Double-click to rename")
+                Button { beginRename() } label: {
+                    Image(systemName: "pencil").font(.system(size: 11))
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.textDim).help("Rename")
+            }
             Text("\(pairs.count) \(pairs.count == 1 ? "photo" : "photos")")
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundStyle(Theme.textDim)
             Spacer()
             if !pairs.isEmpty {
+                Picker("", selection: $showFaces) {
+                    Text("Faces").tag(true)
+                    Text("Photos").tag(false)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
                 Button("Select") { selectMode = true }.controlSize(.small)
             }
         }
         .padding(.horizontal, 16)
         .frame(height: Theme.toolbarHeight)
+    }
+
+    private func beginRename() { renameField = person.name; renaming = true }
+    private func commitRename() {
+        let n = renameField.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !n.isEmpty, n != person.name { state.renamePerson(person.id, to: n) }
+        renaming = false
     }
 
     private var selectionBar: some View {
@@ -455,6 +502,22 @@ struct PersonDetailView: View {
                 reload()
             }
             .controlSize(.small)
+            .disabled(selection.count == 0)
+
+            Menu("Move to person…") {
+                let others = allPeople.filter { $0.id != person.id }
+                if others.isEmpty {
+                    Text("No other people yet")
+                } else {
+                    ForEach(others, id: \.id) { p in
+                        Button(p.name) {
+                            state.moveFaces(selectedFaceIDs, toPerson: p.id, fromPerson: person.id)
+                            selection.clear(); reload()
+                        }
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
             .disabled(selection.count == 0)
 
             if showSplitField {
@@ -517,6 +580,7 @@ struct ClusterDetailView: View {
 
     @State private var pairs: [FacePhoto] = []
     @State private var nameField = ""
+    @State private var showFaces = true
 
     private let gridColumns = [GridItem(.adaptive(minimum: 108), spacing: Theme.gridGap)]
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: 120) }
@@ -541,6 +605,7 @@ struct ClusterDetailView: View {
                                 selected: false,
                                 space: "clustergrid",
                                 thumbPixels: thumbPixels,
+                                showFace: showFaces,
                                 onTap: { state.openViewer(pair.item, within: photos) },
                                 onReassign: nil
                             )
@@ -571,6 +636,11 @@ struct ClusterDetailView: View {
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundStyle(Theme.textDim)
             Spacer()
+            Picker("", selection: $showFaces) {
+                Text("Faces").tag(true)
+                Text("Photos").tag(false)
+            }
+            .pickerStyle(.segmented).labelsHidden().fixedSize()
             TextField("Name this person…", text: $nameField)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
@@ -624,6 +694,8 @@ struct FacePhotoTile: View {
     var selected: Bool
     var space: String
     var thumbPixels: Int
+    /// true → show the cropped face the cluster claims; false → the whole photo.
+    var showFace: Bool = false
     var onTap: () -> Void
     /// nil → no per-face management menu (cluster grid). non-nil(person) reassigns, non-nil(nil) unassigns.
     var onReassign: ((PersonRow?) -> Void)?
@@ -631,14 +703,22 @@ struct FacePhotoTile: View {
 
     private var tileID: String { face.id.map(String.init) ?? face.hash }
 
+    @ViewBuilder private var tileImage: some View {
+        if showFace {
+            FaceCropView(state: state, faceID: face.id, hash: face.hash,
+                         rect: face.rect, size: 120, fill: true)
+        } else {
+            ThumbnailImage(timelineItem: item, library: state.library!, targetPixel: thumbPixels)
+        }
+    }
+
     var body: some View {
         MediaTile(
             id: tileID,
             selectMode: selectMode,
             selected: selected,
             rubberBandSpace: space,
-            thumbnail: ThumbnailImage(timelineItem: item, library: state.library!,
-                                      targetPixel: thumbPixels),
+            thumbnail: tileImage,
             badges: { confidenceBadge },
             onTap: onTap
         )
@@ -711,6 +791,9 @@ struct FaceCropView: View {
     /// Vision normalized bounding-box rect (bottom-left origin). If nil, shows the whole thumbnail.
     var rect: CGRect = .zero
     let size: CGFloat
+    /// When true, fill the container instead of a fixed `size`×`size` box (for use inside a grid
+    /// tile whose parent already constrains the frame). `size` still drives the cache key + crop.
+    var fill: Bool = false
 
     @State private var croppedImage: CGImage?
 
@@ -733,7 +816,7 @@ struct FaceCropView: View {
                     .foregroundStyle(Theme.textFaint)
             }
         }
-        .frame(width: size, height: size)
+        .modifier(FaceCropFrame(size: size, fill: fill))
         .task(id: cacheID) { await loadCrop() }
     }
 
@@ -808,5 +891,15 @@ struct FaceCropView: View {
         } else {
             croppedImage = thumb
         }
+    }
+}
+
+/// Fixed `size`×`size` by default; fills its container when `fill` (so a grid tile can size it).
+private struct FaceCropFrame: ViewModifier {
+    let size: CGFloat
+    let fill: Bool
+    func body(content: Content) -> some View {
+        if fill { content.frame(maxWidth: .infinity, maxHeight: .infinity) }
+        else { content.frame(width: size, height: size) }
     }
 }

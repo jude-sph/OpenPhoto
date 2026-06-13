@@ -5,12 +5,12 @@ import OpenPhotoCore
 /// OUTER frame, and the selection ring + checkbox + badges drawn on that SAME rounded frame -- so
 /// corners never poke past the ring and badges are never clipped (the bug the timeline/folders cells
 /// had). Adapted from the import grid's tile; used by timeline, folders, import, and quick view.
-struct MediaTile<Badges: View>: View {
+struct MediaTile<Thumb: View, Badges: View>: View {
     let id: String
     var selectMode: Bool = false
     var selected: Bool = false
     var rubberBandSpace: String? = nil
-    let thumbnail: ThumbnailImage
+    let thumbnail: Thumb
     @ViewBuilder var badges: () -> Badges
     var onTap: () -> Void = {}
 
