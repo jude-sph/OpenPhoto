@@ -118,7 +118,16 @@ struct MapView: View {
                 id: hash,
                 provider: { px in
                     let h = ContentHash(stringValue: hash)
-                    // Try cached thumbnail first (no source URL needed for map bubbles)
+                    // Generate from the file if it isn't cached — map representatives often haven't
+                    // been browsed, so nothing's in the store yet (otherwise the pin stays blank).
+                    if let item = try? lib.catalog.items(forHashes: [hash], preservingOrder: false).first,
+                       let url = lib.absoluteURL(for: item) {
+                        let kind = MediaKind(rawValue: item.kind) ?? .photo
+                        if let img = try? await lib.thumbnails.displayImage(
+                            for: h, sourceURL: url, kind: kind, maxPixel: px) {
+                            return img
+                        }
+                    }
                     return await lib.thumbnails.cachedDisplayImage(for: h, maxPixel: px)
                 },
                 targetPixel: thumbPixels

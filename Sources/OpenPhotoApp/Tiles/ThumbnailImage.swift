@@ -39,9 +39,14 @@ struct ThumbnailImage: View {
         .task(id: cacheKey) {
             let key = cacheKey
             if let hit = tileMemoryCache.object(forKey: key)?.image { asyncImage = hit; return }
+            // Cache miss: this view may have been REUSED for a different item (recycled map pin / grid
+            // cell). Drop the previous item's image so we never render it under this id — that was the
+            // "same photo on 3 map pins" bug. Show the placeholder until the correct one loads.
+            asyncImage = nil
             let load = provider, px = targetPixel
             let result = await Task.detached(priority: .userInitiated) { await load(px) }.value
-            if let img = result {
+            // Ignore a result that arrived after another reuse already changed our id.
+            if let img = result, key == cacheKey {
                 tileMemoryCache.setObject(TileImageBox(img), forKey: key)
                 asyncImage = img
             }
