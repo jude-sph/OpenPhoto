@@ -150,12 +150,18 @@ public final class LibraryService: Sendable {
     private func directoriesUnder(_ root: URL) -> [String] {
         let fm = FileManager.default
         let prefix = root.path + "/"
-        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey],
+        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey],
                 options: [.skipsHiddenFiles]) else { return [] }
         var dirs: [String] = []
         for case let url as URL in en {
-            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-                if url.lastPathComponent == ".openphoto" { en.skipDescendants(); continue }
+            let vals = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+            if vals?.isDirectory == true {
+                // Mirror Scanner's walk: skip the state dir and opaque packages (Apple Photos library
+                // etc.) so their internal directories don't surface as empty folders in the tree.
+                if url.lastPathComponent == ".openphoto"
+                    || url.isOpaqueMediaPackage(isPackage: vals?.isPackage) {
+                    en.skipDescendants(); continue
+                }
                 // Resolve symlinks on the enumerated URL so its path uses the same
                 // prefix form as `root.path` (on macOS the enumerator may return
                 // /private/var/… while root.path is /var/…).

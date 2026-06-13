@@ -97,6 +97,12 @@ private func lib2Dict(_ nodes: [FolderNode]) -> [String: FolderNode] {
     let items = try lib.catalog.timelineItems()
     #expect(items.count == 1)
     #expect(items.first?.relPath == "travel/real.jpg")
+
+    // …and the package's internal directories must not surface as empty folders in the tree either.
+    func paths(_ ns: [FolderNode]) -> [String] { ns.flatMap { [$0.path] + paths($0.children) } }
+    let tree = paths(try lib.folderTree())
+    #expect(!tree.contains { $0.localizedCaseInsensitiveContains("photoslibrary") })
+    #expect(tree.contains("travel"))
 }
 
 @Test func folderTreeSurfacesLooseRootPhotosAsTopNode() async throws {

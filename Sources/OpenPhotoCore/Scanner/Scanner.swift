@@ -30,15 +30,11 @@ public enum Scanner {
             do {
                 let values = try url.resourceValues(forKeys: Set(keys))
                 if values.isDirectory == true {
-                    // Skip OpenPhoto's own state dir, and skip opaque PACKAGES — most importantly an
-                    // Apple Photos library (`.photoslibrary`), whose internal originals/derivatives are
-                    // not user media. Pointing at ~/Pictures would otherwise index the Photos library's
-                    // guts. `isPackage` also covers .app/.bundle; the extension list is a fallback in
-                    // case the resource key isn't populated for a directory.
-                    let ext = url.pathExtension.lowercased()
-                    let isPackage = values.isPackage == true
-                        || ["photoslibrary", "migratedphotolibrary", "aplibrary", "photolibrary"].contains(ext)
-                    if url.lastPathComponent == Vault.stateDirName || isPackage {
+                    // Skip OpenPhoto's own state dir, and skip opaque packages (an Apple Photos
+                    // library `.photoslibrary`, `.app`, `.bundle`, …) — their internals aren't user
+                    // media. Shared with the Folders-tree walk so the two can't drift apart.
+                    if url.lastPathComponent == Vault.stateDirName
+                        || url.isOpaqueMediaPackage(isPackage: values.isPackage) {
                         enumerator.skipDescendants()
                     }
                     continue
