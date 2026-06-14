@@ -300,6 +300,8 @@ struct ImportView: View {
         stateStreamTask?.cancel()
         stateStreamTask = nil
         phase = .connecting
+        items = []            // drop the previous source's grid immediately while this one connects
+        enumProgress = nil
         selection.clear()
         guard let src = state.deviceWatcher.source(for: device) else {
             phase = .failedToConnect("Source unavailable"); return
@@ -331,12 +333,18 @@ struct ImportView: View {
             catch { phase = .failedToConnect(String(describing: error)); return }
         }
         await reloadItems()
+        guard !Task.isCancelled else { return }   // superseded by a newer source selection
         phase = .ready
     }
 
     private func reloadItems() async {
         guard let source else { return }
-        items = (try? await source.enumerateItems()) ?? []
+        let result = (try? await source.enumerateItems()) ?? []
+        // A slow enumeration (e.g. Apple Photos via PhotoKit) can finish AFTER the user switched to
+        // another source — the `.task(id:)` cancels this one, but the awaited enumerate doesn't throw.
+        // Bail before clobbering the new source's items with this stale result.
+        guard !Task.isCancelled else { return }
+        items = result
         enumProgress = nil
         if let foreign = source as? ForeignVaultSource {
             foreignFolderCounts = (try? foreign.folderCounts()) ?? [:]
