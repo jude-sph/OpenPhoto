@@ -173,3 +173,29 @@ private func fakeItems() -> [(ImportItem, Data)] {
     #expect(item?.favorite == true && item?.caption == "from them")
 }
 
+@Test func parallelImportHandlesLargerMixedBatch() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, vault, reg) = try makeEnv(t)
+    try await lib.scanAll()
+    var pairs: [(ImportItem, Data)] = []
+    for i in 0..<12 {
+        pairs.append((ImportItem(id: "\(i)", name: "IMG_\(i).JPG", byteSize: 4,
+            takenAt: Date(timeIntervalSince1970: Double(100 + i)), kind: .photo, livePartnerID: nil),
+            Data("im_\(i)".utf8)))
+    }
+    let fake = FakeSource(sourceKey: "fk", items: pairs)
+    let engine = ImportEngine(library: lib, registry: reg)
+    let items = try await fake.enumerateItems()
+
+    let result = await engine.run(source: fake, items: items, vault: vault, dirPath: "big")
+    #expect(result.imported.count == 12 && result.failed.isEmpty && result.skipped.isEmpty)
+    #expect(try lib.items(inDir: "big").count == 12)
+    #expect(reg.entries(forSourceKey: "fk").count == 12)
+    // Every placed file is present and uniquely named.
+    #expect(Set(result.imported.map(\.placedRelPath)).count == 12)
+
+    // Re-import the same folder → all 12 skipped via the parallel dedup + batch registry path.
+    let again = await engine.run(source: fake, items: items, vault: vault, dirPath: "big")
+    #expect(again.skipped.count == 12 && again.imported.isEmpty)
+}
+

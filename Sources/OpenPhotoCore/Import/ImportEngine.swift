@@ -25,12 +25,48 @@ public final class ImportEngine: Sendable {
         public let currentName: String
     }
 
+    /// Result of one item's fetch → hash → dedup, produced concurrently in Stage 2.
+    private enum Stage2Outcome: Sendable {
+        case staged(item: ImportItem, url: URL, hash: String)
+        case skipped(item: ImportItem, entry: ImportRegistry.Entry)
+        case failed(item: ImportItem, reason: String)
+    }
+
     private let library: LibraryService
     private let registry: ImportRegistry
 
     public init(library: LibraryService, registry: ImportRegistry) {
         self.library = library
         self.registry = registry
+    }
+
+    /// Fetch one item into staging, hash it, and run the destination-aware dedup check.
+    /// Pure w.r.t. shared state: returns an outcome; the caller serially folds outcomes and
+    /// batches registry writes. Each call hashes its own file (ContentHash drains a per-chunk
+    /// autorelease pool internally, so concurrent hashing stays memory-bounded).
+    private static func fetchHashDedup(item: ImportItem, source: any ImportSource,
+                                       sourceKey: String, staging: URL,
+                                       library: LibraryService, vaultID: String,
+                                       destDir: String) async -> Stage2Outcome {
+        let fm = FileManager.default
+        let takenStr = item.takenAt.map(ISO8601Millis.string(from:)) ?? ""
+        let dest = staging.appendingPathComponent(UUID().uuidString + "-" + item.name)
+        do {
+            try await source.fetch(item, to: dest)
+            let hash = try ContentHash.ofFile(at: dest).stringValue
+            if (try? library.catalog.hashPresent(
+                    inVault: vaultID, dirPath: destDir, hash: hash)) == true {
+                try? fm.removeItem(at: dest)
+                let e = ImportRegistry.Entry(sourceKey: sourceKey, name: item.name,
+                    size: item.byteSize, takenAt: takenStr, hash: hash,
+                    importedAt: ISO8601Millis.string(from: Date()),
+                    importedTo: "\(destDir)/\(item.name)")
+                return .skipped(item: item, entry: e)
+            }
+            return .staged(item: item, url: dest, hash: hash)
+        } catch {
+            return .failed(item: item, reason: String(describing: error))
+        }
     }
 
     public func run(source: any ImportSource, items: [ImportItem],
@@ -78,35 +114,47 @@ public final class ImportEngine: Sendable {
             return dirPath.isEmpty ? sub : dirPath + "/" + sub
         }
 
-        // 3. Per-item: fetch → hash → destination-aware dedup-check → remember staged file.
-        var staged: [(item: ImportItem, url: URL, hash: String)] = []
-        for (i, item) in work.enumerated() {
-            progress?(Progress(stage: .fetching, done: i, total: work.count, currentName: item.name))
-            let takenStr = item.takenAt.map(ISO8601Millis.string(from:)) ?? ""
-            let dest = staging.appendingPathComponent(UUID().uuidString + "-" + item.name)
-            do {
-                try await source.fetch(item, to: dest)
-                let hash = try ContentHash.ofFile(at: dest).stringValue
-                // Destination-aware dedup: the same source photo CAN be imported into a
-                // different folder (creates a second instance); only skip if THIS folder
-                // already holds these exact bytes (true no-op).
-                if (try? library.catalog.hashPresent(
-                        inVault: vault.descriptor.vaultID,
-                        dirPath: destDir(for: item),
-                        hash: hash)) == true {
-                    try? registry.append(.init(sourceKey: source.sourceKey, name: item.name,
-                        size: item.byteSize, takenAt: takenStr, hash: hash,
-                        importedAt: ISO8601Millis.string(from: Date()),
-                        importedTo: "\(destDir(for: item))/\(item.name)"))
-                    result.skipped.append(item)
-                    try? fm.removeItem(at: dest)
-                    continue
+        // 3. Per-item fetch → hash → dedup, bounded-concurrent (width ≤ 6 to balance CPU-bound
+        //    hashing against single-device source I/O). Outcomes are folded in deterministic
+        //    index order so placement + progress stay stable regardless of completion order.
+        //    Destination-aware dedup: the same source photo CAN be imported into a different
+        //    folder (creates a second instance); only skip if THIS folder already holds the bytes.
+        let width = min(6, ProcessInfo.processInfo.activeProcessorCount)
+        let vaultID = vault.descriptor.vaultID
+        let srcKey = source.sourceKey
+        let lib = library            // local binding so the task closure captures no `self`
+        var outcomes = [Stage2Outcome?](repeating: nil, count: work.count)
+        await withTaskGroup(of: (Int, Stage2Outcome).self) { group in
+            var next = 0, done = 0
+            func addTask(_ i: Int) {
+                let item = work[i]
+                let dDir = destDir(for: item)
+                group.addTask {
+                    (i, await Self.fetchHashDedup(item: item, source: source, sourceKey: srcKey,
+                        staging: staging, library: lib, vaultID: vaultID, destDir: dDir))
                 }
-                staged.append((item, dest, hash))
-            } catch {
-                result.failed.append(FailedItem(item: item, reason: String(describing: error)))
+            }
+            while next < min(width, work.count) { addTask(next); next += 1 }
+            for await (i, outcome) in group {
+                outcomes[i] = outcome
+                done += 1
+                progress?(Progress(stage: .fetching, done: done, total: work.count,
+                                   currentName: work[i].name))
+                if next < work.count { addTask(next); next += 1 }
             }
         }
+
+        var staged: [(item: ImportItem, url: URL, hash: String)] = []
+        var skipEntries: [ImportRegistry.Entry] = []
+        for outcome in outcomes {
+            switch outcome {
+            case .staged(let item, let url, let hash): staged.append((item, url, hash))
+            case .skipped(let item, let entry): result.skipped.append(item); skipEntries.append(entry)
+            case .failed(let item, let reason): result.failed.append(FailedItem(item: item, reason: reason))
+            case .none: break   // every index is filled by the group above
+            }
+        }
+        try? registry.appendBatch(skipEntries)
 
         // 4. Place with collision-safe names (per-item destination dir).
         var placed: [(item: ImportItem, relPath: String, hash: String)] = []
@@ -144,9 +192,10 @@ public final class ImportEngine: Sendable {
         //    equal the staging hash. Only verified items enter the registry.
         let manifestByPath = Dictionary(uniqueKeysWithValues:
             ((try? Manifest.read(from: vault.manifestURL)) ?? []).map { ($0.path, $0.hash.stringValue) })
+        var importEntries: [ImportRegistry.Entry] = []
         for p in placed {
             if manifestByPath[p.relPath] == p.hash {
-                try? registry.append(.init(sourceKey: source.sourceKey, name: p.item.name,
+                importEntries.append(.init(sourceKey: source.sourceKey, name: p.item.name,
                     size: p.item.byteSize,
                     takenAt: p.item.takenAt.map(ISO8601Millis.string(from:)) ?? "",
                     hash: p.hash,
@@ -159,6 +208,7 @@ public final class ImportEngine: Sendable {
                     reason: "verification mismatch at \(p.relPath)"))
             }
         }
+        try? registry.appendBatch(importEntries)
 
         library.appendSyncLog(vault: vault, event: "import",
             summary: "\(result.imported.count) imported, \(result.skipped.count) skipped, \(result.failed.count) failed → \(dirPath)",
