@@ -114,6 +114,13 @@ final class AppState {
             try? refreshQueries()   // rebuild timeline + folder-tree counts so they match the filter
         }
     }
+
+    // MARK: — Locked Folders (Touch ID)
+
+    /// Touch-ID-locked folder dirPaths (source of truth; persisted via LockedFolderStore).
+    var lockedFolders: [String] = []
+    /// True once the user has passed Touch ID this session (locked folders then appear everywhere).
+    var lockedRevealed = false
     /// Folder view: include photos from every descendant folder (the whole subtree), not just the
     /// selected folder.
     var foldersRecursive: Bool = UserDefaults.standard.bool(forKey: "foldersRecursive") {
@@ -1661,6 +1668,15 @@ final class AppState {
             // auto-scan connected drives so badges + status reflect reality without a
             // manual Check. Re-scan on any volume mount/unmount too.
             reloadCanonicalPresence()
+            // Load locked-folder state: persist set, apply to catalog, start locked (always re-lock on open).
+            if let root = library?.vaults.first?.rootURL {
+                lockedFolders = LockedFolderStore.load(libraryRoot: root)
+                try? library?.catalog.applyLockedFolders(lockedFolders)
+            } else {
+                lockedFolders = []
+            }
+            library?.catalog.revealLocked = false
+            lockedRevealed = false
             if finderTagSyncEnabled { syncFinderTagsNow() }   // initial Finder-tag reconcile pass
             deviceWatcher.onVolumesChanged = { [weak self] in
                 Task { @MainActor in
@@ -1715,6 +1731,8 @@ final class AppState {
         openedPerson = nil
         viewerItems = []
         expandedFolders = []
+        lockedFolders = []
+        lockedRevealed = false
 
         // MUST-FIX: clear DeviceWatcher closures that close over the old library.
         deviceWatcher.knownVaultIDs = { [] }
@@ -1865,6 +1883,58 @@ final class AppState {
         case "ocr":     return "text"
         default:        return "photos"
         }
+    }
+
+    // MARK: — Locked Folder Actions
+
+    func isFolderLocked(_ dirPath: String) -> Bool { lockedFolders.contains(dirPath) }
+
+    /// Add a folder to the locked set. No Touch ID needed to ADD a lock.
+    func lockFolder(_ dirPath: String) {
+        guard !lockedFolders.contains(dirPath),
+              let root = library?.vaults.first?.rootURL else { return }
+        lockedFolders.append(dirPath)
+        try? LockedFolderStore.save(lockedFolders, libraryRoot: root)
+        try? library?.catalog.applyLockedFolders(lockedFolders)
+        refreshAfterLockChange()
+    }
+
+    /// Remove a folder from the locked set — requires the session to be revealed (you must be
+    /// authenticated to manage locks). If not revealed, trigger reveal first.
+    func unlockFolder(_ dirPath: String) {
+        guard lockedRevealed else {
+            Task { if await revealLockedContent() { unlockFolder(dirPath) } }
+            return
+        }
+        guard let root = library?.vaults.first?.rootURL else { return }
+        lockedFolders.removeAll { $0 == dirPath }
+        try? LockedFolderStore.save(lockedFolders, libraryRoot: root)
+        try? library?.catalog.applyLockedFolders(lockedFolders)
+        refreshAfterLockChange()
+    }
+
+    /// Touch ID → reveal locked content for the session. Returns whether it succeeded.
+    @discardableResult
+    func revealLockedContent() async -> Bool {
+        guard await BiometricGate.authenticate(reason: "Show your hidden folders") else { return false }
+        library?.catalog.revealLocked = true
+        lockedRevealed = true
+        refreshAfterLockChange()
+        return true
+    }
+
+    /// Re-hide locked content.
+    func relock() {
+        library?.catalog.revealLocked = false
+        lockedRevealed = false
+        refreshAfterLockChange()
+    }
+
+    /// Refresh every browse surface after the locked set / reveal state changes.
+    private func refreshAfterLockChange() {
+        try? refreshQueries()   // timeline / folders / bin
+        loadPeople()            // faces (catalog face queries also honour the locked gate)
+        refreshToken += 1       // nudge map markers, search results, inspector, dependent views
     }
 
     func refreshQueries() throws {
