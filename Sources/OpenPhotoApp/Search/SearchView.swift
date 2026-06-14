@@ -8,25 +8,32 @@ struct SearchView: View {
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
 
     var body: some View {
-        if case .unavailable = (state.mlStatus[.semanticSearch] ?? .unknown) {
-            ContentUnavailableView {
-                Label("Semantic search unavailable", systemImage: "exclamationmark.triangle.fill")
-            } description: {
-                Text("The semantic-search model couldn't be loaded on this Mac. Keyword and filter search still work.")
-            }
-        } else {
-            VStack(spacing: 0) {
-                toolbar
-                Divider().overlay(Theme.hairline)
-                if state.searchMode == .pro {
-                    ProFilterBar(state: state)
-                } else {
-                    SimpleFilterBar(state: state)
-                    if state.proOnlyFilterCount > 0 { proFiltersHint }
+        VStack(spacing: 0) {
+            if case .unavailable = (state.mlStatus[.semanticSearch] ?? .unknown) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text("Semantic (text-description) search is unavailable on this Mac — keyword and filters still work.")
+                        .fontWeight(.semibold)
+                    Spacer(minLength: 0)
                 }
-                Divider().overlay(Theme.hairline)
-                resultGrid
+                .help(state.mlUnavailable.first(where: { $0.capability == .semanticSearch })?.reason ?? "")
+                .font(.callout)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.92))
             }
+            toolbar
+            Divider().overlay(Theme.hairline)
+            if state.searchMode == .pro {
+                ProFilterBar(state: state)
+            } else {
+                SimpleFilterBar(state: state)
+                if state.proOnlyFilterCount > 0 { proFiltersHint }
+            }
+            Divider().overlay(Theme.hairline)
+            resultGrid
         }
     }
 
