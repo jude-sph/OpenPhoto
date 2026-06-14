@@ -91,14 +91,8 @@ public final class TakeoutSource: ImportSource, @unchecked Sendable {
     }
 
     public func thumbnail(_ item: ImportItem, maxPixel: Int) async -> CGImage? {
-        let url = rootURL.appendingPathComponent(item.id)
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let opts: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+        await ImportThumbnail.make(url: rootURL.appendingPathComponent(item.id),
+                                   kind: item.kind, maxPixel: maxPixel)
     }
 
     // MARK: helpers

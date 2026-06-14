@@ -94,13 +94,8 @@ public final class XMPExportSource: ImportSource, @unchecked Sendable {
     }
 
     public func thumbnail(_ item: ImportItem, maxPixel: Int) async -> CGImage? {
-        let url = rootURL.appendingPathComponent(item.id)
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCreateThumbnailAtIndex(src, 0, [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-        ] as CFDictionary)
+        await ImportThumbnail.make(url: rootURL.appendingPathComponent(item.id),
+                                   kind: item.kind, maxPixel: maxPixel)
     }
 
     // MARK: helpers

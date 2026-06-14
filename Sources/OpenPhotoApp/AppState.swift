@@ -277,7 +277,7 @@ final class AppState {
     func tagPerson(_ personID: Int64, inPhotos hashes: [String]) {
         guard let lib = library, !hashes.isEmpty else { return }
         Task.detached(priority: .userInitiated) { [weak self] in
-            for h in hashes { try? lib.catalog.addManualPersonTag(hash: h, personID: personID) }
+            for h in hashes { _ = try? lib.catalog.addManualPersonTag(hash: h, personID: personID) }
             self?.writeSidecarRegions(forPersonID: personID, lib: lib)
             await MainActor.run { [weak self] in
                 self?.facesDirty = true; self?.loadPeople(); self?.refreshToken &+= 1
@@ -291,7 +291,7 @@ final class AppState {
         guard let lib = library, !trimmed.isEmpty, !hashes.isEmpty else { return }
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let pid = try? lib.catalog.createPerson(name: trimmed) else { return }
-            for h in hashes { try? lib.catalog.addManualPersonTag(hash: h, personID: pid) }
+            for h in hashes { _ = try? lib.catalog.addManualPersonTag(hash: h, personID: pid) }
             self?.writeSidecarRegions(forPersonID: pid, lib: lib)
             await MainActor.run { [weak self] in
                 self?.facesDirty = true; self?.loadPeople(); self?.refreshToken &+= 1
