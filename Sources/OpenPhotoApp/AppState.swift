@@ -77,6 +77,9 @@ final class AppState {
     var scanProgress: Scanner.Progress?
     /// Background OCR/derivation progress (done, total) while the runner is active; nil when idle.
     var derivationProgress: (done: Int, total: Int)?
+    /// Human-readable name of the analysis stage currently running ("faces", "text", …) — the
+    /// sidebar shows it so the user knows what the on-device analysis is doing right now.
+    var derivationStageName: String?
     var scanning = false
     var refreshToken = 0
     /// Bumped after a per-photo move so the folder grid clears its (now-stale) selection.
@@ -1783,8 +1786,10 @@ final class AppState {
         // which has no Neural Engine), while capping in-flight decodes so peak memory stays bounded —
         // indexing has OOM'd before. The heavy stages (faces/embed/OCR) already wrap their decode in
         // autorelease pools; we additionally limit how many run at once. Conservative cap on purpose.
-        // Bounded-concurrency driver (`boundedDrain`, unit-tested in BoundedDrainTests).
-        let maxConcurrent = max(2, min(ProcessInfo.processInfo.activeProcessorCount - 2, 4))
+        // Bounded-concurrency driver (`boundedDrain`, unit-tested in BoundedDrainTests). The per-stage
+        // decoders are now autorelease-pooled, so memory stays bounded (~250 MB/slot); cap at 8
+        // (≈ physical cores on a hyperthreaded i9, where activeProcessorCount reports the 16 logical).
+        let maxConcurrent = max(2, min(ProcessInfo.processInfo.activeProcessorCount - 2, 8))
         for stage in derivationStages {
             if Task.isCancelled { break }
             // If the stage's backing resources (e.g. the embed model package) are absent on this
@@ -1796,6 +1801,7 @@ final class AppState {
             let catalog = lib.catalog
             let stageID = stage.id
             let needsFile = stage.needsFile
+            derivationStageName = Self.analysisActivity(forStageID: stage.id)
             derivationProgress = combinedProgress()
             var index = 0, completed = 0
             await boundedDrain(limit: maxConcurrent, next: {
@@ -1827,6 +1833,7 @@ final class AppState {
             derivationProgress = combinedProgress()
         }
         derivationProgress = nil
+        derivationStageName = nil
         semanticIndexDirty = true   // embeddings may have grown → refresh the in-memory index
         geocodeDirty = true         // geocoded places may have grown → inspector picks up new rows
         facesDirty = true
@@ -1845,6 +1852,19 @@ final class AppState {
             }
         }
         return total > 0 ? (done, total) : nil
+    }
+
+    /// Friendly name for the analysis stage currently draining, shown in the sidebar so the user
+    /// can see what the on-device analysis is doing (faces, then search, …).
+    private static func analysisActivity(forStageID id: String) -> String {
+        switch id {
+        case "faces":   return "faces"
+        case "embed":   return "search"
+        case "geocode": return "places"
+        case "phash":   return "duplicates"
+        case "ocr":     return "text"
+        default:        return "photos"
+        }
     }
 
     func refreshQueries() throws {

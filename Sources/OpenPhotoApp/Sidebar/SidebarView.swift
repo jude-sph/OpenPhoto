@@ -111,7 +111,8 @@ struct SidebarView: View {
                 ActivityIndicatorView(progress: p)
             }
             if let d = state.derivationProgress, d.done < d.total {
-                Text("Analyzing\u{2026} \(Int(Double(d.done) / Double(max(d.total, 1)) * 100))%")
+                let pct = Int(Double(d.done) / Double(max(d.total, 1)) * 100)
+                Text(state.derivationStageName.map { "Analyzing \($0)\u{2026} \(pct)%" } ?? "Analyzing\u{2026} \(pct)%")
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(Theme.textFaint)
                     .padding(.horizontal, 18).padding(.bottom, 4)
