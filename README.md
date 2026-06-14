@@ -17,7 +17,7 @@ See `docs/` for the designs and hardware-spike findings.
 
 ## Build & run
 
-Requires macOS 15+ and Command Line Tools (no Xcode needed).
+Requires macOS 15 (Sequoia) or later, on Apple Silicon or Intel Macs (universal binary). Command Line Tools only — no Xcode needed.
 
 ```bash
 swift test                 # run the test suite

@@ -153,6 +153,27 @@ The script does the following in order:
 6. **Creates a GitHub Release** (`gh release create`) named `v<VERSION>`, uploading both the `.zip` and the `.dmg` as release assets.
 7. **Publishes `appcast.xml`** to the `gh-pages` branch via a temporary `git worktree`, then pushes it to `origin`. This is the file that running apps download to check for updates.
 
+### Universal binary (Intel + Apple Silicon)
+
+`make-app.sh` produces a universal (arm64 + x86_64) binary by building each architecture separately
+and merging them with `lipo` — this works with the Command Line Tools alone (the combined
+`swift build --arch arm64 --arch x86_64` would require a full Xcode install for `xcbuild`):
+
+    swift build -c release --arch arm64
+    swift build -c release --arch x86_64
+    lipo -create .build/arm64-apple-macosx/release/OpenPhotoApp \
+                 .build/x86_64-apple-macosx/release/OpenPhotoApp -o <bundle>/Contents/MacOS/OpenPhoto
+
+The script refuses to package unless the result is universal:
+
+    lipo -archs build/OpenPhoto.app/Contents/MacOS/OpenPhoto   # → x86_64 arm64
+
+Deployment floor is macOS 15 (`LSMinimumSystemVersion` 15.0 + `Package.swift` `.macOS(.v15)`). On
+Intel there is no Neural Engine; the CoreML loaders fall back `.all` → `.cpuAndGPU` → `.cpuOnly`
+automatically (`MLLoader`) and surface a loud in-app banner if a model still can't load. Embedding
+storage uses a portable `Float16Codec` (Accelerate vImage) rather than the arm64-only `Float16(_:)`
+conversions, so the catalog code compiles and runs on x86_64.
+
 ### 3. Verify the live appcast
 
 GitHub Pages takes up to a minute to reflect a push. Then:
