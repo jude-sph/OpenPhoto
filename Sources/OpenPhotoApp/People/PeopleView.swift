@@ -10,20 +10,28 @@ struct PeopleView: View {
     @State private var selectedCluster: FaceCluster?
 
     var body: some View {
-        if let cluster = selectedCluster {
-            ClusterDetailView(state: state, cluster: cluster,
-                              onBack: { selectedCluster = nil })
-        } else if state.browsingOtherFaces {
-            OtherFacesDetailView(state: state, onBack: { state.browsingOtherFaces = false })
-        } else if let person = state.openedPerson {
-            // Person-detail navigation lives on AppState so the inspector can deep-link here.
-            PersonDetailView(state: state, person: person,
-                             onBack: { state.openedPerson = nil })
+        if case .unavailable = (state.mlStatus[.faceRecognition] ?? .unknown) {
+            ContentUnavailableView {
+                Label("Face recognition unavailable", systemImage: "exclamationmark.triangle.fill")
+            } description: {
+                Text("The face model couldn't be loaded on this Mac, so people can't be detected or grouped here.")
+            }
         } else {
-            PeopleOverviewView(state: state,
-                               onSelectPerson: { state.openedPerson = $0 },
-                               onOpenCluster: { selectedCluster = $0 },
-                               onBrowseOther: { state.browsingOtherFaces = true })
+            if let cluster = selectedCluster {
+                ClusterDetailView(state: state, cluster: cluster,
+                                  onBack: { selectedCluster = nil })
+            } else if state.browsingOtherFaces {
+                OtherFacesDetailView(state: state, onBack: { state.browsingOtherFaces = false })
+            } else if let person = state.openedPerson {
+                // Person-detail navigation lives on AppState so the inspector can deep-link here.
+                PersonDetailView(state: state, person: person,
+                                 onBack: { state.openedPerson = nil })
+            } else {
+                PeopleOverviewView(state: state,
+                                   onSelectPerson: { state.openedPerson = $0 },
+                                   onOpenCluster: { selectedCluster = $0 },
+                                   onBrowseOther: { state.browsingOtherFaces = true })
+            }
         }
     }
 }

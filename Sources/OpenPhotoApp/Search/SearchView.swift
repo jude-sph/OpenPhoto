@@ -8,17 +8,25 @@ struct SearchView: View {
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-            Divider().overlay(Theme.hairline)
-            if state.searchMode == .pro {
-                ProFilterBar(state: state)
-            } else {
-                SimpleFilterBar(state: state)
-                if state.proOnlyFilterCount > 0 { proFiltersHint }
+        if case .unavailable = (state.mlStatus[.semanticSearch] ?? .unknown) {
+            ContentUnavailableView {
+                Label("Semantic search unavailable", systemImage: "exclamationmark.triangle.fill")
+            } description: {
+                Text("The semantic-search model couldn't be loaded on this Mac. Keyword and filter search still work.")
             }
-            Divider().overlay(Theme.hairline)
-            resultGrid
+        } else {
+            VStack(spacing: 0) {
+                toolbar
+                Divider().overlay(Theme.hairline)
+                if state.searchMode == .pro {
+                    ProFilterBar(state: state)
+                } else {
+                    SimpleFilterBar(state: state)
+                    if state.proOnlyFilterCount > 0 { proFiltersHint }
+                }
+                Divider().overlay(Theme.hairline)
+                resultGrid
+            }
         }
     }
 

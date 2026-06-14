@@ -107,6 +107,8 @@ struct RootView: View {
             // is open (no strip there — the lights sit over the viewer's top bar).
             .background(VerticalTrafficLights(vertical: !state.sidebarShown && state.openedItem == nil))
             .background(TitleBarDoubleClickZoom())
+            .overlay(alignment: .top) { MLUnavailableBanner(state: state) }
+            .animation(.easeOut(duration: 0.2), value: state.mlUnavailable.count)
             // Hand the window's native UndoManager to AppState (⌘Z registrations — see
             // AppState+Undo.swift). The Bool task id re-fires when nil-ness flips, which is
             // the only transition that matters (the manager instance is stable per window).
