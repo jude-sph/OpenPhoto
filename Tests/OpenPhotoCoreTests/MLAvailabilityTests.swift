@@ -50,3 +50,9 @@ import Foundation
         from: [MLModelKey.mobileclipImage: .available,
                MLModelKey.mobileclipText: .available]) == .available)
 }
+
+@Test func semanticSearchAbsentWhenOneModelAbsentRestAvailable() {
+    #expect(mlCapabilityStatus(.semanticSearch,
+        from: [MLModelKey.mobileclipImage: .absent,
+               MLModelKey.mobileclipText: .available]) == .absent)
+}

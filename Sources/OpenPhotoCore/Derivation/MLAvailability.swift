@@ -1,7 +1,7 @@
 import Foundation
 import CoreML
 
-/// Stable keys for the three on-device CoreML models, used by the availability registry.
+/// Stable keys for the on-device CoreML models, used by the availability registry.
 public enum MLModelKey {
     public static let adaface = "adaface_ir101"
     public static let mobileclipImage = "mobileclip_s2_image"
@@ -39,22 +39,21 @@ public final class MLAvailability: @unchecked Sendable {
     /// Record `status` for `model`. Returns true (and posts `didChange`) only if it changed.
     @discardableResult
     public func report(model: String, _ status: MLStatus) -> Bool {
-        lock.lock()
-        let changed = byModel[model] != status
-        byModel[model] = status
-        lock.unlock()
+        let changed = lock.withLock {
+            let c = byModel[model] != status
+            byModel[model] = status
+            return c
+        }
         if changed { NotificationCenter.default.post(name: Self.didChange, object: nil) }
         return changed
     }
 
     public func status(model: String) -> MLStatus {
-        lock.lock(); defer { lock.unlock() }
-        return byModel[model] ?? .unknown
+        lock.withLock { byModel[model] ?? .unknown }
     }
 
     public func snapshot() -> [String: MLStatus] {
-        lock.lock(); defer { lock.unlock() }
-        return byModel
+        lock.withLock { byModel }
     }
 }
 
@@ -80,7 +79,7 @@ public func mlCapabilityStatus(_ capability: MLCapability,
 enum MLLoader {
     static func load(compiledModelAt url: URL) throws -> MLModel {
         let ladder: [MLComputeUnits] = [.all, .cpuAndGPU, .cpuOnly]
-        var lastError: Swift.Error?
+        var lastError: Error?
         for units in ladder {
             let config = MLModelConfiguration()
             config.computeUnits = units
