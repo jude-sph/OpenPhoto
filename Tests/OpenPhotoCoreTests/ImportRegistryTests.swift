@@ -58,3 +58,35 @@ private func entryHashed(_ name: String, sourceKey: String, hash: String) -> Imp
     let reg2 = ImportRegistry(vault: vault); try reg2.load()
     #expect(reg2.deviceKeys(forHash: h) == ["iphone-A", "sdcard-B"])
 }
+
+@Test func appendBatchWritesAllAndDedupesWithinBatch() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vault = try Vault.openOrCreate(at: try t.sub("Pictures"), role: .local)
+    let reg = ImportRegistry(vault: vault)
+    let a = entry("IMG_1.HEIC", taken: "2026-06-01T10:00:00.000Z")
+    let b = entry("IMG_2.HEIC", taken: "2026-06-01T11:00:00.000Z")
+    try reg.appendBatch([a, b, a])              // 'a' duplicated within the batch
+    let reg2 = ImportRegistry(vault: vault); try reg2.load()
+    #expect(reg2.entries(forSourceKey: "iphone-1").count == 2)   // deduped to a + b
+}
+
+@Test func appendBatchSkipsKeysAlreadyPresent() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vault = try Vault.openOrCreate(at: try t.sub("Pictures"), role: .local)
+    let reg = ImportRegistry(vault: vault)
+    let a = entry("IMG_1.HEIC", taken: "2026-06-01T10:00:00.000Z")
+    let b = entry("IMG_2.HEIC", taken: "2026-06-01T11:00:00.000Z")
+    try reg.append(a)
+    try reg.appendBatch([a, b])                 // 'a' already present, only 'b' is new
+    let reg2 = ImportRegistry(vault: vault); try reg2.load()
+    #expect(reg2.entries(forSourceKey: "iphone-1").count == 2)
+}
+
+@Test func appendBatchEmptyIsNoOp() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vault = try Vault.openOrCreate(at: try t.sub("Pictures"), role: .local)
+    let reg = ImportRegistry(vault: vault)
+    try reg.appendBatch([])                      // must not throw / must not create garbage
+    let reg2 = ImportRegistry(vault: vault); try reg2.load()
+    #expect(reg2.entries(forSourceKey: "iphone-1").isEmpty)
+}

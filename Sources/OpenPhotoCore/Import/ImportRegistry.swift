@@ -77,9 +77,31 @@ public final class ImportRegistry: @unchecked Sendable {
     /// Append (idempotent by key) and rewrite atomically.
     public func append(_ entry: Entry) throws {
         lock.lock(); defer { lock.unlock() }
-        guard byKey[entry.key] == nil else { return }
+        guard insertLocked(entry) else { return }
+        try rewriteLocked()
+    }
+
+    /// Append many entries (idempotent by key) in ONE lock acquisition + ONE atomic rewrite.
+    /// Used by parallel import so N records don't trigger N full-file rewrites (O(n²)).
+    public func appendBatch(_ entries: [Entry]) throws {
+        guard !entries.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        var changed = false
+        for entry in entries where insertLocked(entry) { changed = true }
+        guard changed else { return }
+        try rewriteLocked()
+    }
+
+    /// Caller must hold `lock`. Inserts one entry; returns false if its key was already present.
+    private func insertLocked(_ entry: Entry) -> Bool {
+        guard byKey[entry.key] == nil else { return false }
         byKey[entry.key] = entry
         byHash[entry.hash, default: []].insert(entry.sourceKey)
+        return true
+    }
+
+    /// Caller must hold `lock`. Rewrites imports.jsonl atomically from the in-memory map.
+    private func rewriteLocked() throws {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         var out = Data()
