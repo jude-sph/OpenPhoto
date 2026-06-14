@@ -220,6 +220,15 @@ public final class Catalog: Sendable {
                 t.column("value", .text).notNull()
             }
         }
+        migrator.registerMigration("v15") { db in
+            // User-hidden faces: a reversible "ignore" for the Other-faces bucket. Hidden auto faces
+            // are pulled from the bucket and excluded from suggestions, but never deleted — a
+            // "Show hidden" toggle restores them. Catalog-only (rebuildable); a full face
+            // re-derivation (Rescan Faces) resets it.
+            try db.alter(table: "faces") { t in
+                t.add(column: "hidden", .integer).notNull().defaults(to: 0)
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 

@@ -130,11 +130,12 @@ extension Catalog {
 
     /// (id, vector) for every detected-but-unassigned auto face that is CLUSTERABLE — current-model
     /// dimension and quality-gated in. Stale v1 vectors (dim ≠ 512) and gated-out faces are excluded.
+    /// Hidden faces are also excluded (they've been ignored by the user).
     public func unassignedFacesWithEmbeddings() throws -> [(id: Int64, vector: [Float])] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT id, dim, embedding FROM faces
-                WHERE personID IS NULL AND source = 'auto' AND dim = \(FaceEmbedder.dimension) AND quality > 0
+                WHERE personID IS NULL AND source = 'auto' AND dim = \(FaceEmbedder.dimension) AND quality > 0 AND hidden = 0
                 """).map { row -> (id: Int64, vector: [Float]) in
                     let id: Int64 = row["id"]
                     let dim: Int = row["dim"]
@@ -147,12 +148,33 @@ extension Catalog {
     /// Every unassigned AUTO face id (ANY quality), best-quality first. The Other-faces bucket uses
     /// this so gated faces (small / blurry / profile — stored with an empty embedding and quality 0,
     /// hence excluded from clustering) are still reachable for manual assignment, instead of invisible.
+    /// Hidden faces are excluded — use `hiddenAutoFaceIDs()` to surface them in a "Show hidden" view.
     public func unassignedAutoFaceIDs() throws -> [Int64] {
         try dbQueue.read { db in
             try Int64.fetchAll(db, sql: """
-                SELECT id FROM faces WHERE personID IS NULL AND source = 'auto'
+                SELECT id FROM faces WHERE personID IS NULL AND source = 'auto' AND hidden = 0
                 ORDER BY quality DESC, id
                 """)
+        }
+    }
+
+    /// Auto faces the user has hidden from the Other bucket (reversible). Drives the "Show hidden" view.
+    public func hiddenAutoFaceIDs() throws -> [Int64] {
+        try dbQueue.read { db in
+            try Int64.fetchAll(db, sql: """
+                SELECT id FROM faces WHERE personID IS NULL AND source = 'auto' AND hidden = 1
+                ORDER BY quality DESC, id
+                """)
+        }
+    }
+
+    /// Hide or restore (un-hide) the given faces — a reversible "ignore". No-op for an empty list.
+    public func setFacesHidden(_ ids: [Int64], hidden: Bool) throws {
+        guard !ids.isEmpty else { return }
+        let marks = databaseQuestionMarks(count: ids.count)
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE faces SET hidden = ? WHERE id IN (\(marks))",
+                           arguments: StatementArguments([hidden ? 1 : 0] + ids))
         }
     }
 
