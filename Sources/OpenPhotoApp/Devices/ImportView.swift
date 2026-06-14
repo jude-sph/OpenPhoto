@@ -59,6 +59,13 @@ struct ImportView: View {
         HStack(spacing: 10) {
             Image(systemName: device.symbol)
             Text(device.name).font(.system(size: 15, weight: .semibold))
+            // Recognized-type indicator so the user can confirm OpenPhoto identified the source right.
+            Text(device.recognizedKind)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(Theme.accentDim, in: Capsule())
+                .help("OpenPhoto recognized this import source as: \(device.recognizedKind)")
             if case .ready = phase {
                 Text("\(items.count) items · \(alreadyImportedCount) already imported")
                     .font(.system(size: 12).monospacedDigit())
