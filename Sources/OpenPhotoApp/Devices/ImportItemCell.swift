@@ -32,11 +32,6 @@ struct ImportTile: View {
         ZStack {
             kindBadge.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             statusBadge.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            if inLibrary && !importedThisSession {
-                badgeIcon("externaldrive.fill", size: 10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                    .help("Already in your OpenPhoto library")
-            }
         }
     }
 
@@ -51,9 +46,10 @@ struct ImportTile: View {
     @ViewBuilder private var statusBadge: some View {
         if importedThisSession { statusText("Imported \u{2713}", color: Theme.green) }
         else if sentFromHere { statusText("Sent from here", color: Theme.blue) }
-        // The catalog-wide drive glyph supersedes the per-source "Already in library" text; show the
-        // text only for the rare registry-knows-it-but-not-in-catalog case (e.g. since binned).
-        else if alreadyImported && !inLibrary { statusText("Already in library", color: Theme.textFaint) }
+        // Already anywhere in the catalog → one clear green pill (replaces the old drive glyph).
+        else if inLibrary { statusPill("\u{2713} In library", fill: Theme.green) }
+        // Rare: registry knows it but it's not in the catalog (e.g. since binned) — different state.
+        else if alreadyImported { statusText("Already in library", color: Theme.textFaint) }
     }
 
     private func badgeIcon(_ symbol: String, size: CGFloat) -> some View {
@@ -67,5 +63,12 @@ struct ImportTile: View {
             .padding(.horizontal, 7).padding(.vertical, 3)
             .background(.black.opacity(0.55), in: Capsule())
             .foregroundStyle(color).padding(6)
+    }
+
+    private func statusPill(_ text: String, fill: Color) -> some View {
+        Text(text).font(.system(size: 10, weight: .semibold))
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(fill, in: Capsule())
+            .foregroundStyle(.white).padding(6)
     }
 }
