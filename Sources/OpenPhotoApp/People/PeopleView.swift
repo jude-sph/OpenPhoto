@@ -95,6 +95,14 @@ struct PeopleOverviewView: View {
                     .foregroundStyle(Theme.textDim)
             }
             Spacer()
+            // Fast re-match against the people you've built up — instant (no re-derivation, unlike
+            // "Rescan Faces"). Use this to surface more "might be <name>" suggestions.
+            if !mergeMode, !state.people.isEmpty, !state.otherFaceIDs.isEmpty {
+                Button("Find more suggestions") { state.refreshSuggestions() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+            }
             if mergeMode {
                 Text("Pick two people")
                     .font(.system(size: 12)).foregroundStyle(Theme.textFaint)

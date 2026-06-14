@@ -263,6 +263,52 @@ final class AppState {
         }
     }
 
+    /// FAST re-match used after assigning faces (confirming suggestions / adding to a person). Only
+    /// re-runs the cheap centroid match — NOT the O(n²) DBSCAN clustering, and NOT face re-derivation —
+    /// so confirming a suggestion immediately surfaces the next batch the sharpened centroid now
+    /// matches, with no "Rescan Faces" needed. Existing clusters are pruned of now-assigned faces.
+    func refreshSuggestions() {
+        guard let lib = library else { return }
+        let matchThreshold = faceMatchThreshold, minPts = faceClusterMinPts
+        let existingClusters = suggestedClusters
+        Task {
+            let result: (people: [PersonRow], clusters: [FaceCluster],
+                         additions: [Int64: [Int64]], other: [Int64]) =
+                await Task.detached(priority: .userInitiated) {
+                    let ppl = (try? lib.catalog.people()) ?? []
+                    let unassigned = (try? lib.catalog.unassignedFacesWithEmbeddings()) ?? []
+                    let unassignedIDs = Set(unassigned.map(\.id))
+
+                    var byPerson: [Int64: [[Float]]] = [:]
+                    for a in (try? lib.catalog.assignedFacesWithEmbeddings()) ?? [] {
+                        byPerson[a.personID, default: []].append(a.vector)
+                    }
+                    let centroids = byPerson.compactMap { pid, vecs in
+                        FaceMatcher.centroid(vecs).map { (pid, $0) }
+                    }
+                    let (matched, _) = FaceMatcher.match(
+                        faces: unassigned, centroids: centroids, threshold: matchThreshold)
+                    let additions = Dictionary(uniqueKeysWithValues: matched.map { ($0.personID, $0.faceIDs) })
+                    let matchedIDs = Set(matched.flatMap { $0.faceIDs })
+
+                    // Keep the prior clusters but drop faces now assigned or matched; cheap, no re-DBSCAN.
+                    let clusters: [FaceCluster] = existingClusters.compactMap { c in
+                        let ids = c.faceIDs.filter { unassignedIDs.contains($0) && !matchedIDs.contains($0) }
+                        guard ids.count >= minPts else { return nil }
+                        return FaceCluster(faceIDs: ids, representativeFaceID: ids.first ?? 0, count: ids.count)
+                    }
+                    let clusteredIDs = Set(clusters.flatMap { $0.faceIDs })
+                    let allUnassigned = (try? lib.catalog.unassignedAutoFaceIDs()) ?? []
+                    let other = allUnassigned.filter { !matchedIDs.contains($0) && !clusteredIDs.contains($0) }
+                    return (ppl, clusters, additions, other)
+                }.value
+            self.people = result.people
+            self.suggestedClusters = result.clusters
+            self.suggestedAdditions = result.additions
+            self.otherFaceIDs = result.other
+        }
+    }
+
     /// Dismiss a person's suggested additions (in-session): the faces drop to the Other-faces bucket.
     /// Not persisted — a later People reload may re-suggest them once the centroid sharpens (by design).
     func dismissSuggestions(forPerson personID: Int64) {
@@ -280,7 +326,7 @@ final class AppState {
             for h in hashes { _ = try? lib.catalog.addManualPersonTag(hash: h, personID: personID) }
             self?.writeSidecarRegions(forPersonID: personID, lib: lib)
             await MainActor.run { [weak self] in
-                self?.facesDirty = true; self?.loadPeople(); self?.refreshToken &+= 1
+                self?.facesDirty = true; self?.refreshSuggestions(); self?.refreshToken &+= 1
             }
         }
     }
@@ -294,7 +340,7 @@ final class AppState {
             for h in hashes { _ = try? lib.catalog.addManualPersonTag(hash: h, personID: pid) }
             self?.writeSidecarRegions(forPersonID: pid, lib: lib)
             await MainActor.run { [weak self] in
-                self?.facesDirty = true; self?.loadPeople(); self?.refreshToken &+= 1
+                self?.facesDirty = true; self?.refreshSuggestions(); self?.refreshToken &+= 1
             }
         }
     }
@@ -418,7 +464,7 @@ final class AppState {
             } catch { NSLog("nameCluster failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
-                self?.loadPeople()
+                self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
             }
         }
     }
@@ -434,7 +480,7 @@ final class AppState {
             } catch { NSLog("mergePeople failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
-                self?.loadPeople()
+                self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
             }
         }
     }
@@ -453,7 +499,7 @@ final class AppState {
             } catch { NSLog("splitFaces failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
-                self?.loadPeople()
+                self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
             }
         }
     }
@@ -470,7 +516,7 @@ final class AppState {
             } catch { NSLog("renamePerson failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
-                self?.loadPeople()
+                self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
             }
         }
     }
@@ -488,7 +534,7 @@ final class AppState {
             } catch { NSLog("moveFaces failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
-                self?.loadPeople()
+                self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
             }
         }
     }
@@ -508,7 +554,7 @@ final class AppState {
             } catch { NSLog("reassignFace failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
-                self?.loadPeople()
+                self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
             }
         }
     }
@@ -541,7 +587,7 @@ final class AppState {
             } catch { NSLog("removePerson failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
-                self?.loadPeople()
+                self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
             }
         }
     }
