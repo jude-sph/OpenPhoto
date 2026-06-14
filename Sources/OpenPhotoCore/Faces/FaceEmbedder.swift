@@ -9,6 +9,7 @@ import CoreVideo
 /// The model package ships as a target resource and is compiled to `.mlmodelc` on first use, then
 /// cached in the user Caches dir keyed by `modelVersion` so subsequent launches skip compilation.
 /// `prediction` is thread-safe once the model is loaded; only the lazy load is locked.
+/// The compiled model is loaded via `MLLoader`, which falls back `.all` → `.cpuAndGPU` → `.cpuOnly` so Intel Macs without a Neural Engine still load it.
 public final class FaceEmbedder: @unchecked Sendable {
     public static let shared = FaceEmbedder()
 
@@ -21,6 +22,7 @@ public final class FaceEmbedder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var model: MLModel?
+    private var triedLoad = false
 
     private init() {}
 
@@ -50,7 +52,8 @@ public final class FaceEmbedder: @unchecked Sendable {
 
     private func loadedModel() -> MLModel? {
         lock.lock(); defer { lock.unlock() }
-        if let model { return model }
+        if triedLoad { return model }
+        triedLoad = true
         do {
             let url = try compiledModelURL()
             let m = try MLLoader.load(compiledModelAt: url)

@@ -74,7 +74,8 @@ import Foundation
         .appendingPathComponent("ml-broken-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: tmp) }
-    // A present-but-invalid model package: compileModel will throw → loud .unavailable.
+    // A present-but-invalid model package: a plain file where a .mlpackage dir is expected makes
+    // MLModel.compileModel throw → loud .unavailable (distinct from the .absent file-missing case).
     try Data("not a real model".utf8)
         .write(to: tmp.appendingPathComponent("mobileclip_s2_image.mlpackage"))
 

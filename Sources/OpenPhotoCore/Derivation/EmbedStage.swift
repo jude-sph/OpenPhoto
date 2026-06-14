@@ -7,7 +7,7 @@ import ImageIO
 ///
 /// Produces L2-normalized 512-d vectors in a shared image/text space, so cosine similarity is a
 /// plain dot product. Both the image and text encoders are loaded **lazily** the first time they're
-/// needed and compiled on demand (`MLModel.compileModel`) with `computeUnits = .all`.
+/// needed and compiled on demand (`MLModel.compileModel`) and loaded via `MLLoader`, which walks the compute-units ladder (`.all` → `.cpuAndGPU` → `.cpuOnly`) so Intel Macs (no Neural Engine) still load.
 ///
 /// Graceful degradation is a hard requirement: if a model `.mlpackage` is absent (e.g. a fresh
 /// checkout without the gitignored `.models/`), or fails to load, the embed methods return `nil`
