@@ -2,24 +2,9 @@ import Foundation
 import GRDB
 
 extension Catalog {
-    /// Pack/unpack L2-normalized vectors as little-endian Float16 (half the footprint; cosine==dot).
-    private static func packFloat16(_ v: [Float]) -> Data {
-        var data = Data(capacity: v.count * 2)
-        for f in v { var h = Float16(f); withUnsafeBytes(of: &h) { data.append(contentsOf: $0) } }
-        return data
-    }
-    private static func unpackFloat16(_ data: Data, dim: Int) -> [Float] {
-        var out = [Float](); out.reserveCapacity(dim)
-        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-            let halves = raw.bindMemory(to: Float16.self)
-            for i in 0..<min(dim, halves.count) { out.append(Float(halves[i])) }
-        }
-        return out
-    }
-
     /// Replace the embedding for an asset (idempotent upsert).
     public func upsertEmbedding(hash: String, model: String, dim: Int, vector: [Float]) throws {
-        let blob = Self.packFloat16(vector)
+        let blob = Float16Codec.pack(vector)
         try dbQueue.write { db in
             try db.execute(sql: """
                 INSERT INTO embeddings (hash, model, dim, vector) VALUES (?, ?, ?, ?)
@@ -35,7 +20,7 @@ extension Catalog {
                 sql: "SELECT model, dim, vector FROM embeddings WHERE hash = ?", arguments: [hash])
             else { return nil }
             let dim: Int = row["dim"]
-            return (row["model"], dim, Self.unpackFloat16(row["vector"], dim: dim))
+            return (row["model"], dim, Float16Codec.unpack(row["vector"], dim: dim))
         }.flatMap { $0 }
     }
 
@@ -49,7 +34,7 @@ extension Catalog {
             try Row.fetchAll(db, sql: "SELECT hash, dim, vector FROM embeddings WHERE model = ?",
                              arguments: [model]).map { row in
                 let dim: Int = row["dim"]
-                return (row["hash"], dim, Self.unpackFloat16(row["vector"], dim: dim))
+                return (row["hash"], dim, Float16Codec.unpack(row["vector"], dim: dim))
             }
         }
     }
@@ -63,7 +48,7 @@ extension Catalog {
                 WHERE e.model = ?
                 """, arguments: [model]).map { row in
                 let dim: Int = row["dim"]
-                return (row["hash"], row["takenAtMs"], Self.unpackFloat16(row["vector"], dim: dim))
+                return (row["hash"], row["takenAtMs"], Float16Codec.unpack(row["vector"], dim: dim))
             }
         }
     }

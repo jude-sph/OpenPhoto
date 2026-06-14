@@ -27,22 +27,6 @@ public struct PersonRow: Sendable, Equatable {
 }
 
 extension Catalog {
-    // MARK: Float16 pack/unpack for face embeddings
-    // (mirrors Catalog+Embeddings.swift's private helpers — kept private here to avoid collision)
-    private static func packF16(_ v: [Float]) -> Data {
-        var data = Data(capacity: v.count * 2)
-        for f in v { var h = Float16(f); withUnsafeBytes(of: &h) { data.append(contentsOf: $0) } }
-        return data
-    }
-    private static func unpackF16(_ data: Data, dim: Int) -> [Float] {
-        var out = [Float](); out.reserveCapacity(dim)
-        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-            let halves = raw.bindMemory(to: Float16.self)
-            for i in 0..<min(dim, halves.count) { out.append(Float(halves[i])) }
-        }
-        return out
-    }
-
     // MARK: CRUD
 
     /// Low-level insert; returns the new ids in order.
@@ -55,7 +39,7 @@ extension Catalog {
                                        personID, confidence, source, quality)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """, arguments: [r.hash, r.rect.minX, r.rect.minY, r.rect.width, r.rect.height,
-                                     Self.packF16(r.embedding), r.embedding.count,
+                                     Float16Codec.pack(r.embedding), r.embedding.count,
                                      r.personID, r.confidence, r.source, r.quality])
                 ids.append(db.lastInsertedRowID)
             }
@@ -89,7 +73,7 @@ extension Catalog {
                         try db.execute(sql: """
                             UPDATE faces SET embedding = ?, dim = ?, quality = ?, confidence = ?
                             WHERE id = ?
-                            """, arguments: [Self.packF16(r.embedding), r.embedding.count,
+                            """, arguments: [Float16Codec.pack(r.embedding), r.embedding.count,
                                              r.quality, r.confidence, match.id])
                     }
                     continue   // never insert an auto duplicate over a named face
@@ -99,7 +83,7 @@ extension Catalog {
                                        personID, confidence, source, quality)
                     VALUES (?,?,?,?,?,?,?,NULL,?,?,?)
                     """, arguments: [hash, r.rect.minX, r.rect.minY, r.rect.width, r.rect.height,
-                                     Self.packF16(r.embedding), r.embedding.count,
+                                     Float16Codec.pack(r.embedding), r.embedding.count,
                                      r.confidence, r.source, r.quality])
             }
         }
@@ -155,7 +139,7 @@ extension Catalog {
                     let id: Int64 = row["id"]
                     let dim: Int = row["dim"]
                     let blob: Data = row["embedding"]
-                    return (id, Self.unpackF16(blob, dim: dim))
+                    return (id, Float16Codec.unpack(blob, dim: dim))
                 }
         }
     }
@@ -184,7 +168,7 @@ extension Catalog {
                     let pid: Int64 = row["personID"]
                     let dim: Int = row["dim"]
                     let blob: Data = row["embedding"]
-                    return (pid, Self.unpackF16(blob, dim: dim))
+                    return (pid, Float16Codec.unpack(blob, dim: dim))
                 }
         }
     }
@@ -320,7 +304,7 @@ extension Catalog {
             hash: row["hash"],
             rect: CGRect(x: row["rectX"] as Double, y: row["rectY"] as Double,
                          width: row["rectW"] as Double, height: row["rectH"] as Double),
-            embedding: unpackF16(blob, dim: dim),
+            embedding: Float16Codec.unpack(blob, dim: dim),
             confidence: Float(row["confidence"] as Double),
             source: row["source"],
             personID: personID,
