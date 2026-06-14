@@ -82,16 +82,20 @@ extension Catalog {
 
     /// Distinct places in the library: a country-level facet per countryCode (city == "") plus a
     /// city-level facet per (countryCode, city), each with its asset count. For the Search picker.
+    /// Locked photos are hidden unless the session is revealed.
     public func distinctPlaces() throws -> [PlaceFacet] {
-        try dbQueue.read { db in
+        let lvc = lockedVisibilityClause(hashColumn: "geocode.hash")
+        return try dbQueue.read { db in
             let byCountry = try Row.fetchAll(db, sql: """
                 SELECT countryCode, country, COUNT(*) AS cnt FROM geocode
-                WHERE countryCode <> '' GROUP BY countryCode ORDER BY country
+                WHERE countryCode <> '' \(lvc)
+                GROUP BY countryCode ORDER BY country
                 """).map { PlaceFacet(countryCode: $0["countryCode"], country: $0["country"] ?? "",
                                       city: "", count: $0["cnt"]) }
             let byCity = try Row.fetchAll(db, sql: """
                 SELECT countryCode, country, city, COUNT(*) AS cnt FROM geocode
-                WHERE city <> '' GROUP BY countryCode, city ORDER BY country, city
+                WHERE city <> '' \(lvc)
+                GROUP BY countryCode, city ORDER BY country, city
                 """).map { PlaceFacet(countryCode: $0["countryCode"], country: $0["country"] ?? "",
                                       city: $0["city"], count: $0["cnt"]) }
             return byCountry + byCity

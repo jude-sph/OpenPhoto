@@ -426,3 +426,176 @@ private func seededLF2() throws -> (TestDirs, Catalog) {
     let results = try cat.searchOCR("secret locked")
     #expect(results.contains(HA), "locked HA OCR text must appear when revealLocked = true")
 }
+
+// MARK: - LF7: leak-audit fixes
+
+/// Seed for LF7 leak-audit tests:
+///  - HA → ONLY in locked /A/photo.jpg (unique camera "LockedCam", tag "secret-tag", GPS London)
+///    and ALSO a second copy at /A/copy.jpg (still locked — same folder).
+///    visibleInstances tests need a second UNLOCKED copy of HA, seeded separately below.
+///  - HC → /B/other.jpg (unlocked, camera "VisibleCam", tag "visible-tag", GPS Paris)
+///
+/// For distinctCameras/Tags/Places tests: HA has NO unlocked instance, so lockedVisibilityClause
+/// must filter it (no non-locked instance EXISTS for HA's hash).
+/// For visibleInstances tests: HA has one locked + one unlocked instance (seeded by seededLF7dup).
+private func seededLF7() throws -> (TestDirs, Catalog) {
+    let t = try TestDirs()
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+
+    // HA: locked-only photo (unique camera, tag, place)
+    let assetA = AssetRecord(hash: HA, kind: "photo", takenAtMs: 2,
+                             pixelWidth: nil, pixelHeight: nil,
+                             latitude: 51.5074, longitude: -0.1278,
+                             cameraModel: "LockedCam", lensModel: nil, durationSeconds: nil,
+                             livePairHash: nil, isLivePairedVideo: false,
+                             favorite: false, rating: 0, caption: nil,
+                             tagsJSON: "[\"secret-tag\"]")
+    // HC: unlocked photo (distinct camera, tag, place)
+    let assetC = AssetRecord(hash: HC, kind: "photo", takenAtMs: 1,
+                             pixelWidth: nil, pixelHeight: nil,
+                             latitude: 48.8566, longitude: 2.3522,
+                             cameraModel: "VisibleCam", lensModel: nil, durationSeconds: nil,
+                             livePairHash: nil, isLivePairedVideo: false,
+                             favorite: false, rating: 0, caption: nil,
+                             tagsJSON: "[\"visible-tag\"]")
+    try cat.upsert(assets: [assetA, assetC])
+    // HA is ONLY in the locked folder /A; HC is in the unlocked /B
+    try cat.replaceInstances(inVault: "mac", with: [
+        inst(HA, "A/photo.jpg"),   // locked-only copy of HA
+        inst(HC, "B/other.jpg"),   // unlocked photo
+    ])
+    // Geocode
+    try cat.upsertGeocode(GeocodeRow(hash: HA, city: "London", region: "England",
+                                     country: "United Kingdom", countryCode: "GB"))
+    try cat.upsertGeocode(GeocodeRow(hash: HC, city: "Paris", region: "Île-de-France",
+                                     country: "France", countryCode: "FR"))
+    // Lock folder A
+    try cat.applyLockedFolders(["A"])
+    return (t, cat)
+}
+
+/// Seed variant where HA exists in BOTH /A (locked) AND /B (unlocked) — for visibleInstances tests.
+private func seededLF7dup() throws -> (TestDirs, Catalog) {
+    let t = try TestDirs()
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    let assetA = AssetRecord(hash: HA, kind: "photo", takenAtMs: 2,
+                             pixelWidth: nil, pixelHeight: nil,
+                             latitude: nil, longitude: nil,
+                             cameraModel: nil, lensModel: nil, durationSeconds: nil,
+                             livePairHash: nil, isLivePairedVideo: false,
+                             favorite: false, rating: 0, caption: nil, tagsJSON: "[]")
+    let assetC = AssetRecord(hash: HC, kind: "photo", takenAtMs: 1,
+                             pixelWidth: nil, pixelHeight: nil,
+                             latitude: nil, longitude: nil,
+                             cameraModel: nil, lensModel: nil, durationSeconds: nil,
+                             livePairHash: nil, isLivePairedVideo: false,
+                             favorite: false, rating: 0, caption: nil, tagsJSON: "[]")
+    try cat.upsert(assets: [assetA, assetC])
+    // HA has one locked copy (/A) AND one unlocked copy (/B)
+    try cat.replaceInstances(inVault: "mac", with: [
+        inst(HA, "A/photo.jpg"),   // will be locked
+        inst(HA, "B/copy.jpg"),    // will remain unlocked
+        inst(HC, "B/other.jpg"),
+    ])
+    try cat.applyLockedFolders(["A"])
+    return (t, cat)
+}
+
+// MARK: visibleInstances(forHash:) — Inspector "Also in N other folders" must not reveal locked paths
+
+@Test func visibleInstancesHidesLockedCopyWhenNotRevealed() throws {
+    // HA has one locked copy (/A) and one unlocked copy (/B).
+    let (t, cat) = try seededLF7dup(); defer { t.cleanup() }
+    cat.revealLocked = false
+
+    let visible = try cat.visibleInstances(forHash: HA)
+    let dirs = visible.map(\.dirPath)
+    #expect(!dirs.contains("A"), "locked /A copy must not appear in visibleInstances when !revealLocked")
+    #expect(dirs.contains("B"), "unlocked /B copy must appear in visibleInstances")
+}
+
+@Test func visibleInstancesShowsAllWhenRevealed() throws {
+    let (t, cat) = try seededLF7dup(); defer { t.cleanup() }
+    cat.revealLocked = true
+
+    let visible = try cat.visibleInstances(forHash: HA)
+    let dirs = visible.map(\.dirPath)
+    #expect(dirs.contains("A"), "/A copy must appear when revealLocked = true")
+    #expect(dirs.contains("B"), "/B copy must appear when revealLocked = true")
+}
+
+@Test func instancesForHashAlwaysUnfilteredForInternalUse() throws {
+    // instances(forHash:) must remain unfiltered — used by sidecar writes, deletion, etc.
+    let (t, cat) = try seededLF7dup(); defer { t.cleanup() }
+    cat.revealLocked = false
+
+    let all = try cat.instances(forHash: HA)
+    let dirs = all.map(\.dirPath)
+    #expect(dirs.contains("A"), "instances(forHash:) must return locked copies (internal use)")
+    #expect(dirs.contains("B"), "instances(forHash:) must return unlocked copies")
+}
+
+// MARK: distinctCameras — must not reveal cameras from locked photos
+
+@Test func distinctCamerasHidesLockedCameraWhenNotRevealed() throws {
+    let (t, cat) = try seededLF7(); defer { t.cleanup() }
+    cat.revealLocked = false
+
+    let cameras = try cat.distinctCameras()
+    #expect(!cameras.contains("LockedCam"),  "camera from locked photo must not appear in filter UI")
+    #expect(cameras.contains("VisibleCam"), "camera from unlocked photo must appear")
+}
+
+@Test func distinctCamerasShowsAllWhenRevealed() throws {
+    let (t, cat) = try seededLF7(); defer { t.cleanup() }
+    cat.revealLocked = true
+
+    let cameras = try cat.distinctCameras()
+    #expect(cameras.contains("LockedCam"),  "locked camera must appear when revealLocked = true")
+    #expect(cameras.contains("VisibleCam"), "unlocked camera must appear when revealLocked = true")
+}
+
+// MARK: distinctTags — must not reveal tags from locked photos
+
+@Test func distinctTagsHidesLockedTagWhenNotRevealed() throws {
+    let (t, cat) = try seededLF7(); defer { t.cleanup() }
+    cat.revealLocked = false
+
+    let tags = try cat.distinctTags()
+    #expect(!tags.contains("secret-tag"), "tag from locked photo must not appear in filter UI")
+    #expect(tags.contains("visible-tag"), "tag from unlocked photo must appear")
+}
+
+@Test func distinctTagsShowsAllWhenRevealed() throws {
+    let (t, cat) = try seededLF7(); defer { t.cleanup() }
+    cat.revealLocked = true
+
+    let tags = try cat.distinctTags()
+    #expect(tags.contains("secret-tag"), "locked tag must appear when revealLocked = true")
+    #expect(tags.contains("visible-tag"), "unlocked tag must appear when revealLocked = true")
+}
+
+// MARK: distinctPlaces — must not reveal places from locked photos
+
+@Test func distinctPlacesHidesLockedPlaceWhenNotRevealed() throws {
+    let (t, cat) = try seededLF7(); defer { t.cleanup() }
+    cat.revealLocked = false
+
+    let places = try cat.distinctPlaces()
+    let countryCodes = places.map(\.countryCode)
+    let cities = places.map(\.city)
+    #expect(!countryCodes.contains("GB"), "locked place (GB) must not appear in filter picker")
+    #expect(countryCodes.contains("FR"), "unlocked place (FR) must appear")
+    #expect(!cities.contains("London"),  "locked city must not appear in filter picker")
+    #expect(cities.contains("Paris"),    "unlocked city must appear")
+}
+
+@Test func distinctPlacesShowsAllWhenRevealed() throws {
+    let (t, cat) = try seededLF7(); defer { t.cleanup() }
+    cat.revealLocked = true
+
+    let places = try cat.distinctPlaces()
+    let countryCodes = places.map(\.countryCode)
+    #expect(countryCodes.contains("GB"), "locked place must appear when revealLocked = true")
+    #expect(countryCodes.contains("FR"), "unlocked place must appear when revealLocked = true")
+}

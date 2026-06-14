@@ -144,20 +144,25 @@ extension Catalog {
 
     // MARK: – Distinct facets
 
-    /// All distinct (non-nil) camera models in the catalog.
+    /// All distinct (non-nil) camera models in the catalog — locked photos are hidden unless revealed.
     public func distinctCameras() throws -> [String] {
-        try dbQueue.read { db in
-            try String.fetchAll(db,
-                sql: "SELECT DISTINCT cameraModel FROM assets WHERE cameraModel IS NOT NULL ORDER BY cameraModel")
+        let lvc = lockedVisibilityClause(hashColumn: "assets.hash")
+        return try dbQueue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT DISTINCT cameraModel FROM assets
+                WHERE cameraModel IS NOT NULL \(lvc)
+                ORDER BY cameraModel
+                """)
         }
     }
 
-    /// All distinct tags across all assets, extracted via json_each.
+    /// All distinct tags across all assets, extracted via json_each — locked photos are hidden unless revealed.
     public func distinctTags() throws -> [String] {
-        try dbQueue.read { db in
+        let lvc = lockedVisibilityClause(hashColumn: "assets.hash")
+        return try dbQueue.read { db in
             try String.fetchAll(db, sql: """
                 SELECT DISTINCT json_each.value FROM assets, json_each(tagsJSON)
-                WHERE json_each.value IS NOT NULL AND json_each.value != ''
+                WHERE json_each.value IS NOT NULL AND json_each.value != '' \(lvc)
                 ORDER BY json_each.value
                 """)
         }

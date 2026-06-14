@@ -461,7 +461,7 @@ struct InspectorView: View {
     }
 
     private func loadInstances() {
-        instances = (try? state.library?.catalog.instances(forHash: item.hash)) ?? []
+        instances = (try? state.library?.catalog.visibleInstances(forHash: item.hash)) ?? []
     }
 
     private func revealInstance(_ inst: InstanceRecord) {

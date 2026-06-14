@@ -201,11 +201,23 @@ extension Catalog {
         }
     }
 
-    /// All local instances of an asset (across vaults) — for presence/Locations.
+    /// All local instances of an asset (across vaults) — internal use (sidecar writes,
+    /// deletion, drive-copy resolution). Always returns every copy regardless of lock state.
+    /// For user-facing "where this photo lives" display, use `visibleInstances(forHash:)`.
     public func instances(forHash hash: String) throws -> [InstanceRecord] {
         try dbQueue.read { db in
             try InstanceRecord.fetchAll(db, sql: "SELECT * FROM instances WHERE hash = ?",
                                         arguments: [hash])
+        }
+    }
+
+    /// Local instances of an asset visible to the user — excludes locked-folder copies when
+    /// `!revealLocked`. Used by the Inspector's "Also in N other folders" section.
+    public func visibleInstances(forHash hash: String) throws -> [InstanceRecord] {
+        let lf = lockedFilter   // "AND locked = 0" or ""
+        return try dbQueue.read { db in
+            let sql = "SELECT * FROM instances WHERE hash = ?\(lf.isEmpty ? "" : " AND locked = 0")"
+            return try InstanceRecord.fetchAll(db, sql: sql, arguments: [hash])
         }
     }
 
