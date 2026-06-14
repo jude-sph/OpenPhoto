@@ -214,6 +214,12 @@ final class AppState {
     /// True → the People view shows the "Other faces" bucket grid.
     var browsingOtherFaces = false
     var facesLoading = false
+    /// True while an explicit "Find more suggestions" run is in flight (drives a brief status).
+    var findingSuggestions = false
+    /// Set when an explicit "Find more suggestions" run finishes → People shows a result popup, then clears.
+    var suggestionResultMessage: String?
+    /// Hidden auto-face IDs (user-dismissed faces that should not appear in the Other bucket).
+    var hiddenFaceIDs: [Int64] = []
     private var facesDirty = true
     private var geocodeDirty = true
     /// DBSCAN parameters for face clustering over AdaFace identity vectors (cosine distance).
@@ -278,8 +284,10 @@ final class AppState {
     /// re-runs the cheap centroid match — NOT the O(n²) DBSCAN clustering, and NOT face re-derivation —
     /// so confirming a suggestion immediately surfaces the next batch the sharpened centroid now
     /// matches, with no "Rescan Faces" needed. Existing clusters are pruned of now-assigned faces.
-    func refreshSuggestions() {
+    func refreshSuggestions(announce: Bool = false) {
         guard let lib = library else { return }
+        let beforeSuggested = announce ? Set(suggestedAdditions.values.flatMap { $0 }) : Set<Int64>()
+        if announce { findingSuggestions = true }
         let matchThreshold = faceMatchThreshold, minPts = faceClusterMinPts
         let existingClusters = suggestedClusters
         Task {
@@ -317,6 +325,59 @@ final class AppState {
             self.suggestedClusters = result.clusters
             self.suggestedAdditions = result.additions
             self.otherFaceIDs = result.other
+            if announce {
+                self.findingSuggestions = false
+                let nowSuggested = Set(result.additions.values.flatMap { $0 })
+                let newFaceIDs = nowSuggested.subtracting(beforeSuggested)
+                if newFaceIDs.isEmpty {
+                    self.suggestionResultMessage =
+                        "No new suggestions. Assign or confirm more faces to a person, then try again."
+                } else {
+                    let people = result.additions.filter { _, ids in ids.contains { newFaceIDs.contains($0) } }.count
+                    let f = newFaceIDs.count
+                    self.suggestionResultMessage =
+                        "Found \(f) more face\(f == 1 ? "" : "s") that might belong to \(people) \(people == 1 ? "person" : "people"). Open a person to review their suggested faces."
+                }
+            }
+        }
+    }
+
+    /// Hide the given faces from the Other bucket (reversible "ignore"); they also stop being suggested.
+    func hideFaces(_ ids: [Int64]) {
+        guard let lib = library, !ids.isEmpty else { return }
+        Task {
+            let lists = await Task.detached(priority: .userInitiated) {
+                try? lib.catalog.setFacesHidden(ids, hidden: true)
+                return ((try? lib.catalog.unassignedAutoFaceIDs()) ?? [],
+                        (try? lib.catalog.hiddenAutoFaceIDs()) ?? [])
+            }.value
+            self.otherFaceIDs = lists.0
+            self.hiddenFaceIDs = lists.1
+        }
+    }
+
+    /// Restore (un-hide) the given faces back into the Other bucket.
+    func unhideFaces(_ ids: [Int64]) {
+        guard let lib = library, !ids.isEmpty else { return }
+        Task {
+            let lists = await Task.detached(priority: .userInitiated) {
+                try? lib.catalog.setFacesHidden(ids, hidden: false)
+                return ((try? lib.catalog.unassignedAutoFaceIDs()) ?? [],
+                        (try? lib.catalog.hiddenAutoFaceIDs()) ?? [])
+            }.value
+            self.otherFaceIDs = lists.0
+            self.hiddenFaceIDs = lists.1
+        }
+    }
+
+    /// Load the hidden-faces list (for the "Show hidden" view).
+    func loadHiddenFaces() {
+        guard let lib = library else { return }
+        Task {
+            let ids = await Task.detached(priority: .userInitiated) {
+                (try? lib.catalog.hiddenAutoFaceIDs()) ?? []
+            }.value
+            self.hiddenFaceIDs = ids
         }
     }
 

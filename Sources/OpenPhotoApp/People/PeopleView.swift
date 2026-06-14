@@ -88,6 +88,13 @@ struct PeopleOverviewView: View {
         }
         .alert("Merge People", isPresented: $showMergeAlert,
                actions: mergeAlertActions, message: mergeAlertMessage)
+        .alert("Find more suggestions",
+               isPresented: Binding(get: { state.suggestionResultMessage != nil },
+                                    set: { if !$0 { state.suggestionResultMessage = nil } })) {
+            Button("OK") { state.suggestionResultMessage = nil }
+        } message: {
+            Text(state.suggestionResultMessage ?? "")
+        }
     }
 
     // MARK: Toolbar
@@ -106,10 +113,14 @@ struct PeopleOverviewView: View {
             // Fast re-match against the people you've built up — instant (no re-derivation, unlike
             // "Rescan Faces"). Use this to surface more "might be <name>" suggestions.
             if !mergeMode, !state.people.isEmpty, !state.otherFaceIDs.isEmpty {
-                Button("Find more suggestions") { state.refreshSuggestions() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Theme.accent)
+                if state.findingSuggestions {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button("Find more suggestions") { state.refreshSuggestions(announce: true) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                }
             }
             if mergeMode {
                 Text("Pick two people")

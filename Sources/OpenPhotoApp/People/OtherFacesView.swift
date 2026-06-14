@@ -14,6 +14,7 @@ struct OtherFacesDetailView: View {
     @State private var newName = ""
     @State private var showNewField = false
     @State private var loading = false
+    @State private var showingHidden = false
 
     /// Cap how many faces we resolve+render at once so a huge bucket stays responsive.
     private let displayCap = 500
@@ -23,7 +24,8 @@ struct OtherFacesDetailView: View {
     private var photos: [TimelineItem] { pairs.map(\.item) }
     private var orderedSelectable: [SelectableItem] { pairs.map { SelectableItem(id: $0.id) } }
     private var selectedFaceIDs: [Int64] { Array(selection.selected).compactMap(Int64.init) }
-    private var truncated: Bool { state.otherFaceIDs.count > displayCap }
+    private var sourceIDs: [Int64] { showingHidden ? state.hiddenFaceIDs : state.otherFaceIDs }
+    private var truncated: Bool { sourceIDs.count > displayCap }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,6 +43,7 @@ struct OtherFacesDetailView: View {
         }
         .onAppear { reload() }
         .onChange(of: state.otherFaceIDs) { reload() }
+        .onChange(of: state.hiddenFaceIDs) { reload() }
     }
 
     // MARK: Toolbar
@@ -54,11 +57,34 @@ struct OtherFacesDetailView: View {
                 }.foregroundStyle(Theme.accent)
             }.buttonStyle(.plain)
             Divider().frame(height: 16)
-            Text("Other faces").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-            Text(truncated ? "showing \(pairs.count) of \(state.otherFaceIDs.count)" : "\(state.otherFaceIDs.count)")
+            Text(showingHidden ? "Hidden faces" : "Other faces")
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+            Text(truncated ? "showing \(pairs.count) of \(sourceIDs.count)" : "\(sourceIDs.count)")
                 .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)
             Spacer()
+            if !showingHidden && !state.otherFaceIDs.isEmpty {
+                Button("Shuffle") { state.otherFaceIDs.shuffle() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+            }
+            Button(showingHidden ? "Show unsorted" : "Show hidden") {
+                if showingHidden {
+                    showingHidden = false
+                    selection.clear()
+                    reload()
+                } else {
+                    state.loadHiddenFaces()
+                    showingHidden = true
+                    selection.clear()
+                    reload()
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Theme.textDim)
             if !pairs.isEmpty {
+                Divider().frame(height: 16)
                 Picker("", selection: $showFaces) {
                     Text("Faces").tag(true); Text("Photos").tag(false)
                 }.pickerStyle(.segmented).labelsHidden().fixedSize()
@@ -106,29 +132,43 @@ struct OtherFacesDetailView: View {
                 .foregroundStyle(Theme.textDim)
             Spacer()
             Button("Deselect") { selection.clear() }.controlSize(.small)
-            Menu("Add to person\u{2026}") {
-                if state.people.isEmpty { Text("No people yet") }
-                else {
-                    ForEach(state.people, id: \.id) { p in
-                        Button(p.name) {
-                            state.moveFaces(selectedFaceIDs, toPerson: p.id, fromPerson: nil)
-                            selection.clear()
+            if showingHidden {
+                Button("Restore") {
+                    state.unhideFaces(selectedFaceIDs)
+                    selection.clear()
+                }.controlSize(.small)
+            } else {
+                Button("Hide") {
+                    state.hideFaces(selectedFaceIDs)
+                    selection.clear()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textDim)
+                Menu("Add to person\u{2026}") {
+                    if state.people.isEmpty { Text("No people yet") }
+                    else {
+                        ForEach(state.people, id: \.id) { p in
+                            Button(p.name) {
+                                state.moveFaces(selectedFaceIDs, toPerson: p.id, fromPerson: nil)
+                                selection.clear()
+                            }
                         }
                     }
                 }
-            }
-            .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
-            .disabled(state.people.isEmpty)
-            if showNewField {
-                TextField("New person name\u{2026}", text: $newName)
-                    .textFieldStyle(.plain).font(.system(size: 12))
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 6))
-                    .frame(width: 160)
-                    .onSubmit { commitNew() }
-                Button("Create") { commitNew() }.controlSize(.small)
-            } else {
-                Button("New Person\u{2026}") { showNewField = true; newName = "" }.controlSize(.small)
+                .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
+                .disabled(state.people.isEmpty)
+                if showNewField {
+                    TextField("New person name\u{2026}", text: $newName)
+                        .textFieldStyle(.plain).font(.system(size: 12))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 6))
+                        .frame(width: 160)
+                        .onSubmit { commitNew() }
+                    Button("Create") { commitNew() }.controlSize(.small)
+                } else {
+                    Button("New Person\u{2026}") { showNewField = true; newName = "" }.controlSize(.small)
+                }
             }
         }
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
@@ -151,9 +191,13 @@ struct OtherFacesDetailView: View {
     private var empty: some View {
         VStack(spacing: 10) {
             Spacer()
-            Image(systemName: "checkmark.circle").font(.system(size: 36)).foregroundStyle(Theme.textFaint)
-            Text("No other faces").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-            Text("Every detected face is in a group or assigned to someone.")
+            Image(systemName: showingHidden ? "eye.slash" : "checkmark.circle")
+                .font(.system(size: 36)).foregroundStyle(Theme.textFaint)
+            Text(showingHidden ? "No hidden faces" : "No other faces")
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+            Text(showingHidden
+                 ? "You haven't hidden any faces yet."
+                 : "Every detected face is in a group or assigned to someone.")
                 .font(.system(size: 12)).foregroundStyle(Theme.textDim).multilineTextAlignment(.center)
             Button("Back to People", action: onBack).controlSize(.small).padding(.top, 4)
             Spacer()
@@ -164,7 +208,7 @@ struct OtherFacesDetailView: View {
 
     private func reload() {
         guard let lib = state.library else { pairs = []; return }
-        let ids = Array(state.otherFaceIDs.prefix(displayCap))
+        let ids = Array(sourceIDs.prefix(displayCap))
         guard !ids.isEmpty else { pairs = []; return }
         loading = true
         Task {
