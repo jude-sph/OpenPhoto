@@ -46,7 +46,8 @@ unknown. It is settled by a spike before any other work proceeds.
 | Unit | Change |
 |---|---|
 | `Package.swift` | `.macOS(.v15)` → `.macOS(.v14)`. Fix any macOS-15-only API the compiler flags (sweep found none expected; if one appears, guard it with `#available` or keep the floor at 15). |
-| `EmbedStage.swift`, `FaceEmbedder.swift` | **Defensive ML degradation:** if a model fails to initialize, disable that one feature gracefully (the existing "search degrades" precedent) instead of crashing. Likely a no-op if the spike passes clean. If the spike shows `.all` is flaky on Intel, add an arch-aware compute-units fallback (`.cpuAndGPU` → `.cpuOnly`). |
+| `EmbedStage.swift`, `FaceEmbedder.swift` | **Loud ML-unavailable handling:** never crash, but **never silently degrade either**. If a model fails to initialize, capture the reason and surface it prominently (see "ML availability surfacing"). If the spike shows `.all` is flaky on Intel, add an arch-aware compute-units fallback (`.cpuAndGPU` → `.cpuOnly`) *before* declaring a model unavailable. |
+| **ML availability surfacing** (App) | A single observable signal on `AppState` (e.g. `mlUnavailable: [model: reason]`) drives a **persistent, prominent banner** ("Face recognition is unavailable on this Mac — the model couldn't be loaded. Details…") plus an explicit unavailable state on the affected feature surfaces (People view, Search) — not an empty/blank screen. Also logged loudly (`os_log` `.fault`/`.error`). The user must never be left guessing why faces or search are missing. |
 | `scripts/make-app.sh` | Build with `swift build -c release --arch arm64 --arch x86_64`. Update the binary path (`.build/release/OpenPhotoApp` → `.build/apple/Products/Release/OpenPhotoApp`) and the `Sparkle.framework` discovery path to the universal products dir. Add a `lipo -archs` assertion that both slices are present (refuse to package an accidentally single-arch binary, mirroring the existing Sparkle-key refusal). `LSMinimumSystemVersion` 15.0 → 14.0. |
 | Dev loop | Plain `swift build` stays **host-only** for fast iteration; only release packaging (`make-app.sh`) goes universal. |
 | CI release workflow | Update the build invocation to the universal `--arch arm64 --arch x86_64` command. |
@@ -64,8 +65,9 @@ unknown. It is settled by a spike before any other work proceeds.
 3. **Authoritative (i9 Tahoe Mac):** run the native x86_64 slice and confirm each of the three models
    compiles, loads, and infers with **sane results** (face embeddings cluster correctly; a known
    text query returns the expected photo). Record load time + memory.
-4. **Decision point:** if a model fails or `.all` misbehaves on Intel → choose the compute-units
-   fallback, or (worst case) degrade that feature on Intel and ship everything else.
+4. **Decision point:** if a model fails or `.all` misbehaves on Intel → first try the compute-units
+   fallback. If a model still cannot run, the feature ships **disabled but loudly surfaced** (banner +
+   explicit unavailable state), never silently blank — everything non-ML ships regardless.
 
 ## Acceptance (Jude's hardware — tested at the end)
 
