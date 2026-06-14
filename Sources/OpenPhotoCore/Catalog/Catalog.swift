@@ -23,6 +23,12 @@ public final class Catalog: Sendable {
     /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
     public static let schemaVersion = 12
 
+    // MARK: Locked-folder state (in-memory; Touch ID resets on quit — visibility only, not encryption)
+    // `fileprivate` so the `extension Catalog` in Queries.swift can read/write through the lock.
+    let lockedLock = NSLock()
+    // `nonisolated(unsafe)` because all access is guarded by `lockedLock` above.
+    nonisolated(unsafe) var _revealLocked = false
+
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
@@ -227,6 +233,13 @@ public final class Catalog: Sendable {
             // re-derivation (Rescan Faces) resets it.
             try db.alter(table: "faces") { t in
                 t.add(column: "hidden", .integer).notNull().defaults(to: 0)
+            }
+        }
+        migrator.registerMigration("v16") { db in
+            // Per-instance "locked" flag for app-level Touch-ID-hidden folders. Derived (rebuildable)
+            // from the locked-folder list; gates browse VISIBILITY only — it is NOT encryption.
+            try db.alter(table: "instances") { t in
+                t.add(column: "locked", .integer).notNull().defaults(to: 0)
             }
         }
         try migrator.migrate(dbQueue)

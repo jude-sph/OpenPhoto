@@ -8,7 +8,7 @@ extension Catalog {
     private static let localSelect = """
         SELECT a.hash, a.kind, a.takenAtMs, a.pixelWidth, a.pixelHeight, a.latitude, a.longitude,
                a.cameraModel, a.lensModel, a.durationSeconds, a.livePairHash, a.favorite, a.rating,
-               a.caption, a.tagsJSON, a.rotation, i.vaultID, i.relPath, i.dirPath, i.size, NULL AS driveRelPath
+               a.caption, a.tagsJSON, a.rotation, i.vaultID, i.relPath, i.dirPath, i.size, i.locked, NULL AS driveRelPath
         FROM assets a JOIN instances i ON i.hash = a.hash
         WHERE a.isLivePairedVideo = 0
         """
@@ -18,7 +18,7 @@ extension Catalog {
     private static let driveSelect = """
         SELECT a.hash, a.kind, a.takenAtMs, a.pixelWidth, a.pixelHeight, a.latitude, a.longitude,
                a.cameraModel, a.lensModel, a.durationSeconds, a.livePairHash, a.favorite, a.rating,
-               a.caption, a.tagsJSON, a.rotation, vp.vaultID, vp.relPath, vp.dirPath, vp.size, vp.driveRelPath
+               a.caption, a.tagsJSON, a.rotation, vp.vaultID, vp.relPath, vp.dirPath, vp.size, 0 AS locked, vp.driveRelPath
         FROM assets a JOIN vault_presence vp ON vp.hash = a.hash
         WHERE a.isLivePairedVideo = 0
           AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.hash = a.hash)
@@ -41,12 +41,40 @@ extension Catalog {
             + " UNION ALL \(driveSelect)"
     }
 
+    // MARK: Locked-folder visibility gate
+
+    /// When false (default), user-facing browse methods hide locked rows. The App flips it true for
+    /// the session after Touch ID. In-memory only — re-locks naturally on quit.
+    /// This is visibility-gating, not encryption.
+    public var revealLocked: Bool {
+        get { lockedLock.withLock { _revealLocked } }
+        set { lockedLock.withLock { _revealLocked = newValue } }
+    }
+
+    /// SQL fragment appended to user-facing browse queries; empty string when revealed.
+    var lockedFilter: String { revealLocked ? "" : "AND locked = 0" }
+
+    /// Re-derive `instances.locked` from the locked-folder list: clear all, then mark instances
+    /// whose dirPath equals or is nested under a locked folder (same GLOB the Folders view uses).
+    /// Rebuildable — re-calling with the same list is idempotent.
+    public func applyLockedFolders(_ dirPaths: [String]) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE instances SET locked = 0")
+            for p in dirPaths {
+                try db.execute(sql: "UPDATE instances SET locked = 1 WHERE dirPath = ? OR dirPath GLOB ?",
+                               arguments: [p, p + "/*"])
+            }
+        }
+    }
+
     /// Whole-library browse rows, newest first. `videoOnly` restricts to videos.
     public func timelineItems(videoOnly: Bool = false) throws -> [TimelineItem] {
         try dbQueue.read { db in
-            var sql = "SELECT * FROM (\(Self.browseSQL))"
-            if videoOnly { sql += " WHERE kind = 'video'" }
-            sql += " ORDER BY takenAtMs DESC"
+            var conditions: [String] = []
+            if videoOnly { conditions.append("kind = 'video'") }
+            if !revealLocked { conditions.append("locked = 0") }
+            let where_ = conditions.isEmpty ? "" : " WHERE " + conditions.joined(separator: " AND ")
+            let sql = "SELECT * FROM (\(Self.browseSQL))\(where_) ORDER BY takenAtMs DESC"
             return try TimelineItem.fetchAll(db, sql: sql)
         }
     }
@@ -90,6 +118,8 @@ extension Catalog {
                 sql += " AND vaultID = ?"
                 args.append(vid)
             }
+            let lf = lockedFilter
+            if !lf.isEmpty { sql += " \(lf)" }
             sql += " ORDER BY takenAtMs DESC"
             return try TimelineItem.fetchAll(db, sql: sql, arguments: StatementArguments(args))
         }
@@ -101,8 +131,10 @@ extension Catalog {
         guard !instanceIDs.isEmpty else { return [] }
         return try dbQueue.read { db in
             let marks = databaseQuestionMarks(count: instanceIDs.count)
+            let lf = lockedFilter
+            let lockClause = lf.isEmpty ? "" : " \(lf)"
             return try TimelineItem.fetchAll(db, sql: """
-                SELECT * FROM (\(Self.instanceSQL)) WHERE vaultID || '|' || relPath IN (\(marks))
+                SELECT * FROM (\(Self.instanceSQL)) WHERE vaultID || '|' || relPath IN (\(marks))\(lockClause)
                 """, arguments: StatementArguments(instanceIDs))
         }
     }
@@ -115,10 +147,11 @@ extension Catalog {
             // Local branch
             var counts: [String: Int] = [:]
             let vf = videoOnly ? " AND a.kind = 'video'" : ""   // match the Folders grid's videos-only filter
+            let lf = lockedFilter.isEmpty ? "" : " AND i.locked = 0"   // hide locked instances when not revealed
             var sql = """
                 SELECT i.dirPath AS d, COUNT(*) AS n FROM instances i
                 JOIN assets a ON a.hash = i.hash
-                WHERE a.isLivePairedVideo = 0\(vf)
+                WHERE a.isLivePairedVideo = 0\(vf)\(lf)
                 """
             var args: [DatabaseValueConvertible] = []
             if let v = vaultID {
@@ -130,6 +163,7 @@ extension Catalog {
                 counts[r["d"], default: 0] += (r["n"] as Int)
             }
             // Drive-only branch (only when not restricted to a local vault)
+            // Drive-only rows are never locked (v1), so no lock filter needed here.
             if vaultID == nil {
                 let dsql = """
                     SELECT vp.dirPath AS d, COUNT(*) AS n FROM vault_presence vp
@@ -149,8 +183,10 @@ extension Catalog {
 
     public func item(hash: String) throws -> TimelineItem? {
         try dbQueue.read { db in
-            try TimelineItem.fetchOne(db,
-                sql: "SELECT * FROM (\(Self.browseSQL)) WHERE hash = ? LIMIT 1",
+            let lf = lockedFilter
+            let lockClause = lf.isEmpty ? "" : " \(lf)"
+            return try TimelineItem.fetchOne(db,
+                sql: "SELECT * FROM (\(Self.browseSQL)) WHERE hash = ?\(lockClause) LIMIT 1",
                 arguments: [hash])
         }
     }
@@ -226,12 +262,13 @@ extension Catalog {
     public func duplicateInstanceGroups(scope: DuplicateScope) throws -> [[String]] {
         struct GroupKey: Hashable { let hash: String; let dir: String }
         return try dbQueue.read { db in
+            let lf = lockedFilter.isEmpty ? "" : " AND locked = 0"
             let dupFilter = scope == .withinFolder
-                ? "(hash, dirPath) IN (SELECT hash, dirPath FROM instances GROUP BY hash, dirPath HAVING COUNT(*) >= 2)"
-                : "hash IN (SELECT hash FROM instances GROUP BY hash HAVING COUNT(*) >= 2)"
+                ? "(hash, dirPath) IN (SELECT hash, dirPath FROM instances WHERE 1=1\(lf) GROUP BY hash, dirPath HAVING COUNT(*) >= 2)"
+                : "hash IN (SELECT hash FROM instances WHERE 1=1\(lf) GROUP BY hash HAVING COUNT(*) >= 2)"
             let rows = try Row.fetchAll(db, sql: """
                 SELECT vaultID, relPath, hash, dirPath FROM instances
-                WHERE \(dupFilter)
+                WHERE \(dupFilter)\(lf)
                 ORDER BY hash, dirPath, rowid
                 """)
             var groups: [GroupKey: [String]] = [:]
@@ -255,11 +292,12 @@ extension Catalog {
 
     /// Media OpenPhoto indexes on this Mac: file count + summed bytes (local instances). This is
     /// OpenPhoto's footprint, NOT the root folder's size — that folder also holds Photos libraries,
-    /// app bundles, and other files OpenPhoto skips.
+    /// app bundles, and other files OpenPhoto skips. Locked folders are excluded unless revealed.
     public func librarySize() throws -> (count: Int, bytes: Int64) {
         try dbQueue.read { db in
+            let lf = lockedFilter.isEmpty ? "" : " WHERE locked = 0"
             let row = try Row.fetchOne(db, sql:
-                "SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS b FROM instances")
+                "SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS b FROM instances\(lf)")
             return (row?["n"] ?? 0, row?["b"] ?? 0)
         }
     }
