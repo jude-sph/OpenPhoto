@@ -153,6 +153,7 @@ struct SelectionActionBar: View {
     var onForceEvict: () -> Void = {}
     var showRehydrate: Bool = false
     var onRehydrate: () -> Void = {}
+    var tagControls: AnyView? = nil     // "Tag person…" menu (Timeline + Folders inject it)
     let onDeselect: () -> Void
     let onDone: () -> Void
     var body: some View {
@@ -162,6 +163,7 @@ struct SelectionActionBar: View {
                 .foregroundStyle(Theme.textDim)
             Spacer()
             if let moveControls { moveControls }
+            if let tagControls, count > 0 { tagControls }
             Button("Deselect", action: onDeselect).disabled(count == 0).controlSize(.small)
             if let name = sendTargetName {
                 Button(action: onSend) {

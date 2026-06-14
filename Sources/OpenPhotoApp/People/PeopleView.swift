@@ -820,14 +820,17 @@ struct FacePhotoTile: View {
 
     // Face *quality* (capture clarity/frontality), 0–100%. Replaces the old detection-confidence
     // badge, which the v2 landmark detector reports as ~100% for every accepted face (uninformative).
-    private var confidenceBadge: some View {
-        Text("\(Int(face.quality * 100))%")
+    // Hidden for gated (quality 0) and manual (no-face) tags, where a "0%" badge would be meaningless.
+    @ViewBuilder private var confidenceBadge: some View {
+        if face.quality > 0 {
+            Text("\(Int(face.quality * 100))%")
             .font(.system(size: 9, weight: .semibold).monospacedDigit())
             .foregroundStyle(.white)
             .padding(.horizontal, 4).padding(.vertical, 2)
             .background(.black.opacity(0.45), in: Capsule())
             .padding(5)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        }
     }
 }
 

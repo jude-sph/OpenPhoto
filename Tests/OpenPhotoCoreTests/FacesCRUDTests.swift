@@ -86,6 +86,28 @@ private func face(_ hash: String, _ vec: [Float], source: String = "auto",
     #expect(try cat.meta("faceModelVersion") == "next")
 }
 
+@Test func manualPersonTagIsViewableButExcludedFromTheAlgorithm() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.upsert(assets: [photo(A)])
+    let bob = try cat.createPerson(name: "Bob")
+
+    let fid = try #require(try cat.addManualPersonTag(hash: A, personID: bob))
+    #expect(try cat.addManualPersonTag(hash: A, personID: bob) == nil)   // idempotent
+
+    // Visible in Bob's grid…
+    #expect(try cat.faces(forPerson: bob).contains { $0.id == fid })
+    // …but excluded from centroids (no current-model embedding) and from the clusterable pool,
+    // and it's assigned so it isn't in the Other-faces (unassigned) set either.
+    #expect(try cat.assignedFacesWithEmbeddings().isEmpty)
+    #expect(try cat.unassignedFacesWithEmbeddings().isEmpty)
+    #expect(try !cat.unassignedAutoFaceIDs().contains(fid))
+
+    // Removing a manual tag deletes it rather than returning a no-face row to the pool.
+    try cat.reassignFace(fid, to: nil)
+    #expect(try cat.faces(forHash: A).isEmpty)
+}
+
 @Test func reconcileFaceModelResetsOnceOnVersionChange() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))

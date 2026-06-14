@@ -270,6 +270,35 @@ final class AppState {
         suggestedAdditions[personID] = nil
     }
 
+    /// Manually tag a person as present in the given photos WITHOUT a detected face (for obscured
+    /// faces). The photos appear in the person's grid for VIEWING, but the tag carries no embedding, so
+    /// it never informs clustering or the person's centroid. Sidecars are rewritten so the tag is
+    /// sovereign and survives a catalog rebuild.
+    func tagPerson(_ personID: Int64, inPhotos hashes: [String]) {
+        guard let lib = library, !hashes.isEmpty else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            for h in hashes { try? lib.catalog.addManualPersonTag(hash: h, personID: personID) }
+            self?.writeSidecarRegions(forPersonID: personID, lib: lib)
+            await MainActor.run { [weak self] in
+                self?.facesDirty = true; self?.loadPeople(); self?.refreshToken &+= 1
+            }
+        }
+    }
+
+    /// Create a new person and manually tag them into the given photos (no detected face required).
+    func tagNewPerson(named name: String, inPhotos hashes: [String]) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let lib = library, !trimmed.isEmpty, !hashes.isEmpty else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let pid = try? lib.catalog.createPerson(name: trimmed) else { return }
+            for h in hashes { try? lib.catalog.addManualPersonTag(hash: h, personID: pid) }
+            self?.writeSidecarRegions(forPersonID: pid, lib: lib)
+            await MainActor.run { [weak self] in
+                self?.facesDirty = true; self?.loadPeople(); self?.refreshToken &+= 1
+            }
+        }
+    }
+
     /// Manual "Rescan Faces" (Settings → Library): re-run detection + embedding across the library with
     /// the current model. Named people are kept (confirmed faces survive + their identity lives in the
     /// XMP sidecar). We do NOT delete the existing auto faces up front — that would make every
