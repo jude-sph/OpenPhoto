@@ -52,6 +52,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSPhotoLibraryUsageDescription</key><string>OpenPhoto imports photos you choose from your Apple Photos library. It only ever copies them out and never modifies your Photos library.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key><string>OpenPhoto requests read/write access to import from your Apple Photos library. It only ever copies photos out and never adds to or modifies your Photos library.</string>
     <key>SUFeedURL</key><string>https://jude-sph.github.io/OpenPhoto/appcast.xml</string>
     <key>SUPublicEDKey</key><string>__SUPUBLICEDKEY__</string>
     <key>SUScheduledCheckInterval</key><integer>86400</integer>
@@ -126,6 +127,20 @@ if [[ -d "$MODELS_SRC" ]]; then
     && echo "Injected GeoNames dataset into $APP/Contents/Resources/geonames/"
 else
   echo "note: $MODELS_SRC absent — shipping without semantic-search models (search degrades)"
+fi
+
+# AdaFace face model (committed at Sources/OpenPhotoCore/Resources/). FaceEmbedder loads it from the
+# app bundle's Contents/Resources at runtime. We place it here rather than relying on the SwiftPM
+# `Bundle.module` resource bundle (which a hand-assembled .app does NOT carry) — that generated
+# accessor calls fatalError when its bundle is absent, which hard-crashes the packaged app the first
+# time face derivation runs. REQUIRED: refuse to ship a face-less, crash-prone build.
+ADAFACE_SRC="Sources/OpenPhotoCore/Resources/AdaFaceIR101.mlpackage"
+if [[ -d "$ADAFACE_SRC" ]]; then
+  cp -R "$ADAFACE_SRC" "$APP/Contents/Resources/"
+  echo "Injected AdaFace face model into $APP/Contents/Resources/"
+else
+  echo "error: $ADAFACE_SRC missing — the packaged app would crash when face recognition runs." >&2
+  exit 1
 fi
 
 # Embed Sparkle.framework (and its XPC helpers, which live inside it) into the bundle.

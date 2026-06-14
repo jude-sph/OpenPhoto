@@ -78,7 +78,7 @@ public final class FaceEmbedder: @unchecked Sendable {
                                               isDirectory: true)
         if FileManager.default.fileExists(atPath: dest.path) { return dest }
 
-        guard let src = Bundle.module.url(forResource: "AdaFaceIR101", withExtension: "mlpackage") else {
+        guard let src = Self.modelPackageURL() else {
             throw Error.resourceMissing
         }
         let compiled = try MLModel.compileModel(at: src)     // → a temporary .mlmodelc
@@ -87,5 +87,19 @@ public final class FaceEmbedder: @unchecked Sendable {
         }
         try FileManager.default.moveItem(at: compiled, to: dest)
         return dest
+    }
+
+    /// Locate `AdaFaceIR101.mlpackage`. Prefer the packaged app's `Contents/Resources` (where
+    /// `make-app.sh` injects it) so the shipped app never touches the SwiftPM `Bundle.module`
+    /// accessor — that generated accessor calls `fatalError` if its resource bundle isn't found
+    /// (it isn't, in a hand-assembled `.app`), which hard-crashes the app the first time face
+    /// derivation runs. Falls back to `Bundle.module` for `swift run` and unit tests, where the
+    /// resource bundle is reachable on the build path.
+    private static func modelPackageURL() -> URL? {
+        if let r = Bundle.main.resourceURL?.appendingPathComponent("AdaFaceIR101.mlpackage"),
+           FileManager.default.fileExists(atPath: r.path) {
+            return r
+        }
+        return Bundle.module.url(forResource: "AdaFaceIR101", withExtension: "mlpackage")
     }
 }
