@@ -160,6 +160,18 @@ extension Catalog {
         }
     }
 
+    /// Every unassigned AUTO face id (ANY quality), best-quality first. The Other-faces bucket uses
+    /// this so gated faces (small / blurry / profile — stored with an empty embedding and quality 0,
+    /// hence excluded from clustering) are still reachable for manual assignment, instead of invisible.
+    public func unassignedAutoFaceIDs() throws -> [Int64] {
+        try dbQueue.read { db in
+            try Int64.fetchAll(db, sql: """
+                SELECT id FROM faces WHERE personID IS NULL AND source = 'auto'
+                ORDER BY quality DESC, id
+                """)
+        }
+    }
+
     /// (personID, vector) for every CONFIRMED face carrying a current-model embedding — the input for
     /// per-person centroids. Faces with stale (dim ≠ 512) vectors are excluded, so a person whose faces
     /// haven't been re-embedded yet simply contributes no centroid until a rescan refreshes them.

@@ -245,8 +245,13 @@ final class AppState {
                     let groups = DBSCAN.groups(unmatched, eps: eps, minPts: minPts)
                     let conf = groups.map { FaceCluster(faceIDs: $0, representativeFaceID: $0.first ?? 0,
                                                         count: $0.count) }
-                    let clustered = Set(groups.flatMap { $0 })
-                    let other = unmatched.map(\.id).filter { !clustered.contains($0) }
+                    // Other faces = EVERY unassigned face (incl. gated ones with no embedding, which
+                    // clustering/matching never see) that isn't a suggested addition or in a cluster —
+                    // so no detected face is unreachable. Ordered best-quality-first by the query.
+                    let matchedIDs = Set(matched.flatMap { $0.faceIDs })
+                    let clusteredIDs = Set(groups.flatMap { $0 })
+                    let allUnassigned = (try? lib.catalog.unassignedAutoFaceIDs()) ?? []
+                    let other = allUnassigned.filter { !matchedIDs.contains($0) && !clusteredIDs.contains($0) }
                     return (ppl, conf, additions, other)
                 }.value
             self.people = result.people
