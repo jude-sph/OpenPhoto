@@ -81,6 +81,17 @@ final class AppState {
     var refreshToken = 0
     /// Bumped after a per-photo move so the folder grid clears its (now-stale) selection.
     var photoMoveToken = 0
+    /// Per-capability ML availability on this Mac, mirrored from `MLAvailability` (Core). Drives the
+    /// loud unavailable banner + the People/Search unavailable states. Empty until the first model
+    /// load is attempted.
+    var mlStatus: [MLCapability: MLStatus] = [:]
+    /// Capabilities that are present-but-broken on this machine (the loud cases only — never `.absent`).
+    var mlUnavailable: [(capability: MLCapability, reason: String)] {
+        MLCapability.allCases.compactMap { cap in
+            if case .unavailable(let reason) = (mlStatus[cap] ?? .unknown) { return (cap, reason) }
+            return nil
+        }
+    }
     /// The main window's native UndoManager (captured by RootView). ⌘Z registrations go here so
     /// focused text fields keep their own field-editor undo. See AppState+Undo.swift.
     weak var windowUndoManager: UndoManager?
@@ -1976,5 +1987,25 @@ final class AppState {
             Task { @MainActor in await self?.rescan() }
         }
         watcher?.start()
+    }
+
+    // MARK: — ML availability
+
+    /// Recompute `mlStatus` from the Core registry snapshot. Called on init and on every
+    /// `MLAvailability.didChange`.
+    func refreshMLStatus() {
+        let snap = MLAvailability.shared.snapshot()
+        var next: [MLCapability: MLStatus] = [:]
+        for cap in MLCapability.allCases { next[cap] = mlCapabilityStatus(cap, from: snap) }
+        mlStatus = next
+    }
+
+    init() {
+        refreshMLStatus()
+        NotificationCenter.default.addObserver(
+            forName: MLAvailability.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshMLStatus() }
+        }
     }
 }
