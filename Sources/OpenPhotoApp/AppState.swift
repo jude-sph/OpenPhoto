@@ -1989,7 +1989,7 @@ final class AppState {
         watcher?.start()
     }
 
-    // MARK: — ML availability
+    // MARK: - ML availability
 
     /// Recompute `mlStatus` from the Core registry snapshot. Called on init and on every
     /// `MLAvailability.didChange`.
@@ -2002,6 +2002,8 @@ final class AppState {
 
     init() {
         refreshMLStatus()
+        // Observer token intentionally not stored: AppState is process-lifetime (the root @State),
+        // so it never deinits and never needs to unregister. `[weak self]` keeps it leak-safe anyway.
         NotificationCenter.default.addObserver(
             forName: MLAvailability.didChange, object: nil, queue: .main
         ) { [weak self] _ in
