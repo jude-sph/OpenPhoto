@@ -247,18 +247,45 @@ extension Catalog {
         }
     }
 
-    /// Reassign one face. nil → unassign (personID NULL, source back to 'auto').
+    /// Reassign one face. nil → unassign (personID NULL, source back to 'auto'). A MANUAL tag (no real
+    /// detected face) is deleted on unassign instead of returned to the pool — it has no embedding and
+    /// only existed as a hand-added membership.
     public func reassignFace(_ id: Int64, to personID: Int64?) throws {
         try dbQueue.write { db in
             if let personID {
                 try db.execute(
                     sql: "UPDATE faces SET personID = ?, source = 'confirmed' WHERE id = ?",
                     arguments: [personID, id])
+            } else if try String.fetchOne(db, sql: "SELECT source FROM faces WHERE id = ?",
+                                          arguments: [id]) == "manual" {
+                try db.execute(sql: "DELETE FROM faces WHERE id = ?", arguments: [id])
             } else {
                 try db.execute(
                     sql: "UPDATE faces SET personID = NULL, source = 'auto' WHERE id = ?",
                     arguments: [id])
             }
+        }
+    }
+
+    /// Manually tag a person as present in a photo WITHOUT a detected face (for obscured faces).
+    /// Stored as a `source='manual'` row: full-image rect (so it displays the whole photo and writes a
+    /// valid sidecar region), no embedding (dim 0), quality 0, confidence 0 — so it is EXCLUDED from
+    /// clustering (personID set) and from centroids (`assignedFacesWithEmbeddings` needs source
+    /// 'confirmed' + dim 512), i.e. it never informs the recognition algorithm. Idempotent: a no-op if
+    /// the person is already linked to this photo (any source). Returns the new face id, or nil if skipped.
+    @discardableResult
+    public func addManualPersonTag(hash: String, personID: Int64) throws -> Int64? {
+        try dbQueue.write { db in
+            let already = try Int.fetchOne(db,
+                sql: "SELECT 1 FROM faces WHERE hash = ? AND personID = ? LIMIT 1",
+                arguments: [hash, personID]) != nil
+            if already { return nil }
+            try db.execute(sql: """
+                INSERT INTO faces (hash, rectX, rectY, rectW, rectH, embedding, dim,
+                                   personID, confidence, source, quality)
+                VALUES (?, 0, 0, 1, 1, ?, 0, ?, 0, 'manual', 0)
+                """, arguments: [hash, Data(), personID])
+            return db.lastInsertedRowID
         }
     }
 

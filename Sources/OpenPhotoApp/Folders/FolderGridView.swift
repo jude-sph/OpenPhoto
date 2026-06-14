@@ -154,6 +154,9 @@ struct FolderGridView: View {
             showRehydrate: !rehydratableItems.isEmpty,
             onRehydrate: { let items = rehydratableItems
                            Task { _ = await state.rehydrate(items); selection.clear(); selectMode = false } },
+            tagControls: AnyView(TagPersonMenu(
+                state: state, hashes: selectedItems.map(\.hash),
+                onDone: { selection.clear(); selectMode = false; dragToMove = false })),
             onDeselect: { selection.clear() },
             onDone: { selection.clear(); selectMode = false; dragToMove = false })
     }

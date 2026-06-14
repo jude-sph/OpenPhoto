@@ -118,9 +118,7 @@ struct InspectorView: View {
                 }
                 .disabled(state.isDriveOnly(item))
 
-                if !imageFaces.isEmpty {
-                    inThisImageSection
-                }
+                inThisImageSection
 
                 Divider().overlay(Theme.hairline)
 
@@ -319,27 +317,34 @@ struct InspectorView: View {
     /// tappable (jump to that person in People); unconfirmed faces read "Unknown".
     private var inThisImageSection: some View {
         section("In this image") {
-            FlowLayoutLite(spacing: 8) {
-                ForEach(imageFaces, id: \.id) { face in
-                    let person = face.personID.flatMap { peopleByID[$0] }
-                    Button {
-                        if let person { state.openPerson(person) }
-                    } label: {
-                        HStack(spacing: 6) {
-                            FaceCropView(state: state, faceID: face.id, hash: face.hash,
-                                         rect: face.rect, size: 30)
-                                .frame(width: 30, height: 30)
-                                .clipShape(Circle())
-                            Text(person?.name ?? "Unknown")
-                                .font(.system(size: 12, weight: person != nil ? .medium : .regular))
-                                .foregroundStyle(person != nil ? Theme.accent : Theme.textDim)
+            VStack(alignment: .leading, spacing: 8) {
+                if !imageFaces.isEmpty {
+                    FlowLayoutLite(spacing: 8) {
+                        ForEach(imageFaces, id: \.id) { face in
+                            let person = face.personID.flatMap { peopleByID[$0] }
+                            Button {
+                                if let person { state.openPerson(person) }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    FaceCropView(state: state, faceID: face.id, hash: face.hash,
+                                                 rect: face.rect, size: 30)
+                                        .frame(width: 30, height: 30)
+                                        .clipShape(Circle())
+                                    Text(person?.name ?? "Unknown")
+                                        .font(.system(size: 12, weight: person != nil ? .medium : .regular))
+                                        .foregroundStyle(person != nil ? Theme.accent : Theme.textDim)
+                                }
+                                .padding(.leading, 3).padding(.trailing, 9).padding(.vertical, 3)
+                                .background(person != nil ? Theme.accentDim : Theme.elevated, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(person == nil)
                         }
-                        .padding(.leading, 3).padding(.trailing, 9).padding(.vertical, 3)
-                        .background(person != nil ? Theme.accentDim : Theme.elevated, in: Capsule())
                     }
-                    .buttonStyle(.plain)
-                    .disabled(person == nil)
                 }
+                // Manually tag someone present even when no face was detected (obscured faces).
+                TagPersonMenu(state: state, hashes: [item.hash], label: "Tag someone\u{2026}")
+                    .onChange(of: state.refreshToken) { loadFaces() }   // reflect the new tag chip
             }
         }
     }
