@@ -66,11 +66,14 @@ extension Catalog {
     }
 
     /// Every asset with a GPS fix, for the Map surface. Photos without lat/lon are excluded.
+    /// Locked photos are hidden from the map unless the session is revealed.
     public func geotaggedAssets() throws -> [GeoAsset] {
-        try dbQueue.read { db in
+        let lvc = lockedVisibilityClause(hashColumn: "assets.hash")
+        return try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT hash, latitude, longitude, takenAtMs FROM assets
                 WHERE latitude IS NOT NULL AND longitude IS NOT NULL AND isLivePairedVideo = 0
+                \(lvc)
                 ORDER BY takenAtMs DESC
                 """).map { GeoAsset(hash: $0["hash"], lat: $0["latitude"], lon: $0["longitude"],
                                     takenAtMs: $0["takenAtMs"]) }

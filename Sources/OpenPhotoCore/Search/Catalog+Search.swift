@@ -96,6 +96,9 @@ extension Catalog {
                 conditions.append("hash IN (SELECT hash FROM ocr WHERE text <> '')")
             }
 
+            // Lock filter: exclude locked-folder hashes when not revealed.
+            let lf = lockedFilter
+            if !lf.isEmpty { conditions.append("locked = 0") }
             let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
             let sql = """
                 SELECT hash FROM (\(Self.browseSQL))
@@ -110,23 +113,26 @@ extension Catalog {
 
     /// Hashes that match the text query in OCR text, captions, or tags.
     /// OCR (FTS5-ranked) results come first; caption/tag LIKE matches appended, de-duped.
+    /// Locked photos are hidden from results unless the session is revealed.
     public func textMatches(_ query: String) throws -> [String] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         var seen = Set<String>()
         var out: [String] = []
 
-        // OCR lane (FTS5 ranked — best signal, OCR-rank order preserved)
+        // OCR lane (FTS5 ranked — best signal, OCR-rank order preserved; already lock-filtered)
         let ocrHits = (try? searchOCR(query)) ?? []
         for h in ocrHits where seen.insert(h).inserted { out.append(h) }
 
         // Caption + tag LIKE lane
         let term = "%" + query.replacingOccurrences(of: "%", with: "\\%")
                               .replacingOccurrences(of: "_", with: "\\_") + "%"
+        let lvc = lockedVisibilityClause(hashColumn: "assets.hash")
         let likeSql = """
             SELECT DISTINCT hash FROM assets
-            WHERE (caption LIKE ? ESCAPE '\\')
+            WHERE ((caption LIKE ? ESCAPE '\\')
                OR EXISTS (SELECT 1 FROM json_each(tagsJSON)
-                          WHERE json_each.value LIKE ? ESCAPE '\\')
+                          WHERE json_each.value LIKE ? ESCAPE '\\'))
+            \(lvc)
             """
         let likeHits = (try? dbQueue.read { db in
             try String.fetchAll(db, sql: likeSql, arguments: [term, term])
@@ -161,13 +167,16 @@ extension Catalog {
 
     /// Fetch TimelineItems for the given hashes. When `preservingOrder` is true, reorders
     /// the result in Swift to match the input order (SQL IN(...) has no order guarantee).
+    /// Locked photos are hidden from results unless the session is revealed.
     public func items(forHashes hashes: [String], preservingOrder: Bool) throws -> [TimelineItem] {
         guard !hashes.isEmpty else { return [] }
+        let lf = lockedFilter
+        let lockClause = lf.isEmpty ? "" : " AND locked = 0"
         return try dbQueue.read { db in
             let marks = databaseQuestionMarks(count: hashes.count)
             let sql = """
                 SELECT * FROM (\(Self.browseSQL))
-                WHERE hash IN (\(marks))
+                WHERE hash IN (\(marks))\(lockClause)
                 """
             let rows = try TimelineItem.fetchAll(db, sql: sql,
                                                  arguments: StatementArguments(hashes))
@@ -184,10 +193,13 @@ extension Catalog {
 
     /// All asset hashes in timeline order (newest first). Used by runSearch as the
     /// "no structured constraints" pass so the intersection with semantic is a no-op.
+    /// Locked photos are hidden unless revealed.
     public func allHashesNewestFirst() throws -> [String] {
-        try dbQueue.read { db in
+        let lf = lockedFilter
+        let lockClause = lf.isEmpty ? "" : " WHERE locked = 0"
+        return try dbQueue.read { db in
             try String.fetchAll(db,
-                sql: "SELECT hash FROM (\(Self.browseSQL)) ORDER BY takenAtMs DESC")
+                sql: "SELECT hash FROM (\(Self.browseSQL))\(lockClause) ORDER BY takenAtMs DESC")
         }
     }
 }

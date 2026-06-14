@@ -95,14 +95,16 @@ extension Catalog {
     }
 
     /// Hashes whose OCR text matches `query` (FTS5), best-ranked first. Empty query → [].
+    /// Locked photos are hidden from results unless the session is revealed.
     public func searchOCR(_ query: String) throws -> [String] {
         let terms = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
         guard !terms.isEmpty else { return [] }
         // Each term as a quoted prefix query (escape embedded quotes), implicit-AND joined.
         let fts = terms.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }
                        .joined(separator: " ")
+        let lvc = lockedVisibilityClause(hashColumn: "ocr.hash")
         return try dbQueue.read { db in
-            try String.fetchAll(db, sql: "SELECT hash FROM ocr WHERE ocr MATCH ? ORDER BY rank",
+            try String.fetchAll(db, sql: "SELECT hash FROM ocr WHERE ocr MATCH ? \(lvc) ORDER BY rank",
                                 arguments: [fts])
         }
     }

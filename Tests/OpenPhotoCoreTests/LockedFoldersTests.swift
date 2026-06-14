@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import CoreGraphics
 import GRDB
 @testable import OpenPhotoCore
 
@@ -296,4 +297,132 @@ private func seeded() throws -> (TestDirs, Catalog) {
     let (countRevealed, _) = try cat.librarySize()
 
     #expect(countRevealed == countAll, "librarySize must include locked rows when revealLocked = true")
+}
+
+// MARK: - LF2: faces / map / search filters
+
+// A minimal FaceRow padded to 512 dimensions so the `dim = 512` clusterable filter
+// in `unassignedFacesWithEmbeddings` keeps these synthetic faces.
+private func lockedFace(_ hash: String, vec: [Float] = [1, 0]) -> FaceRow {
+    var v = vec
+    if v.count < FaceEmbedder.dimension {
+        v += Array(repeating: 0, count: FaceEmbedder.dimension - v.count)
+    }
+    return FaceRow(id: nil, hash: hash,
+                   rect: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.3),
+                   embedding: v, confidence: 0.9, source: "auto",
+                   personID: nil, quality: 1)
+}
+
+/// Seed for LF2 tests: HA in locked folder /A, HC in unlocked /B.
+/// Both photos have a face, OCR text, and GPS coords.
+private func seededLF2() throws -> (TestDirs, Catalog) {
+    let t = try TestDirs()
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+
+    // HA → locked /A, HC → unlocked /B (both with GPS for map test)
+    let assetA = AssetRecord(hash: HA, kind: "photo", takenAtMs: 2,
+                             pixelWidth: nil, pixelHeight: nil,
+                             latitude: 51.5074, longitude: -0.1278,
+                             cameraModel: nil, lensModel: nil, durationSeconds: nil,
+                             livePairHash: nil, isLivePairedVideo: false,
+                             favorite: false, rating: 0, caption: nil, tagsJSON: "[]")
+    let assetC = AssetRecord(hash: HC, kind: "photo", takenAtMs: 1,
+                             pixelWidth: nil, pixelHeight: nil,
+                             latitude: 48.8566, longitude: 2.3522,
+                             cameraModel: nil, lensModel: nil, durationSeconds: nil,
+                             livePairHash: nil, isLivePairedVideo: false,
+                             favorite: false, rating: 0, caption: nil, tagsJSON: "[]")
+    try cat.upsert(assets: [assetA, assetC])
+    try cat.replaceInstances(inVault: "mac", with: [
+        inst(HA, "A/photo.jpg"),
+        inst(HC, "B/photo.jpg"),
+    ])
+
+    // Faces
+    try cat.insertFaces([lockedFace(HA, vec: [1, 0]), lockedFace(HC, vec: [0, 1])])
+
+    // OCR text
+    try cat.upsertOCR(hash: HA, text: "secret locked text")
+    try cat.upsertOCR(hash: HC, text: "visible unlocked text")
+
+    // Lock folder A
+    try cat.applyLockedFolders(["A"])
+    return (t, cat)
+}
+
+// MARK: unassignedAutoFaceIDs
+
+@Test func unassignedAutoFaceIDsExcludesLockedFaceWhenNotRevealed() throws {
+    let (t, cat) = try seededLF2(); defer { t.cleanup() }
+    cat.revealLocked = false
+
+    let ids = try cat.unassignedAutoFaceIDs()
+    // HA is locked — its face must not appear
+    // HC is unlocked — its face must appear
+    let faceHashes = try cat.dbQueue.read { db in
+        try Row.fetchAll(db, sql: "SELECT id, hash FROM faces ORDER BY id").map {
+            (id: $0["id"] as Int64, hash: $0["hash"] as String)
+        }
+    }
+    let lockedFaceID  = faceHashes.first(where: { $0.hash == HA })?.id
+    let visibleFaceID = faceHashes.first(where: { $0.hash == HC })?.id
+
+    #expect(lockedFaceID != nil, "sanity: HA must have a face")
+    #expect(visibleFaceID != nil, "sanity: HC must have a face")
+    #expect(!ids.contains(lockedFaceID!), "locked HA face must be hidden from unassignedAutoFaceIDs")
+    #expect(ids.contains(visibleFaceID!),  "unlocked HC face must appear in unassignedAutoFaceIDs")
+}
+
+@Test func unassignedAutoFaceIDsShowsAllWhenRevealed() throws {
+    let (t, cat) = try seededLF2(); defer { t.cleanup() }
+    cat.revealLocked = true
+
+    let ids = try cat.unassignedAutoFaceIDs()
+    let faceCount = try cat.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM faces") ?? 0
+    }
+    #expect(ids.count == faceCount, "all faces must appear when revealLocked = true")
+}
+
+// MARK: geotaggedAssets (map)
+
+@Test func geotaggedAssetsExcludesLockedWhenNotRevealed() throws {
+    let (t, cat) = try seededLF2(); defer { t.cleanup() }
+    cat.revealLocked = false
+
+    let assets = try cat.geotaggedAssets()
+    let hashes = assets.map(\.hash)
+    #expect(!hashes.contains(HA), "locked HA must not appear on the map when not revealed")
+    #expect(hashes.contains(HC),  "unlocked HC must appear on the map")
+}
+
+@Test func geotaggedAssetsShowsAllWhenRevealed() throws {
+    let (t, cat) = try seededLF2(); defer { t.cleanup() }
+    cat.revealLocked = true
+
+    let hashes = Set(try cat.geotaggedAssets().map(\.hash))
+    #expect(hashes.contains(HA), "locked HA must appear on the map when revealed")
+    #expect(hashes.contains(HC), "unlocked HC must appear on the map when revealed")
+}
+
+// MARK: searchOCR
+
+@Test func searchOCRExcludesLockedWhenNotRevealed() throws {
+    let (t, cat) = try seededLF2(); defer { t.cleanup() }
+    cat.revealLocked = false
+
+    let results = try cat.searchOCR("secret locked")
+    #expect(!results.contains(HA), "locked HA OCR text must not appear in search when not revealed")
+
+    let unlocked = try cat.searchOCR("visible unlocked")
+    #expect(unlocked.contains(HC), "unlocked HC OCR text must appear in search")
+}
+
+@Test func searchOCRShowsAllWhenRevealed() throws {
+    let (t, cat) = try seededLF2(); defer { t.cleanup() }
+    cat.revealLocked = true
+
+    let results = try cat.searchOCR("secret locked")
+    #expect(results.contains(HA), "locked HA OCR text must appear when revealLocked = true")
 }

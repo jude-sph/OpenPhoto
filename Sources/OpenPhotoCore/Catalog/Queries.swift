@@ -54,6 +54,16 @@ extension Catalog {
     /// SQL fragment appended to user-facing browse queries; empty string when revealed.
     var lockedFilter: String { revealLocked ? "" : "AND locked = 0" }
 
+    /// SQL clause keeping only rows whose hash is browse-visible (has a non-locked instance), unless
+    /// the session is revealed. `hashColumn` is a code-controlled column ref like "f.hash" (not user input).
+    /// Photos with NO instances at all (orphans / drive-only / test fixtures) are not filtered — they have
+    /// never been placed in a locked folder, so the lock check is vacuously satisfied.
+    func lockedVisibilityClause(hashColumn: String) -> String {
+        revealLocked ? "" :
+            "AND (NOT EXISTS (SELECT 1 FROM instances vi WHERE vi.hash = \(hashColumn))" +
+            " OR EXISTS (SELECT 1 FROM instances vi WHERE vi.hash = \(hashColumn) AND vi.locked = 0))"
+    }
+
     /// Re-derive `instances.locked` from the locked-folder list: clear all, then mark instances
     /// whose dirPath equals or is nested under a locked folder (same GLOB the Folders view uses).
     /// Rebuildable — re-calling with the same list is idempotent.

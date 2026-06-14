@@ -121,10 +121,12 @@ extension Catalog {
     }
 
     public func faces(forPerson personID: Int64) throws -> [FaceRow] {
-        try dbQueue.read { db in
-            try Row.fetchAll(db,
-                sql: "SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim, personID, confidence, source, quality FROM faces WHERE personID = ?",
-                arguments: [personID]).map { Self.faceRow(from: $0) }
+        let lvc = lockedVisibilityClause(hashColumn: "faces.hash")
+        return try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim, personID, confidence, source, quality
+                FROM faces WHERE personID = ? \(lvc)
+                """, arguments: [personID]).map { Self.faceRow(from: $0) }
         }
     }
 
@@ -132,10 +134,12 @@ extension Catalog {
     /// dimension and quality-gated in. Stale v1 vectors (dim ≠ 512) and gated-out faces are excluded.
     /// Hidden faces are also excluded (they've been ignored by the user).
     public func unassignedFacesWithEmbeddings() throws -> [(id: Int64, vector: [Float])] {
-        try dbQueue.read { db in
+        let lvc = lockedVisibilityClause(hashColumn: "faces.hash")
+        return try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT id, dim, embedding FROM faces
                 WHERE personID IS NULL AND source = 'auto' AND dim = \(FaceEmbedder.dimension) AND quality > 0 AND hidden = 0
+                \(lvc)
                 """).map { row -> (id: Int64, vector: [Float]) in
                     let id: Int64 = row["id"]
                     let dim: Int = row["dim"]
@@ -150,9 +154,11 @@ extension Catalog {
     /// hence excluded from clustering) are still reachable for manual assignment, instead of invisible.
     /// Hidden faces are excluded — use `hiddenAutoFaceIDs()` to surface them in a "Show hidden" view.
     public func unassignedAutoFaceIDs() throws -> [Int64] {
-        try dbQueue.read { db in
+        let lvc = lockedVisibilityClause(hashColumn: "faces.hash")
+        return try dbQueue.read { db in
             try Int64.fetchAll(db, sql: """
                 SELECT id FROM faces WHERE personID IS NULL AND source = 'auto' AND hidden = 0
+                \(lvc)
                 ORDER BY quality DESC, id
                 """)
         }
@@ -212,16 +218,24 @@ extension Catalog {
     }
 
     public func people() throws -> [PersonRow] {
-        try dbQueue.read { db in
+        // When locked, count only visible faces and prefer a visible cover. Drive the cover
+        // selection through the same "has a non-locked instance" EXISTS check so a locked-photo
+        // face is never shown as the person's cover while the folder is hidden.
+        // NOTE (v1): if ALL of a person's faces are locked, faceCount will be 0 and rep nil —
+        //            the person row still appears (without a cover); hiding them entirely is deferred.
+        let lvc = lockedVisibilityClause(hashColumn: "f.hash")
+        let lvcCover = lockedVisibilityClause(hashColumn: "f3.hash")
+        let lvcRep   = lockedVisibilityClause(hashColumn: "f2.hash")
+        return try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT p.id, p.name, COUNT(f.id) AS cnt,
                        COALESCE(
                          (SELECT f3.id FROM faces f3
-                          WHERE f3.id = p.coverFaceID AND f3.personID = p.id),
-                         (SELECT f2.id FROM faces f2 WHERE f2.personID = p.id
+                          WHERE f3.id = p.coverFaceID AND f3.personID = p.id \(lvcCover)),
+                         (SELECT f2.id FROM faces f2 WHERE f2.personID = p.id \(lvcRep)
                           ORDER BY f2.confidence DESC LIMIT 1)
                        ) AS rep
-                FROM people p LEFT JOIN faces f ON f.personID = p.id
+                FROM people p LEFT JOIN faces f ON f.personID = p.id \(lvc)
                 GROUP BY p.id ORDER BY cnt DESC, p.name
                 """).map { row -> PersonRow in
                     let rep: Int64? = row["rep"]
