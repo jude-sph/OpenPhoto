@@ -22,7 +22,7 @@ struct SearchView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.red.opacity(0.92))
+                .background(Theme.red)
             }
             toolbar
             Divider().overlay(Theme.hairline)

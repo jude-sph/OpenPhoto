@@ -34,7 +34,7 @@ struct MLUnavailableBanner: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.red.opacity(0.92))
+            .background(Theme.red)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
