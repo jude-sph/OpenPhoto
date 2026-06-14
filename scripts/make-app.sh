@@ -3,7 +3,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-swift build -c release --arch arm64 --arch x86_64
+# Build each arch separately and lipo them together below. The combined
+# `swift build --arch arm64 --arch x86_64` requires Xcode's xcbuild; building per-arch works with
+# the Command Line Tools alone. Products land in .build/<arch>-apple-macosx/release/.
+swift build -c release --arch arm64
+swift build -c release --arch x86_64
 
 VERSION="$(tr -d '[:space:]' < VERSION)"
 # VERSION feeds CFBundleShortVersionString and the DMG name, and Sparkle parses it as a version —
@@ -16,7 +20,12 @@ BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 0)"   # monotonically inc
 APP=build/OpenPhoto.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/apple/Products/Release/OpenPhotoApp "$APP/Contents/MacOS/OpenPhoto"
+ARM64_BIN=".build/arm64-apple-macosx/release/OpenPhotoApp"
+X86_64_BIN=".build/x86_64-apple-macosx/release/OpenPhotoApp"
+for b in "$ARM64_BIN" "$X86_64_BIN"; do
+  [[ -f "$b" ]] || { echo "error: missing per-arch build product: $b" >&2; exit 1; }
+done
+lipo -create "$ARM64_BIN" "$X86_64_BIN" -output "$APP/Contents/MacOS/OpenPhoto"
 
 # Refuse to ship a non-universal binary (e.g. someone dropped the --arch flags or built host-only).
 ARCHS="$(lipo -archs "$APP/Contents/MacOS/OpenPhoto" 2>/dev/null || true)"
@@ -122,9 +131,9 @@ fi
 # Embed Sparkle.framework (and its XPC helpers, which live inside it) into the bundle.
 # Anchor to the RELEASE build products (this script ships the release binary). On a machine that has
 # also built debug, an unanchored find could embed the debug-config copy of the framework.
-SPARKLE_FW=".build/apple/Products/Release/Sparkle.framework"
-[[ -d "$SPARKLE_FW" ]] || SPARKLE_FW="$(find .build -path '*/release/Sparkle.framework' -type d | head -1)"
-[[ -n "$SPARKLE_FW" && -d "$SPARKLE_FW" ]] || SPARKLE_FW="$(find .build -name 'Sparkle.framework' -type d | head -1)"
+SPARKLE_FW=".build/arm64-apple-macosx/release/Sparkle.framework"
+[[ -d "$SPARKLE_FW" ]] || SPARKLE_FW=".build/x86_64-apple-macosx/release/Sparkle.framework"
+[[ -d "$SPARKLE_FW" ]] || SPARKLE_FW="$(find .build -name 'Sparkle.framework' -type d | head -1)"
 if [[ -n "$SPARKLE_FW" ]]; then
   mkdir -p "$APP/Contents/Frameworks"
   cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
