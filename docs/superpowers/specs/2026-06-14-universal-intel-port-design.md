@@ -1,7 +1,7 @@
 # Universal binary: Intel + Apple Silicon — Design
 
 **Date:** 2026-06-14
-**Status:** Approved (floor = macOS 14; Monterey out of scope; zero logic/UI rewrite).
+**Status:** Approved (floor = macOS 15; Monterey out of scope; zero logic/UI rewrite).
 
 ## Problem
 
@@ -45,14 +45,14 @@ unknown. It is settled by a spike before any other work proceeds.
 
 | Unit | Change |
 |---|---|
-| `Package.swift` | `.macOS(.v15)` → `.macOS(.v14)`. Fix any macOS-15-only API the compiler flags (sweep found none expected; if one appears, guard it with `#available` or keep the floor at 15). |
+| `Package.swift` | **No change** — floor stays `.macOS(.v15)`. (Lowering to `.v14` was attempted but required guarding three macOS-15-only APIs — `ScrollPosition`/`onScrollGeometryChange`, `pointerStyle`, `AVAssetExportSession.export(to:as:)` — for no in-scope benefit, since no target Mac runs macOS 14.) |
 | `EmbedStage.swift`, `FaceEmbedder.swift` | **Loud ML-unavailable handling:** never crash, but **never silently degrade either**. If a model fails to initialize, capture the reason and surface it prominently (see "ML availability surfacing"). If the spike shows `.all` is flaky on Intel, add an arch-aware compute-units fallback (`.cpuAndGPU` → `.cpuOnly`) *before* declaring a model unavailable. |
 | **ML availability surfacing** (App) | A single observable signal on `AppState` (e.g. `mlUnavailable: [model: reason]`) drives a **persistent, prominent banner** ("Face recognition is unavailable on this Mac — the model couldn't be loaded. Details…") plus an explicit unavailable state on the affected feature surfaces (People view, Search) — not an empty/blank screen. Also logged loudly (`os_log` `.fault`/`.error`). The user must never be left guessing why faces or search are missing. |
-| `scripts/make-app.sh` | Build with `swift build -c release --arch arm64 --arch x86_64`. Update the binary path (`.build/release/OpenPhotoApp` → `.build/apple/Products/Release/OpenPhotoApp`) and the `Sparkle.framework` discovery path to the universal products dir. Add a `lipo -archs` assertion that both slices are present (refuse to package an accidentally single-arch binary, mirroring the existing Sparkle-key refusal). `LSMinimumSystemVersion` 15.0 → 14.0. |
+| `scripts/make-app.sh` | Build with `swift build -c release --arch arm64 --arch x86_64`. Update the binary path (`.build/release/OpenPhotoApp` → `.build/apple/Products/Release/OpenPhotoApp`) and the `Sparkle.framework` discovery path to the universal products dir. Add a `lipo -archs` assertion that both slices are present (refuse to package an accidentally single-arch binary, mirroring the existing Sparkle-key refusal). `LSMinimumSystemVersion` stays 15.0. |
 | Dev loop | Plain `swift build` stays **host-only** for fast iteration; only release packaging (`make-app.sh`) goes universal. |
 | CI release workflow | Update the build invocation to the universal `--arch arm64 --arch x86_64` command. |
 | `docs/RELEASING.md` | Document the universal build command + the `lipo` verification step. |
-| `README.md` | Requirements: **Intel + Apple Silicon, macOS 14+**. |
+| `README.md` | Requirements: **Intel + Apple Silicon, macOS 15+**. |
 | `docs/format/` | **No change** — the on-disk vault format is unaffected. (SHA-256 hashing is arch-independent; both arches are little-endian, so catalog/embedding blobs are byte-identical cross-arch.) Recording this explicitly satisfies the documentation-discipline rule. |
 
 ## Spike (gating — first, before everything else)
@@ -80,14 +80,19 @@ The Rosetta pre-smoke on the Apple Silicon Mac is the early-warning gate before 
 
 ## Decisions (resolved during brainstorming)
 
-- **Floor = macOS 14, not 12.** The Monterey Mac is hardware-locked to 12 and would force backporting
+- **Floor = macOS 15, not 12.** The Monterey Mac is hardware-locked to 12 and would force backporting
   the Observation framework (`@Observable` ×3, `@Bindable` ×36) plus `Grid`/`GridRow` (×24),
   `onChange` signatures (×13), `ContentUnavailableView` (×10), `Layout` (×3), `scrollPosition` (×1) —
   a broad view-layer sweep with regression risk (zero `#available` guards exist today), to satisfy a
   ~10-year-old machine that would also be slow/memory-hungry at the ML features. Poor cost-to-value;
   Jude chose to skip it.
-- **14 vs 15.** Lowering 15→14 is effectively free (everything used is macOS-14-safe) and widens reach
-  to any Intel Mac on Sonoma. Kept at 14 unless a macOS-15-only API surfaces at compile time.
+- **15, not 14.** Lowering to 14 was attempted (to widen reach to a hypothetical Intel Mac on Sonoma)
+  but is **not** free: it forced `#available` guards on three macOS-15-only APIs already in the app
+  (`ScrollPosition`/`onScrollGeometryChange` in `SelectionUI`, `pointerStyle` in `InspectorView`,
+  `AVAssetExportSession.export(to:as:)` in `VideoMetadataEmbedder`), each with a macOS-14 fallback —
+  permanent complexity (every future macOS-15 API needs the same treatment) plus minor macOS-14
+  regressions. Since **no in-scope machine runs macOS 14** (the i9 is on Tahoe 26; the others are
+  Apple Silicon on current macOS), the floor stays at **macOS 15**. Jude confirmed 15 is fine.
 - **One codebase, always.** No path here involves a second codebase or a fork. The universal binary is
   the whole mechanism.
 

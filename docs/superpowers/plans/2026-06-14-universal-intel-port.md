@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship OpenPhoto as a single universal binary (arm64 + x86_64) that runs natively on Apple Silicon and Intel Macs, with a macOS 14 floor and *loud* surfacing whenever a CoreML model can't run on a machine.
+**Goal:** Ship OpenPhoto as a single universal binary (arm64 + x86_64) that runs natively on Apple Silicon and Intel Macs, at the existing macOS 15 floor, with *loud* surfacing whenever a CoreML model can't run on a machine. On the existing Apple Silicon Mac the app runs identically (same arm64 code); the net new capability is the Intel (x86_64) slice.
 
-**Architecture:** One codebase, one `.app`, one Sparkle appcast. No engine/vault/sync/catalog logic changes. The deployment floor drops 15→14. CoreML loaders gain a compute-units retry ladder (for Intel's missing Neural Engine) and report a per-model availability status into a new Core registry; the App observes it and shows a prominent banner + explicit unavailable states on the People and Search screens. Release packaging builds both arches and refuses to ship a non-universal binary.
+**Architecture:** One codebase, one `.app`, one Sparkle appcast. No engine/vault/sync/catalog logic changes. The deployment floor stays at macOS 15 (lowering to 14 was rejected — see Task 1). CoreML loaders gain a compute-units retry ladder (for Intel's missing Neural Engine) and report a per-model availability status into a new Core registry; the App observes it and shows a prominent banner + explicit unavailable states on the People and Search screens. These additions are inert when models load fine (i.e. on the Apple Silicon Mac). Release packaging builds both arches and refuses to ship a non-universal binary.
 
 **Tech Stack:** Swift 6 / SwiftPM, SwiftUI (`@Observable`), CoreML, swift-testing (`import Testing`), GRDB, Sparkle, bash packaging scripts.
 
@@ -16,7 +16,7 @@
 
 | File | Responsibility | New/Modify |
 |---|---|---|
-| `Package.swift` | Deployment floor `.v15`→`.v14` | Modify |
+| `Package.swift` | **No change** — floor stays `.macOS(.v15)` (see Task 1) | — |
 | `Sources/OpenPhotoCore/Derivation/MLAvailability.swift` | Thread-safe per-model availability registry + pure capability mapping + model keys + compute-units retry ladder | **Create** |
 | `Sources/OpenPhotoCore/Derivation/EmbedStage.swift` | Report MobileCLIP image/text availability; load via ladder | Modify |
 | `Sources/OpenPhotoCore/Faces/FaceEmbedder.swift` | Report AdaFace availability; load via ladder | Modify |
@@ -26,47 +26,24 @@
 | `Sources/OpenPhotoApp/OpenPhotoApp.swift` | Mount the banner in `RootView` | Modify |
 | `Sources/OpenPhotoApp/People/PeopleView.swift` | Explicit "face recognition unavailable" state | Modify |
 | `Sources/OpenPhotoApp/Search/SearchView.swift` | Explicit "semantic search unavailable" state | Modify |
-| `scripts/make-app.sh` | Universal build, universal product paths, `lipo` gate, plist floor 14 | Modify |
+| `scripts/make-app.sh` | Universal build, universal product paths, `lipo` gate (plist min-system stays 15.0) | Modify |
 | `docs/RELEASING.md`, `README.md` | Universal build + requirements | Modify |
 | `.github/workflows/*` (if present) | Universal build command in CI | Modify |
 
 ---
 
-### Task 1: Lower deployment floor to macOS 14
+### Task 1: Deployment floor — RESOLVED: stays macOS 15 (no change)
 
-**Files:**
-- Modify: `Package.swift:6`
+**Outcome:** Floor remains `.macOS(.v15)`. Lowering to `.v14` was attempted and reverted: it forced
+`#available(macOS 15, *)` guards on three macOS-15-only APIs already in the app —
+`ScrollPosition`/`onScrollGeometryChange` (`SelectionUI.swift`), `pointerStyle` (`InspectorView.swift`),
+and `AVAssetExportSession.export(to:as:)` (`VideoMetadataEmbedder.swift`) — each needing a macOS-14
+fallback. That's permanent complexity (every future macOS-15 API would need the same) plus minor
+macOS-14 feature regressions, for **no in-scope benefit**: the i9 runs Tahoe 26 and the other Macs are
+Apple Silicon on current macOS — none run macOS 14. Jude confirmed macOS 15 is a fine floor.
 
-- [ ] **Step 1: Lower the platform floor**
-
-In `Package.swift`, change:
-
-```swift
-    platforms: [.macOS(.v15)],
-```
-
-to:
-
-```swift
-    platforms: [.macOS(.v14)],
-```
-
-- [ ] **Step 2: Build to prove nothing macOS-15-only is used**
-
-Run: `swift build -c debug 2>&1 | tail -20`
-Expected: **Build complete** with no errors. (The brainstorming sweep found no macOS-15-only API. If the compiler flags one — e.g. an `'X' is only available in macOS 15.0 or newer` error — wrap that single call site in `if #available(macOS 15, *) { … } else { …fallback… }`, or if there is no sensible fallback, revert this file to `.v15` and STOP to report which API forced it.)
-
-- [ ] **Step 3: Run the full test suite (must stay green)**
-
-Run: `swift test 2>&1 | tail -15`
-Expected: all tests pass (the floor change is source-compatible).
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add Package.swift
-git commit -m "build: lower deployment floor to macOS 14 for Intel reach"
-```
+**No files change in this task.** `Package.swift` keeps `platforms: [.macOS(.v15)]`. `ContentUnavailableView`,
+`@Observable`, `Grid`, etc. used by later tasks are macOS-14 APIs and remain valid at the macOS 15 floor.
 
 ---
 
@@ -643,19 +620,10 @@ fi
 echo "Universal binary OK: $ARCHS"
 ```
 
-- [ ] **Step 3: Set the bundle min-system to 14.0**
+- [ ] **Step 3: Leave the bundle min-system at 15.0 (no change)**
 
-In the Info.plist heredoc, change line 33:
-
-```
-    <key>LSMinimumSystemVersion</key><string>15.0</string>
-```
-
-to:
-
-```
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
-```
+The floor stays macOS 15, so `LSMinimumSystemVersion` in the Info.plist heredoc remains `15.0` — do
+**not** change it. (This step is a no-op, kept here so the step numbering matches the original plan.)
 
 - [ ] **Step 4: Point the Sparkle.framework copy at the universal products dir**
 
@@ -753,20 +721,20 @@ products from `.build/apple/Products/Release/`. It refuses to package unless the
 
     lipo -archs build/OpenPhoto.app/Contents/MacOS/OpenPhoto   # → x86_64 arm64
 
-Deployment floor is macOS 14 (`LSMinimumSystemVersion` 14.0 + `Package.swift` `.macOS(.v14)`).
+Deployment floor is macOS 15 (`LSMinimumSystemVersion` 15.0 + `Package.swift` `.macOS(.v15)`).
 On Intel there is no Neural Engine; the CoreML loaders fall back GPU→CPU automatically and surface a
 loud in-app banner if a model still can't load.
 ```
 
 - [ ] **Step 3: Update README requirements**
 
-In `README.md`, update the requirements/system line to state: **macOS 14 (Sonoma) or later, on Apple Silicon or Intel Macs (universal binary).** (Replace any existing "Apple Silicon" / "macOS 15" wording.)
+In `README.md`, update the requirements/system line to state: **macOS 15 (Sequoia) or later, on Apple Silicon or Intel Macs (universal binary).** (Replace any existing "Apple Silicon"-only wording; keep the macOS 15 version.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add docs/RELEASING.md README.md .github/workflows 2>/dev/null; git add docs/RELEASING.md README.md
-git commit -m "docs: universal build + macOS 14 / Intel requirements"
+git commit -m "docs: universal build + macOS 15 / Intel requirements"
 ```
 
 ---
@@ -788,7 +756,7 @@ Not an agent task. After the branch is built, hand Jude the universal `.app` (or
 
 **Spec coverage:**
 - Universal binary (arm64+x86_64) → Task 6. ✓
-- macOS 14 floor → Task 1 (Package.swift) + Task 6 (plist). ✓
+- macOS 15 floor (unchanged) → Task 1 (decision/no-op) + Task 6 (plist stays 15.0). ✓
 - Monterey out of scope → no backport tasks. ✓
 - Zero logic/UI rewrite → only additive ML-availability surfacing + build changes. ✓
 - CoreML-on-Intel compute-units fallback → Task 2 (`MLLoader` ladder) + Task 3 (loaders use it). ✓
