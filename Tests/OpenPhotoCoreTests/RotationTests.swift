@@ -37,4 +37,7 @@ private func photoAsset() -> AssetRecord {
     #expect(try cat.item(hash: H)?.rotation == 270)
     try cat.setRotation(hash: H, rotation: 450)            // wraps to 90
     #expect(try cat.item(hash: H)?.rotation == 90)
+    // The browse query (what the timeline grid + flatItems use) must also carry the rotation, or a
+    // re-opened photo shows the pre-rotation orientation.
+    #expect(try cat.timelineItems().first { $0.hash == H }?.rotation == 90)
 }

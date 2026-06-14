@@ -15,7 +15,11 @@ struct ViewerView: View {
     private var flatItems: [TimelineItem] {
         state.viewerItems.isEmpty ? state.flatItems : state.viewerItems
     }
-    private var rotationDeg: Double { Double(state.openedItem?.rotation ?? 0) }
+    /// Live display rotation read from the CATALOG (the source of truth) for the open photo — the
+    /// TimelineItem we were handed can be a stale copy from a grid list that wasn't refreshed after a
+    /// rotate, which is why re-opening from the grid used to show the pre-rotation orientation.
+    @State private var liveRotation = 0
+    private var rotationDeg: Double { Double(liveRotation) }
     private var index: Int? { flatItems.firstIndex { $0.instanceID == state.openedItem?.instanceID } }
 
     var body: some View {
@@ -231,6 +235,8 @@ struct ViewerView: View {
         liveURL = nil
         driveUnplugged = false
         guard let item = state.openedItem else { return }
+        // Read the rotation from the catalog (source of truth), not the possibly-stale `item`.
+        liveRotation = (try? state.library?.catalog.rotation(forHash: item.hash)) ?? item.rotation
         guard let url = state.fullResURL(for: item) else {
             // Drive-only and the drive is not connected.
             if state.isDriveOnly(item) { driveUnplugged = true }
@@ -246,7 +252,7 @@ struct ViewerView: View {
             try? Data(contentsOf: url)
         }.value
         if let data, let img = NSImage(data: data) {
-            fullImage = Self.rotated(img, degrees: item.rotation)
+            fullImage = Self.rotated(img, degrees: liveRotation)
         }
     }
 
