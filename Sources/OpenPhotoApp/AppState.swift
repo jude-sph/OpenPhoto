@@ -232,15 +232,22 @@ final class AppState {
     var hiddenFaceIDs: [Int64] = []
     private var facesDirty = true
     private var geocodeDirty = true
-    /// DBSCAN parameters for face clustering over AdaFace identity vectors (cosine distance).
-    /// `eps` = max distance for two faces to be neighbours; `minPts` = neighbours required to seed a
-    /// cluster. minPts ≥ 3 gives the density requirement that resists the single-link chaining which
-    /// produced the old 1700-photo blob. Reasonable starting defaults — tune on a real library.
-    private let faceClusterEps = 0.5
-    private let faceClusterMinPts = 3
-    /// Max cosine distance for an unassigned face to be SUGGESTED as a member of an existing person.
-    /// A touch looser than `faceClusterEps` because a many-face centroid is a strong anchor.
-    private let faceMatchThreshold = 0.55
+    /// Grouping sensitivity (0 = Strict … 1 = Loose). The slider writes this — it is the PENDING
+    /// value and does NOT change grouping until committed on the next Rescan Faces, so existing
+    /// groupings stay intact between rescans. Persisted; default 0.5 = historical behaviour.
+    var faceSensitivity: Double = UserDefaults.standard.object(forKey: "faceSensitivity") as? Double ?? 0.5 {
+        didSet { UserDefaults.standard.set(faceSensitivity, forKey: "faceSensitivity") }
+    }
+    /// The sensitivity clustering actually uses. Committed `= faceSensitivity` only inside
+    /// rescanFaces(), which is the single point where the People screen re-groups.
+    private var appliedFaceSensitivity: Double =
+        UserDefaults.standard.object(forKey: "faceSensitivityApplied") as? Double ?? 0.5 {
+        didSet { UserDefaults.standard.set(appliedFaceSensitivity, forKey: "faceSensitivityApplied") }
+    }
+    private var faceClusterParams: FaceClusterParams { .forSensitivity(appliedFaceSensitivity) }
+    private var faceClusterEps: Double { faceClusterParams.eps }
+    private var faceClusterMinPts: Int { faceClusterParams.minPts }
+    private var faceMatchThreshold: Double { faceClusterParams.matchThreshold }
 
     /// Recompute the People screen off the main actor: named people, suggested ADDITIONS to existing
     /// people (faces near a person's centroid), suggested NEW clusters (DBSCAN over the rest), and the
@@ -447,6 +454,7 @@ final class AppState {
     /// re-processed, so the People screen stays populated and updates progressively.
     func rescanFaces() {
         guard let lib = library else { return }
+        appliedFaceSensitivity = faceSensitivity   // commit pending sensitivity → re-groups below
         Task {
             await Task.detached(priority: .userInitiated) {
                 try? lib.catalog.clearDerivationJobs(stage: FaceStage.id)

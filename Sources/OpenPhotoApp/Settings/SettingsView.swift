@@ -64,9 +64,15 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Divider()
             Text("People & Faces").font(.system(size: 12, weight: .semibold))
+            Text("Grouping sensitivity").font(.system(size: 11)).foregroundStyle(Theme.textDim)
+            HStack(spacing: 8) {
+                Text("Strict").font(.system(size: 10)).foregroundStyle(Theme.textDim)
+                Slider(value: $state.faceSensitivity, in: 0...1)
+                Text("Loose").font(.system(size: 10)).foregroundStyle(Theme.textDim)
+            }
             Button("Rescan Faces\u{2026}") { confirmRescanFaces() }
                 .disabled(state.library == nil)
-            Text("Re-detects and re-groups faces across your whole library with the current recognition model. People you've named are kept. Runs in the background and can take a while on a large library.")
+            Text("Lower groups more cautiously (fewer wrong matches); higher pulls more loose faces into groups. People you've named are always kept. Takes effect next time you Rescan Faces.")
                 .font(.system(size: 11)).foregroundStyle(Theme.textDim)
                 .fixedSize(horizontal: false, vertical: true)
         }
