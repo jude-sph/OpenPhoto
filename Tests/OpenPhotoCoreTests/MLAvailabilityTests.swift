@@ -56,3 +56,32 @@ import Foundation
         from: [MLModelKey.mobileclipImage: .absent,
                MLModelKey.mobileclipText: .available]) == .absent)
 }
+
+@Test func embedStageReportsAbsentWhenModelMissing() throws {
+    let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("ml-absent-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+
+    let reg = MLAvailability()
+    let stage = EmbedStage(modelDirectory: tmp, availability: reg)
+    #expect(stage.embedImage(at: tmp.appendingPathComponent("nope.jpg")) == nil)
+    #expect(reg.status(model: MLModelKey.mobileclipImage) == .absent)
+}
+
+@Test func embedStageReportsUnavailableWhenModelBroken() throws {
+    let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("ml-broken-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    // A present-but-invalid model package: compileModel will throw → loud .unavailable.
+    try Data("not a real model".utf8)
+        .write(to: tmp.appendingPathComponent("mobileclip_s2_image.mlpackage"))
+
+    let reg = MLAvailability()
+    let stage = EmbedStage(modelDirectory: tmp, availability: reg)
+    #expect(stage.embedImage(at: tmp.appendingPathComponent("nope.jpg")) == nil)
+    if case .unavailable = reg.status(model: MLModelKey.mobileclipImage) {} else {
+        Issue.record("expected .unavailable for a present-but-broken model")
+    }
+}

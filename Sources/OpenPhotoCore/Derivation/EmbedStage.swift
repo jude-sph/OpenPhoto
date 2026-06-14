@@ -27,6 +27,7 @@ public final class EmbedStage: @unchecked Sendable {
     private static let imageSide = 256
 
     private let modelDirectory: URL?
+    private let availability: MLAvailability
     private let lock = NSLock()
 
     // Lazy, memoized load state. The `loaded*` flags distinguish "not tried yet" from "tried and
@@ -41,8 +42,9 @@ public final class EmbedStage: @unchecked Sendable {
     /// - Parameter modelDirectory: directory containing `mobileclip_s2_image.mlpackage`,
     ///   `mobileclip_s2_text.mlpackage`, and `bpe_simple_vocab_16e6.txt.gz`. When nil, defaults to
     ///   the running app bundle's resource directory (where `make-app.sh` injects them).
-    public init(modelDirectory: URL? = nil) {
+    public init(modelDirectory: URL? = nil, availability: MLAvailability = .shared) {
         self.modelDirectory = modelDirectory ?? Bundle.main.resourceURL
+        self.availability = availability
     }
 
     // MARK: - Public API
@@ -87,7 +89,9 @@ public final class EmbedStage: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if !triedImageLoad {
             triedImageLoad = true
-            imageModel = Self.compileAndLoad(modelDirectory?.appendingPathComponent("mobileclip_s2_image.mlpackage"))
+            imageModel = compileAndLoad(
+                modelDirectory?.appendingPathComponent("mobileclip_s2_image.mlpackage"),
+                key: MLModelKey.mobileclipImage)
         }
         return imageModel
     }
@@ -96,7 +100,9 @@ public final class EmbedStage: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if !triedTextLoad {
             triedTextLoad = true
-            textModel = Self.compileAndLoad(modelDirectory?.appendingPathComponent("mobileclip_s2_text.mlpackage"))
+            textModel = compileAndLoad(
+                modelDirectory?.appendingPathComponent("mobileclip_s2_text.mlpackage"),
+                key: MLModelKey.mobileclipText)
         }
         return textModel
     }
@@ -112,14 +118,18 @@ public final class EmbedStage: @unchecked Sendable {
         return tokenizer
     }
 
-    private static func compileAndLoad(_ url: URL?) -> MLModel? {
-        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let config = MLModelConfiguration()
-        config.computeUnits = .all
+    private func compileAndLoad(_ url: URL?, key: String) -> MLModel? {
+        guard let url, FileManager.default.fileExists(atPath: url.path) else {
+            availability.report(model: key, .absent)
+            return nil
+        }
         do {
             let compiled = try MLModel.compileModel(at: url)
-            return try MLModel(contentsOf: compiled, configuration: config)
+            let model = try MLLoader.load(compiledModelAt: compiled)
+            availability.report(model: key, .available)
+            return model
         } catch {
+            availability.report(model: key, .unavailable(error.localizedDescription))
             return nil
         }
     }

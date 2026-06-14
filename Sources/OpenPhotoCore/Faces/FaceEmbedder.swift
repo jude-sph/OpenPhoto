@@ -53,12 +53,15 @@ public final class FaceEmbedder: @unchecked Sendable {
         if let model { return model }
         do {
             let url = try compiledModelURL()
-            let config = MLModelConfiguration()
-            config.computeUnits = .all                       // CPU + GPU + Neural Engine
-            let m = try MLModel(contentsOf: url, configuration: config)
+            let m = try MLLoader.load(compiledModelAt: url)
             model = m
+            MLAvailability.shared.report(model: MLModelKey.adaface, .available)
             return m
+        } catch Error.resourceMissing {
+            MLAvailability.shared.report(model: MLModelKey.adaface, .absent)
+            return nil
         } catch {
+            MLAvailability.shared.report(model: MLModelKey.adaface, .unavailable(error.localizedDescription))
             return nil
         }
     }
