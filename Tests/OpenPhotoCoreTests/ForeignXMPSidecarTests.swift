@@ -56,6 +56,15 @@ private let subjectXMP = """
     #expect(ForeignXMPSidecar.coordinate("2,37.554W", ref: nil, negative: "W")! < 0)
 }
 
+@Test func iso6709LocationParses() {
+    let a = MetadataExtractor.parseISO6709("+51.456212-002.625903+010.000/")!
+    #expect(abs(a.lat - 51.456212) < 1e-5)
+    #expect(abs(a.lon - -2.625903) < 1e-5)
+    let b = MetadataExtractor.parseISO6709("-33.8688+151.2093/")!
+    #expect(b.lat < 0 && b.lon > 0)
+    #expect(MetadataExtractor.parseISO6709("garbage") == nil)
+}
+
 @Test func foreignXMPEmptyOrUnparseableIsNil() {
     #expect(ForeignXMPSidecar.parse(Data("not xml".utf8)) == nil)
     #expect(ForeignXMPSidecar.parse(Data("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"></x:xmpmeta>".utf8)) == nil)

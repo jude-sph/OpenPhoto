@@ -145,15 +145,32 @@ struct CleanupView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.textDim)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Theme.gridGap) {
+                HStack(alignment: .top, spacing: Theme.gridGap) {
                     ForEach(group.items, id: \.instanceID) { item in
-                        tile(item, isKeeper: item.instanceID == group.keepInstanceID)
-                            .frame(width: cellMin, height: cellMin)
+                        VStack(spacing: 3) {
+                            tile(item, isKeeper: item.instanceID == group.keepInstanceID)
+                                .frame(width: cellMin, height: cellMin)
+                            // Show each copy's folder so the user can verify exactly which file is which.
+                            if state.cullMode == .duplicates {
+                                Label(folderLabel(item), systemImage: "folder")
+                                    .labelStyle(.titleAndIcon)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Theme.textDim)
+                                    .lineLimit(1).truncationMode(.head)
+                                    .frame(width: cellMin, alignment: .leading)
+                                    .help(item.relPath)   // full path on hover
+                            }
+                        }
                     }
                 }
                 .padding(.vertical, 2)
             }
         }
+    }
+
+    /// The folder a duplicate copy lives in (vault-relative); "Library root" when at the top level.
+    private func folderLabel(_ item: TimelineItem) -> String {
+        item.dirPath.isEmpty ? "Library root" : item.dirPath
     }
 
     private func tile(_ item: TimelineItem, isKeeper: Bool) -> some View {

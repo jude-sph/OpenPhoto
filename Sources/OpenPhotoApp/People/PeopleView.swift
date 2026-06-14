@@ -38,6 +38,7 @@ struct PeopleOverviewView: View {
 
     // Merge-selection state (select two named people to merge).
     @State private var mergeSelection: Set<Int64> = []
+    @State private var mergeMode = false   // entered via "Select to merge…"; can hold 0 selections
     @State private var showMergeAlert = false
 
     private let columns = [GridItem(.adaptive(minimum: 108), spacing: 12)]
@@ -94,8 +95,10 @@ struct PeopleOverviewView: View {
                     .foregroundStyle(Theme.textDim)
             }
             Spacer()
-            if !mergeSelection.isEmpty {
-                Button("Cancel") { mergeSelection = [] }
+            if mergeMode {
+                Text("Pick two people")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textFaint)
+                Button("Cancel") { mergeMode = false; mergeSelection = [] }
                     .buttonStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.textDim)
@@ -106,7 +109,7 @@ struct PeopleOverviewView: View {
                         .foregroundStyle(Theme.accent)
                 }
             } else if state.people.count >= 2 {
-                Button("Select to merge…") { mergeSelection = [] }
+                Button("Select to merge…") { mergeMode = true; mergeSelection = [] }
                     .buttonStyle(.plain)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textDim)
@@ -129,10 +132,10 @@ struct PeopleOverviewView: View {
                     PersonCard(
                         state: state,
                         person: person,
-                        inMergeMode: !mergeSelection.isEmpty,
+                        inMergeMode: mergeMode,
                         mergeSelected: mergeSelection.contains(person.id),
                         onTap: {
-                            if !mergeSelection.isEmpty {
+                            if mergeMode {
                                 if mergeSelection.contains(person.id) {
                                     mergeSelection.remove(person.id)
                                 } else if mergeSelection.count < 2 {
@@ -233,7 +236,7 @@ struct PeopleOverviewView: View {
             let dstName = state.people.first { $0.id == dst }?.name ?? "Person"
             Button("Merge \(srcName) into \(dstName)", role: .destructive) {
                 state.mergePeople(src, into: dst)
-                mergeSelection = []
+                mergeSelection = []; mergeMode = false
             }
         }
         Button("Cancel", role: .cancel) { mergeSelection = [] }

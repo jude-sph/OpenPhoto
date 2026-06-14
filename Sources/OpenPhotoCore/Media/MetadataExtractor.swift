@@ -92,5 +92,26 @@ public enum MetadataExtractor {
         }), let s = try? await cid.load(.stringValue) {
             m.contentIdentifier = s
         }
+        // Embedded location (ISO 6709) so geotagged videos appear on the map. QuickTime/MP4 store it
+        // under the common `location` key or the QuickTime location-ISO6709 metadata.
+        if m.latitude == nil {
+            let loc = meta.first { $0.commonKey == .commonKeyLocation }
+                ?? meta.first { $0.identifier == .quickTimeMetadataLocationISO6709 }
+                ?? meta.first { $0.identifier == .quickTimeUserDataLocationISO6709 }
+            if let loc, let s = try? await loc.load(.stringValue), let c = parseISO6709(s) {
+                m.latitude = c.lat; m.longitude = c.lon
+            }
+        }
+    }
+
+    /// Parse an ISO 6709 location string (`+51.4562-002.6259+010.000/`) → (latitude, longitude) —
+    /// the first two leading signed decimal numbers.
+    static func parseISO6709(_ s: String) -> (lat: Double, lon: Double)? {
+        let pattern = "([+-][0-9]+(?:\\.[0-9]+)?)([+-][0-9]+(?:\\.[0-9]+)?)"
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+              let r1 = Range(m.range(at: 1), in: s), let r2 = Range(m.range(at: 2), in: s),
+              let lat = Double(s[r1]), let lon = Double(s[r2]) else { return nil }
+        return (lat, lon)
     }
 }

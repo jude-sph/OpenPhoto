@@ -59,25 +59,31 @@ public final class XMPExportSource: ImportSource, @unchecked Sendable {
 
     public func fetch(_ item: ImportItem, to url: URL) async throws {
         let src = rootURL.appendingPathComponent(item.id)
-        try FileManager.default.copyItem(at: src, to: url)
-
         let meta = ForeignXMPSidecar.sidecarURL(forMediaAt: src)
             .flatMap { try? Data(contentsOf: $0) }.flatMap(ForeignXMPSidecar.parse)
         let taken = meta?.takenAt ?? item.takenAt
 
-        if item.kind == .photo {
-            // Fold the sidecar into the copy where the file lacks it → self-describing library file.
-            let gps = existingGPS(url)
-            let injectDate = !fileHasExifDate(url) ? taken : nil
-            let injectLat = gps.latitude == nil ? meta?.latitude : nil
-            let injectLon = gps.longitude == nil ? meta?.longitude : nil
-            let sidecar = SidecarData(rating: meta?.rating ?? 0, favorite: false,
-                                      caption: meta?.caption, tags: meta?.tags ?? [], faces: [])
-            try? EmbeddedMetadata.embed(sidecar, exifDate: injectDate,
-                                        latitude: injectLat, longitude: injectLon, intoImageAt: url)
+        if item.kind == .video, let lat = meta?.latitude, let lon = meta?.longitude,
+           await VideoMetadataEmbedder.embed(from: src, to: url,
+                                             latitude: lat, longitude: lon, date: taken) {
+            // Geolocation embedded straight into the copied .mov/.mp4/.m4v (passthrough — no
+            // re-encode), so the video is self-describing. Unsupported containers fall through.
+        } else {
+            try FileManager.default.copyItem(at: src, to: url)
+            if item.kind == .photo {
+                // Fold the sidecar into the photo copy where it's missing → self-describing file.
+                let gps = existingGPS(url)
+                let injectDate = !fileHasExifDate(url) ? taken : nil
+                let injectLat = gps.latitude == nil ? meta?.latitude : nil
+                let injectLon = gps.longitude == nil ? meta?.longitude : nil
+                let sidecar = SidecarData(rating: meta?.rating ?? 0, favorite: false,
+                                          caption: meta?.caption, tags: meta?.tags ?? [], faces: [])
+                try? EmbeddedMetadata.embed(sidecar, exifDate: injectDate,
+                                            latitude: injectLat, longitude: injectLon, intoImageAt: url)
+            }
+            // (A non-MP4-family video keeps its date via mtime; its sidecar GPS isn't embeddable —
+            // those legacy formats essentially never carry GPS.)
         }
-        // Videos: capture date via mtime (embedding into .mov isn't clean); a video's sidecar
-        // keywords/GPS aren't carried this slice — a documented limitation, mirroring Takeout.
         if let taken {
             try? FileManager.default.setAttributes([.modificationDate: taken], ofItemAtPath: url.path)
         }
