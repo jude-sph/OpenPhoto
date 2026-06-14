@@ -8,17 +8,21 @@ public enum OCRStage {
     /// Recognize text in the image at `url`. Returns the recognized text (possibly empty for an
     /// image with no text), or `nil` if the image can't be read / Vision throws.
     public static func recognizeText(in url: URL) -> String? {
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = true
-        let handler = VNImageRequestHandler(url: url, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            return nil
+        // Pool the decode + Vision buffers so they free per call. Without this, draining a whole
+        // library accumulates autoreleased image memory and OOMs (worse under the parallel runner).
+        autoreleasepool {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            let handler = VNImageRequestHandler(url: url, options: [:])
+            do {
+                try handler.perform([request])
+            } catch {
+                return nil
+            }
+            let observations = request.results ?? []
+            return observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
         }
-        let observations = request.results ?? []
-        return observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
     }
 }
 

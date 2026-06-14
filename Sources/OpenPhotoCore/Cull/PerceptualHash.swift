@@ -9,13 +9,17 @@ import ImageIO
 public enum PerceptualHash {
     /// dHash of the image at `url`, or nil if it can't be decoded.
     public static func compute(imageAt url: URL) -> Int64? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
-                  kCGImageSourceCreateThumbnailFromImageAlways: true,
-                  kCGImageSourceCreateThumbnailWithTransform: true,
-                  kCGImageSourceThumbnailMaxPixelSize: 64,
-              ] as CFDictionary) else { return nil }
-        return dHash(cg)
+        // Pool per call so the decode's autoreleased buffers free immediately; the parallel analysis
+        // runner would otherwise accumulate them across the library and balloon memory.
+        autoreleasepool {
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceCreateThumbnailWithTransform: true,
+                      kCGImageSourceThumbnailMaxPixelSize: 64,
+                  ] as CFDictionary) else { return nil }
+            return dHash(cg)
+        }
     }
 
     /// dHash of a CGImage: 9×8 grayscale → 64 row-wise adjacent-pixel comparisons.

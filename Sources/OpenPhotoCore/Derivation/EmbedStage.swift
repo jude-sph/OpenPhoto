@@ -53,14 +53,19 @@ public final class EmbedStage: @unchecked Sendable {
     /// (unreadable image, missing/broken model).
     public func embedImage(at url: URL) -> [Float]? {
         guard let model = loadImageModel() else { return nil }
-        guard let pixelBuffer = Self.makePixelBuffer(from: url, side: Self.imageSide) else { return nil }
-        do {
-            let input = try MLDictionaryFeatureProvider(
-                dictionary: [Self.imageInputName: MLFeatureValue(pixelBuffer: pixelBuffer)])
-            let out = try model.prediction(from: input)
-            return Self.normalizedVector(from: out)
-        } catch {
-            return nil
+        // Pool the full-image decode + CoreML buffers so they free per call. This is the heaviest
+        // analysis stage; without the pool the parallel runner accumulates decoded images across the
+        // library and OOMs (the same failure mode FaceStage already guards against).
+        return autoreleasepool {
+            guard let pixelBuffer = Self.makePixelBuffer(from: url, side: Self.imageSide) else { return nil }
+            do {
+                let input = try MLDictionaryFeatureProvider(
+                    dictionary: [Self.imageInputName: MLFeatureValue(pixelBuffer: pixelBuffer)])
+                let out = try model.prediction(from: input)
+                return Self.normalizedVector(from: out)
+            } catch {
+                return nil
+            }
         }
     }
 
