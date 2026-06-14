@@ -107,6 +107,27 @@ struct SidebarView: View {
                     .padding(.horizontal, 18).padding(.top, 2)
             }
             Spacer()
+            if !state.lockedFolders.isEmpty {
+                Button {
+                    if state.lockedRevealed {
+                        state.relock()
+                    } else {
+                        Task { _ = await state.revealLockedContent() }
+                    }
+                } label: {
+                    Label(
+                        state.lockedRevealed ? "Lock now" : "Show hidden folders",
+                        systemImage: state.lockedRevealed ? "lock.open.fill" : "lock.fill"
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
             if let p = state.scanProgress {
                 ActivityIndicatorView(progress: p)
             }

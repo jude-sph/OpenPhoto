@@ -143,6 +143,11 @@ private struct FolderRow: View {
                     .font(.system(size: 12))
                     .foregroundStyle(state.selectedFolder == node.path ? Theme.accent : Theme.textDim)
                 Text(node.name).font(.system(size: 13))
+                if state.isFolderLocked(node.path) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.textFaint)
+                }
                 Spacer()
                 if node.count > 0 {
                     Text("\(node.count)")
@@ -165,7 +170,12 @@ private struct FolderRow: View {
                     : nil
             )
             .contentShape(Rectangle())
-            .onTapGesture { state.selectedFolder = node.path }
+            .onTapGesture {
+                state.selectedFolder = node.path
+                if state.isFolderLocked(node.path) && !state.lockedRevealed {
+                    Task { _ = await state.revealLockedContent() }
+                }
+            }
             .draggable(node.path)
             .dropDestination(for: String.self) { items, _ in
                 guard let payload = items.first else { return false }
@@ -186,6 +196,16 @@ private struct FolderRow: View {
                 Button("New Folder Inside\u{2026}") {
                     newChildFolderName = ""
                     showNewChildFolder = true
+                }
+                Divider()
+                if state.isFolderLocked(node.path) {
+                    Button("Unlock", systemImage: "lock.open") {
+                        state.unlockFolder(node.path)
+                    }
+                } else {
+                    Button("Lock (Touch ID)", systemImage: "lock") {
+                        state.lockFolder(node.path)
+                    }
                 }
                 Divider()
                 Button("Delete Folder\u{2026}", role: .destructive) {
