@@ -284,7 +284,7 @@ final class AppState {
             self.people = result.people
             self.suggestedClusters = result.clusters
             self.suggestedAdditions = result.additions
-            self.otherFaceIDs = result.other
+            self.otherFaceIDs = preservingOtherOrder(result.other)
             self.facesLoading = false
             self.facesDirty = false
         }
@@ -659,7 +659,7 @@ final class AppState {
         Task.detached(priority: .userInitiated) { [weak self] in
             try? lib.catalog.setPersonCover(personID: personID, faceID: faceID)
             await MainActor.run { [weak self] in
-                self?.loadPeople()
+                self?.refreshSuggestions()   // reloads people (new cover) + preserves Other order
             }
         }
     }
