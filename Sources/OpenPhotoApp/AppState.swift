@@ -1756,10 +1756,12 @@ final class AppState {
     }
 
     private var derivationTask: Task<Void, Never>?
-    /// Stage registry: each stage's whole pending set is drained in order. Inference runs off-main
-    /// via `Task.detached(.utility)` inside `drainDerivation`. Add stages here as they are implemented.
+    /// Stage registry: each stage's whole pending set is drained in order, with bounded concurrency
+    /// inside `drainDerivation`. Order = perceived value: faces (People) + semantic (search) first,
+    /// then the cheap catalog-only/quick stages, then OCR last (expensive Vision pass, niche text
+    /// search) — so on a slow machine the visible features fill in early instead of after hours.
     private let derivationStages: [any DerivationStage] =
-        [OCRDerivationStage(), EmbedStage(), FaceDerivationStage(), GeocodeStage(), PHashStage()]
+        [FaceDerivationStage(), EmbedStage(), GeocodeStage(), PHashStage(), OCRDerivationStage()]
 
     /// Kick the background derivation runner if it isn't already draining. Called at library-open
     /// and after anything that adds assets (scan/ingest). Cheap + idempotent.
@@ -1777,6 +1779,11 @@ final class AppState {
     /// assets are skipped (retried on the next poke when their drive connects), not marked failed.
     private func drainDerivation() async {
         guard let lib = library else { return }
+        // Bounded concurrency: analyse several items at once for a big speedup (especially on Intel,
+        // which has no Neural Engine), while capping in-flight decodes so peak memory stays bounded —
+        // indexing has OOM'd before. The heavy stages (faces/embed/OCR) already wrap their decode in
+        // autorelease pools; we additionally limit how many run at once. Conservative cap on purpose.
+        let maxConcurrent = max(2, min(ProcessInfo.processInfo.activeProcessorCount - 2, 4))
         for stage in derivationStages {
             if Task.isCancelled { break }
             // If the stage's backing resources (e.g. the embed model package) are absent on this
@@ -1785,40 +1792,43 @@ final class AppState {
             guard stage.isAvailable else { continue }
             let pending = (try? lib.catalog.pendingDerivation(stage: stage.id)) ?? []
             guard !pending.isEmpty else { continue }
-            // Seed the progress line from the catalog so it appears immediately, then advance it
-            // locally per successful item — inference dominates the per-item cost, so a published
-            // increment each item is cheap and keeps the count climbing smoothly with no DB read.
-            var progress = (try? lib.catalog.derivationProgress(stage: stage.id))
-                ?? (done: 0, total: pending.count)
+            let catalog = lib.catalog
             derivationProgress = combinedProgress()
-            for hash in pending {
-                if Task.isCancelled { break }
-                // "" excludes no vault — any reachable copy (Mac-local or a connected drive) is fine.
-                let url = goodCopyURL(forHash: hash, excluding: "")
-                // Stages that need the image bytes are skipped when the file is unreachable
-                // (e.g. drive ejected) — they retry on the next poke. GeocodeStage reads catalog
-                // lat/lon only (needsFile == false), so a drive-only asset still gets geocoded.
-                if url == nil && stage.needsFile { continue }
-                let runURL = url ?? URL(fileURLWithPath: "/")   // geocode ignores url; pass a harmless placeholder
-                let ok = await Task.detached(priority: .utility) {
-                    await stage.run(hash: hash, url: runURL, catalog: lib.catalog)
-                }.value
-                if ok {
-                    try? lib.catalog.markDerived(hash: hash, stage: stage.id)
-                    progress.done += 1
-                    // Progressive People refresh while faces re-derive (a 10k library takes a long
-                    // time) so unassigned faces appear as they're found, not only at the very end. The
-                    // !facesLoading guard self-throttles — a new reload starts only once the prior one
-                    // finishes, so the O(n²) clustering can't pile up.
-                    if stage.id == FaceStage.id, progress.done % 200 == 0, !facesLoading {
-                        loadPeople()
+            var completed = 0
+            await withTaskGroup(of: Void.self) { group in
+                var index = 0
+                // Submit the next file-reachable pending item. Items whose bytes are currently
+                // unreachable (e.g. a drive is ejected) are skipped and left pending for a later poke;
+                // GeocodeStage needsFile == false, so a drive-only asset still gets geocoded.
+                @MainActor func submitNext() {
+                    while index < pending.count {
+                        let hash = pending[index]; index += 1
+                        let url = goodCopyURL(forHash: hash, excluding: "")   // "" excludes no vault
+                        if url == nil && stage.needsFile { continue }
+                        let runURL = url ?? URL(fileURLWithPath: "/")   // geocode ignores url
+                        group.addTask(priority: .utility) {
+                            let ok = await stage.run(hash: hash, url: runURL, catalog: catalog)
+                            if ok { try? catalog.markDerived(hash: hash, stage: stage.id) }
+                            else { try? catalog.markDerivationFailed(hash: hash, stage: stage.id) }
+                        }
+                        return
                     }
-                } else {
-                    try? lib.catalog.markDerivationFailed(hash: hash, stage: stage.id)
                 }
-                derivationProgress = combinedProgress()
-                await Task.yield()
+                for _ in 0..<maxConcurrent { submitNext() }
+                while await group.next() != nil {
+                    if Task.isCancelled { group.cancelAll(); break }
+                    completed += 1
+                    // Progressive People refresh while faces re-derive (a big library takes a while) so
+                    // unassigned faces appear as they're found. The !facesLoading guard self-throttles —
+                    // a new reload starts only once the prior O(n²) clustering finishes.
+                    if stage.id == FaceStage.id, completed % 200 == 0, !facesLoading { loadPeople() }
+                    // Refresh the progress line periodically (combinedProgress reads the DB — don't do
+                    // it for every single item under concurrency).
+                    if completed % 4 == 0 { derivationProgress = combinedProgress() }
+                    submitNext()
+                }
             }
+            derivationProgress = combinedProgress()
         }
         derivationProgress = nil
         semanticIndexDirty = true   // embeddings may have grown → refresh the in-memory index

@@ -111,10 +111,11 @@ struct SidebarView: View {
                 ActivityIndicatorView(progress: p)
             }
             if let d = state.derivationProgress, d.done < d.total {
-                Text("Analyzing \(d.done)/\(d.total)\u{2026}")
+                Text("Analyzing\u{2026} \(Int(Double(d.done) / Double(max(d.total, 1)) * 100))%")
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(Theme.textFaint)
                     .padding(.horizontal, 18).padding(.bottom, 4)
+                    .help("\(d.done) of \(d.total) on-device analysis tasks (several per photo)")
             }
         }
         .frame(width: Theme.sidebarWidth)
