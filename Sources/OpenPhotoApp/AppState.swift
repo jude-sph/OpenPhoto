@@ -280,6 +280,18 @@ final class AppState {
         }
     }
 
+    /// Preserve the current display order of the Other-faces bucket across a re-fetch: faces still
+    /// present keep their position (so a Shuffle — or any manual ordering — survives assigning or
+    /// hiding faces), removed faces drop out, and genuinely new faces are appended. Without this, the
+    /// fast re-match after each assignment reset the bucket to the catalog's default order, silently
+    /// undoing a shuffle (you'd snap back to the default first-500).
+    private func preservingOtherOrder(_ fresh: [Int64]) -> [Int64] {
+        let freshSet = Set(fresh)
+        let kept = otherFaceIDs.filter { freshSet.contains($0) }
+        let keptSet = Set(kept)
+        return kept + fresh.filter { !keptSet.contains($0) }
+    }
+
     /// FAST re-match used after assigning faces (confirming suggestions / adding to a person). Only
     /// re-runs the cheap centroid match — NOT the O(n²) DBSCAN clustering, and NOT face re-derivation —
     /// so confirming a suggestion immediately surfaces the next batch the sharpened centroid now
@@ -324,7 +336,7 @@ final class AppState {
             self.people = result.people
             self.suggestedClusters = result.clusters
             self.suggestedAdditions = result.additions
-            self.otherFaceIDs = result.other
+            self.otherFaceIDs = preservingOtherOrder(result.other)
             if announce {
                 self.findingSuggestions = false
                 let nowSuggested = Set(result.additions.values.flatMap { $0 })
@@ -351,7 +363,7 @@ final class AppState {
                 return ((try? lib.catalog.unassignedAutoFaceIDs()) ?? [],
                         (try? lib.catalog.hiddenAutoFaceIDs()) ?? [])
             }.value
-            self.otherFaceIDs = lists.0
+            self.otherFaceIDs = preservingOtherOrder(lists.0)
             self.hiddenFaceIDs = lists.1
         }
     }
@@ -365,7 +377,7 @@ final class AppState {
                 return ((try? lib.catalog.unassignedAutoFaceIDs()) ?? [],
                         (try? lib.catalog.hiddenAutoFaceIDs()) ?? [])
             }.value
-            self.otherFaceIDs = lists.0
+            self.otherFaceIDs = preservingOtherOrder(lists.0)
             self.hiddenFaceIDs = lists.1
         }
     }
