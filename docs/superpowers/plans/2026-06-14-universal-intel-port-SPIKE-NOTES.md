@@ -19,10 +19,14 @@
 
 ## What is NOT covered here (needs real Intel hardware — the i9 Tahoe Mac, Task 9)
 
-- Actual CoreML model inference on Intel: AdaFace IR-101 (faces) and MobileCLIP image+text (semantic
-  search). The unit tests deliberately do not compile/run the real models. Whether these models
-  compile + load + infer with correct results on a real Intel GPU (no Neural Engine) is the open
-  question for the i9 acceptance.
+- **Native** Intel CoreML behavior. The real models DID load and infer correctly under Rosetta x86_64
+  — the tests above exercise AdaFace IR-101 (a 512-d face vector) and MobileCLIP image+text (unit
+  vectors + concept separation) and all passed. That is a strong positive signal that the x86_64
+  model-load/inference code path is correct. BUT under Rosetta on Apple Silicon, CoreML runs out of
+  process via the host's native CoreML daemon, so the actual compute may be serviced by the Apple
+  Silicon GPU/Neural Engine — this does NOT prove the models run on a real Intel GPU with no Neural
+  Engine. Confirming native-Intel load + inference (and acceptable speed/memory) is the open question
+  for the i9 acceptance (Task 9).
 - Safety net already in place: the compute-units ladder (`MLLoader.load`: `.all` → `.cpuAndGPU` →
   `.cpuOnly`) gives each model three chances to load; `.cpuOnly` is the universally-compatible floor.
   If a model still can't load, the loud `MLUnavailableBanner` + People/Search unavailable states fire.
@@ -41,6 +45,7 @@ note the hover reason. (Again: Rosetta ≠ native Intel for CoreML.)
 
 ## Verdict
 
-All 437 x86_64 tests passed under Rosetta — the core logic and the Float16 portability fix are
-runtime-correct on Intel. The only remaining open question is native CoreML model load/inference
-on a real Intel Mac (no Neural Engine), which requires the i9 hardware smoke (Task 9).
+All 437 x86_64 tests passed under Rosetta — including the AdaFace + MobileCLIP model tests — so the
+core logic, the Float16 portability fix, and the CoreML load/inference code path are runtime-correct
+on the x86_64 slice. The only remaining open question is *native* Intel CoreML behavior (real Intel
+GPU, no Neural Engine, no Rosetta), which requires the i9 hardware smoke (Task 9).
