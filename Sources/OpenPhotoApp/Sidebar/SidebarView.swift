@@ -59,7 +59,12 @@ struct SidebarView: View {
                 let button = Button { state.openedDevice = device } label: {
                     HStack(spacing: 9) {
                         Image(systemName: device.symbol).frame(width: 18)
-                        Text(device.name).font(.system(size: 13.5, weight: .medium))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(device.name).font(.system(size: 13.5, weight: .medium))
+                                .lineLimit(1).truncationMode(.middle)
+                            Text(device.recognizedKind)
+                                .font(.system(size: 10)).foregroundStyle(Theme.textDim)
+                        }
                         Spacer()
                     }
                     .padding(.horizontal, 10).padding(.vertical, 6)

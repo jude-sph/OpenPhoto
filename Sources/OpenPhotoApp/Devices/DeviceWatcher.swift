@@ -8,6 +8,7 @@ enum ConnectedDevice: Identifiable, Equatable {
     case volume(id: String, name: String, url: URL)
     case photosLibrary
     case takeout(id: String, name: String, url: URL)
+    case appleExport(id: String, name: String, url: URL)   // originals + XMP sidecars (Apple Photos export)
     case foreignVault(id: String, name: String, url: URL)
     var id: String {
         switch self {
@@ -15,6 +16,7 @@ enum ConnectedDevice: Identifiable, Equatable {
         case .volume(let id, _, _): "vol-\(id)"
         case .photosLibrary: "photoslib"
         case .takeout(let id, _, _): "takeout-\(id)"
+        case .appleExport(let id, _, _): "appleexport-\(id)"
         case .foreignVault(let id, _, _): "foreign-\(id)"
         }
     }
@@ -24,6 +26,7 @@ enum ConnectedDevice: Identifiable, Equatable {
         case .volume(_, let n, _): n
         case .photosLibrary: "Apple Photos"
         case .takeout(_, let n, _): n
+        case .appleExport(_, let n, _): n
         case .foreignVault(_, let n, _): n
         }
     }
@@ -33,7 +36,20 @@ enum ConnectedDevice: Identifiable, Equatable {
         case .volume: "sdcard"
         case .photosLibrary: "photo.on.rectangle.angled"
         case .takeout: "arrow.down.circle"
+        case .appleExport: "photo.on.rectangle.angled"
         case .foreignVault: "externaldrive.badge.person.crop"
+        }
+    }
+    /// Human label of the recognized source type — shown next to the source so the user can see
+    /// OpenPhoto identified it correctly.
+    var recognizedKind: String {
+        switch self {
+        case .camera: return "iPhone / camera (USB)"
+        case .volume(let id, _, _): return id.hasPrefix("manual-") ? "Folder" : "SD card or drive"
+        case .photosLibrary: return "Apple Photos (this Mac)"
+        case .takeout: return "Google Takeout"
+        case .appleExport: return "Apple Photos export"
+        case .foreignVault: return "OpenPhoto drive"
         }
     }
     /// Sources whose items can actually be deleted off them, enabling the
@@ -43,7 +59,7 @@ enum ConnectedDevice: Identifiable, Equatable {
     var supportsDeviceDelete: Bool {
         switch self {
         case .camera, .volume: return true
-        case .photosLibrary, .takeout, .foreignVault: return false
+        case .photosLibrary, .takeout, .appleExport, .foreignVault: return false
         }
     }
 }
@@ -119,6 +135,10 @@ final class DeviceWatcher: NSObject {
             let dev = ConnectedDevice.takeout(id: "manual-" + url.path,
                                               name: url.lastPathComponent, url: url)
             if !devices.contains(where: { $0.id == dev.id }) { devices.append(dev) }
+        } else if XMPExportSource.looksLikeXMPExport(url) {
+            let dev = ConnectedDevice.appleExport(id: "manual-" + url.path,
+                                                  name: url.lastPathComponent, url: url)
+            if !devices.contains(where: { $0.id == dev.id }) { devices.append(dev) }
         } else {
             addManualVolume(url: url)
         }
@@ -148,6 +168,8 @@ final class DeviceWatcher: NSObject {
             made = PhotosLibrarySource()
         case .takeout(_, _, let url):
             made = TakeoutSource(rootURL: url, displayName: device.name)
+        case .appleExport(_, _, let url):
+            made = XMPExportSource(rootURL: url, displayName: device.name)
         case .foreignVault(_, let name, let url):
             made = ((try? Vault.open(at: url)) ?? nil)
                 .map { ForeignVaultSource(vault: $0, displayName: name) }
@@ -183,7 +205,7 @@ final class DeviceWatcher: NSObject {
         // removable volumes and foreign vaults (none of the kept kinds are removable mounts).
         let kept = devices.filter { dev in
             switch dev {
-            case .camera, .photosLibrary, .takeout: return true
+            case .camera, .photosLibrary, .takeout, .appleExport: return true
             case .volume: return dev.id.hasPrefix("vol-manual-")
             case .foreignVault: return false
             }

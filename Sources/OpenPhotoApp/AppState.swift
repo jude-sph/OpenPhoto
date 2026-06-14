@@ -781,6 +781,7 @@ final class AppState {
         deviceWatcher.addImportFolder(url: url)
         if let dev = deviceWatcher.devices.first(where: {
             $0.id == "vol-manual-" + url.path || $0.id == "takeout-manual-" + url.path
+                || $0.id == "appleexport-manual-" + url.path
         }) {
             openedDevice = dev
         }
@@ -1897,7 +1898,7 @@ final class AppState {
         case .camera:
             guard let cam = deviceWatcher.source(for: device) as? CameraSource else { return nil }
             return AirDropDestination(camera: cam)
-        case .photosLibrary, .takeout, .foreignVault:
+        case .photosLibrary, .takeout, .appleExport, .foreignVault:
             return nil   // import-only sources — never send/free-up targets
         }
     }
