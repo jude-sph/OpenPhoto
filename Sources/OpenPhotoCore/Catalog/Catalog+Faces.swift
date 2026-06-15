@@ -130,15 +130,17 @@ extension Catalog {
         }
     }
 
-    /// (id, vector) for every detected-but-unassigned auto face that is CLUSTERABLE — current-model
-    /// dimension and quality-gated in. Stale v1 vectors (dim ≠ 512) and gated-out faces are excluded.
-    /// Hidden faces are also excluded (they've been ignored by the user).
+    /// (id, vector) for every detected-but-unassigned auto face that is CLUSTERABLE — i.e. carries a
+    /// current-model embedding (dim = 512). Capture quality is NOT a filter: a face that was embedded
+    /// is clusterable regardless of how sharp it is (a weak embedding simply matches nobody and falls
+    /// to noise). Only stale v1 vectors (dim ≠ 512) and un-embeddable faces (empty embedding, dim 0)
+    /// are excluded. Hidden faces are also excluded (the user has ignored them).
     public func unassignedFacesWithEmbeddings() throws -> [(id: Int64, vector: [Float])] {
         let lvc = lockedVisibilityClause(hashColumn: "faces.hash")
         return try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT id, dim, embedding FROM faces
-                WHERE personID IS NULL AND source = 'auto' AND dim = \(FaceEmbedder.dimension) AND quality > 0 AND hidden = 0
+                WHERE personID IS NULL AND source = 'auto' AND dim = \(FaceEmbedder.dimension) AND hidden = 0
                 \(lvc)
                 """).map { row -> (id: Int64, vector: [Float]) in
                     let id: Int64 = row["id"]

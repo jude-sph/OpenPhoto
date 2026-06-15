@@ -18,11 +18,15 @@ public struct DetectedFace: Sendable {
 public enum FaceStage {
     public static let id = "faces"
 
-    // Quality gate — keep only faces good enough to embed reliably; junk faces otherwise bridge clusters.
+    // Size floor — below this a face has too few pixels to embed meaningfully (and isn't worth the
+    // Core ML cost). This is the ONLY gate on embedding: capture quality and pose are deliberately not
+    // gated. A soft, off-angle, or imperfectly-lit face still embeds usefully far more often than not,
+    // and a genuinely weak embedding just matches nobody and falls to noise — it can't harm clustering
+    // (DBSCAN's density requirement) or matching (centroid threshold). Gating on capture quality
+    // previously stripped embeddings off ~83% of detected faces — including clearly-recognisable faces
+    // of already-named people — leaving them unclusterable and unmatchable no matter the sensitivity.
     static let minFaceFraction: CGFloat = 0.025   // shorter side ≥ 2.5% of the image's shorter side …
     static let minFacePixels: CGFloat = 48        // … and ≥ 48 px, whichever is larger
-    static let minCaptureQuality: Float = 0.3
-    static let maxPoseRadians: Float = 0.7        // ~40° — exclude extreme yaw/roll
 
     /// Detect faces and embed the clusterable ones. Returns one DetectedFace per face ([] for a photo
     /// with no faces); nil only if the SOURCE image can't be decoded (runner records a retry-capped
@@ -58,12 +62,10 @@ public enum FaceStage {
                     let bb = obs.boundingBox
                     let shorter = min(bb.width * w, bb.height * h)
                     let capQ = captureQuality[i]
-                    let yaw = abs(obs.yaw?.floatValue ?? 0)
-                    let roll = abs(obs.roll?.floatValue ?? 0)
-                    let passes = shorter >= minSidePx && capQ >= minCaptureQuality
-                              && yaw <= maxPoseRadians && roll <= maxPoseRadians
-
-                    if passes,
+                    // Embed every face big enough to align. Capture quality is recorded (for ordering /
+                    // the displayed badge) but does NOT gate embedding; alignment requires landmarks, so
+                    // faces too turned-away to land 5 points fall out here naturally.
+                    if shorter >= minSidePx,
                        let buffer = FaceAligner.alignedBuffer(cgImage: cg, observation: obs),
                        let vec = FaceEmbedder.shared.embed(buffer) {
                         out.append(DetectedFace(rect: bb, embedding: vec,

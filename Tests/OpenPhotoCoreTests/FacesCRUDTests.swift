@@ -62,18 +62,23 @@ private func face(_ hash: String, _ vec: [Float], source: String = "auto",
     #expect((refreshed.embedding.first ?? 0) > 0.5)   // now ~[1,0,…], was [0,1,…]
 }
 
-@Test func unassignedExcludesStaleDimAndGatedFaces() throws {
+@Test func unassignedExcludesStaleDimAndEmptyEmbeddings() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
     try cat.upsert(assets: [photo(A)])
     _ = try cat.insertFaces([
-        face(A, [1, 0]),                                              // good: dim 512, quality 1
+        face(A, [1, 0]),                                              // good: dim 512, quality 1 → included
         FaceRow(id: nil, hash: A, rect: CGRect(x: 0, y: 0, width: 0.1, height: 0.1),
                 embedding: [0.1, 0.2, 0.3], confidence: 0.9, source: "auto",
                 personID: nil, quality: 1),                          // stale v1 dim (3) → excluded
-        face(A, [0, 1], quality: 0),                                 // gated out (quality 0) → excluded
+        FaceRow(id: nil, hash: A, rect: CGRect(x: 0.5, y: 0.5, width: 0.1, height: 0.1),
+                embedding: [], confidence: 0.9, source: "auto",
+                personID: nil, quality: 0),                          // no embedding (gated) → excluded
+        face(A, [0, 1], quality: 0),                                 // embedded, low capture quality → INCLUDED
     ])
-    #expect(try cat.unassignedFacesWithEmbeddings().count == 1)
+    // Clusterable = has a current-model embedding (dim 512), regardless of capture quality.
+    // Only the stale-dim and empty-embedding faces are excluded.
+    #expect(try cat.unassignedFacesWithEmbeddings().count == 2)
 }
 
 @Test func catalogMetaRoundTrips() throws {
