@@ -469,30 +469,19 @@ struct PersonDetailView: View {
     /// just it; "Add all" confirms the lot; "Dismiss" drops them to the Other-faces bucket.
     @ViewBuilder private var suggestionStrip: some View {
         if let ids = state.suggestedAdditions[person.id], !ids.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("\(ids.count) face\(ids.count == 1 ? "" : "s") might be \(person.name)")
                         .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.text)
                     Spacer()
                     Button("Add all") { state.moveFaces(ids, toPerson: person.id, fromPerson: nil) }
                         .controlSize(.small)
-                    Button("Dismiss") { state.dismissSuggestions(forPerson: person.id) }
+                    Button("Dismiss all") { state.dismissSuggestions(forPerson: person.id) }
                         .controlSize(.small)
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(ids, id: \.self) { fid in
-                            FaceCropView(state: state, faceID: fid, hash: nil, size: 56, fill: false)
-                                .frame(width: 56, height: 56)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .overlay(alignment: .topTrailing) {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.system(size: 14)).symbolRenderingMode(.palette)
-                                        .foregroundStyle(.white, Theme.accent).padding(2)
-                                }
-                                .onTapGesture { state.moveFaces([fid], toPerson: person.id, fromPerson: nil) }
-                                .help("Add to \(person.name)")
-                        }
+                    HStack(spacing: 10) {
+                        ForEach(ids, id: \.self) { fid in suggestionTile(fid) }
                     }
                     .padding(.vertical, 2)
                 }
@@ -500,6 +489,27 @@ struct PersonDetailView: View {
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(Theme.bg2.opacity(0.4))
             Divider().overlay(Theme.hairline)
+        }
+    }
+
+    /// One suggested-face tile: a larger face/photo thumbnail (honouring the Faces/Photos toggle)
+    /// with an explicit ✓ accept and ✕ dismiss beneath it, so each suggestion can be judged on its own.
+    private func suggestionTile(_ fid: Int64) -> some View {
+        let s: CGFloat = 84
+        return VStack(spacing: 6) {
+            FaceCropView(state: state, faceID: fid, hash: nil, size: s, fill: false, cropToFace: showFaces)
+                .frame(width: s, height: s)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            HStack(spacing: 12) {
+                Button { state.dismissSuggestion(faceID: fid, forPerson: person.id) } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 19))
+                        .symbolRenderingMode(.palette).foregroundStyle(.white, Theme.textFaint)
+                }.buttonStyle(.plain).help("Not \(person.name)")
+                Button { state.moveFaces([fid], toPerson: person.id, fromPerson: nil) } label: {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 19))
+                        .symbolRenderingMode(.palette).foregroundStyle(.white, Theme.green)
+                }.buttonStyle(.plain).help("Add to \(person.name)")
+            }
         }
     }
 
@@ -701,43 +711,72 @@ struct ClusterDetailView: View {
     var onBack: () -> Void
 
     @State private var pairs: [FacePhoto] = []
+    @State private var allPeople: [PersonRow] = []
     @State private var nameField = ""
     @State private var showFaces = true
+    @State private var selectMode = false
+    @State private var selection = SelectionModel()
+    @State private var splitName = ""
+    @State private var showSplitField = false
+    @State private var showDelete = false
 
     private let gridColumns = [GridItem(.adaptive(minimum: 108), spacing: Theme.gridGap)]
+    private let space = "clustergrid"
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: 120) }
     private var photos: [TimelineItem] { pairs.map(\.item) }
+    private var orderedSelectable: [SelectableItem] { pairs.map { SelectableItem(id: $0.id) } }
+    private var selectedFaceIDs: [Int64] { Array(selection.selected).compactMap(Int64.init) }
+    private var deletableItems: [TimelineItem] {
+        pairs.filter { selection.contains($0.id) }.map(\.item).filter { $0.driveRelPath == nil }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            toolbar
+            if selectMode { selectionBar } else { toolbar }
             Divider().overlay(Theme.hairline)
-            if pairs.isEmpty {
-                empty
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: gridColumns, spacing: Theme.gridGap) {
-                        ForEach(pairs) { pair in
-                            FacePhotoTile(
-                                state: state,
-                                face: pair.face,
-                                item: pair.item,
-                                allPeople: [],
-                                selectMode: false,
-                                selected: false,
-                                space: "clustergrid",
-                                thumbPixels: thumbPixels,
-                                showFace: showFaces,
-                                onTap: { state.openViewer(pair.item, within: photos) },
-                                onReassign: nil
-                            )
-                        }
-                    }
-                    .padding(Theme.gridGap)
-                }
-            }
+            if pairs.isEmpty { empty } else { grid }
         }
         .onAppear { reload() }
+        .alert("Delete \(deletableItems.count) photo\(deletableItems.count == 1 ? "" : "s")?",
+               isPresented: $showDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                let items = deletableItems; let ids = selectedFaceIDs
+                Task { await state.deletePhotos(items) }
+                afterAction(ids)
+            }
+        } message: {
+            Text("They move to the Bin (restore anytime). This deletes the whole photo, not just the face.")
+        }
+    }
+
+    private var grid: some View {
+        ScrollView {
+            LazyVGrid(columns: gridColumns, spacing: Theme.gridGap) {
+                ForEach(pairs) { pair in
+                    FacePhotoTile(
+                        state: state, face: pair.face, item: pair.item, allPeople: [],
+                        selectMode: selectMode, selected: selection.contains(pair.id),
+                        space: space, thumbPixels: thumbPixels, showFace: showFaces,
+                        onTap: { tap(pair) }, onReassign: nil)
+                }
+            }
+            .padding(Theme.gridGap)
+        }
+        .coordinateSpace(name: space)
+        .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
+                                     space: space, enabled: selectMode))
+    }
+
+    private func tap(_ pair: FacePhoto) {
+        if selectMode {
+            if let idx = orderedSelectable.firstIndex(where: { $0.id == pair.id }) {
+                selection.tap(index: idx, items: orderedSelectable,
+                              extendingRange: NSEvent.modifierFlags.contains(.shift))
+            }
+        } else {
+            state.openViewer(pair.item, within: photos)
+        }
     }
 
     private var toolbar: some View {
@@ -763,12 +802,13 @@ struct ClusterDetailView: View {
                 Text("Photos").tag(false)
             }
             .pickerStyle(.segmented).labelsHidden().fixedSize()
+            if !pairs.isEmpty { Button("Select") { selectMode = true }.controlSize(.small) }
             TextField("Name this person…", text: $nameField)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 6))
-                .frame(width: 170)
+                .frame(width: 150)
                 .onSubmit(name)
             Button("Name", action: name)
                 .controlSize(.small)
@@ -776,6 +816,48 @@ struct ClusterDetailView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: Theme.toolbarHeight)
+    }
+
+    /// Selection mode: move the chosen photos to an existing person, split them into a new person,
+    /// or delete them — the same moves a named group offers.
+    private var selectionBar: some View {
+        HStack(spacing: 12) {
+            Text("\(selection.count) selected")
+                .font(.system(size: 13, weight: .medium).monospacedDigit()).foregroundStyle(Theme.textDim)
+            Spacer()
+            Button("Deselect") { selection.clear() }.controlSize(.small).disabled(selection.count == 0)
+            Button("Delete") { if !deletableItems.isEmpty { showDelete = true } }
+                .buttonStyle(.plain).font(.system(size: 13)).foregroundStyle(Theme.red)
+                .disabled(deletableItems.isEmpty)
+            Menu("Add to person\u{2026}") {
+                if allPeople.isEmpty { Text("No people yet") }
+                else {
+                    ForEach(allPeople, id: \.id) { p in
+                        Button(p.name) {
+                            let ids = selectedFaceIDs
+                            state.moveFaces(ids, toPerson: p.id, fromPerson: nil)
+                            afterAction(ids)
+                        }
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
+            .disabled(allPeople.isEmpty || selection.count == 0)
+            if showSplitField {
+                TextField("New person name\u{2026}", text: $splitName)
+                    .textFieldStyle(.plain).font(.system(size: 12))
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 6))
+                    .frame(width: 150)
+                    .onSubmit(commitSplit)
+                Button("Create", action: commitSplit).controlSize(.small)
+            } else {
+                Button("New person\u{2026}") { showSplitField = true; splitName = "" }
+                    .controlSize(.small).disabled(selection.count == 0)
+            }
+            Button("Done") { selection.clear(); selectMode = false; showSplitField = false }.controlSize(.small)
+        }
+        .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
     }
 
     private var empty: some View {
@@ -797,11 +879,29 @@ struct ClusterDetailView: View {
         onBack()   // the group becomes a named person; return to the overview.
     }
 
+    private func commitSplit() {
+        let n = splitName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty, !selectedFaceIDs.isEmpty else { showSplitField = false; return }
+        let ids = selectedFaceIDs
+        state.nameCluster(ids, as: n)     // a subset becomes its own new named person
+        splitName = ""; showSplitField = false
+        afterAction(ids)
+    }
+
+    /// Optimistically drop handled faces from this view; pop back if the group is now empty.
+    private func afterAction(_ faceIDs: [Int64]) {
+        let drop = Set(faceIDs)
+        pairs.removeAll { drop.contains($0.face.id ?? -1) }
+        selection.clear()
+        if pairs.isEmpty { onBack() }
+    }
+
     private func reload() {
         let faces: [FaceRow] = cluster.faceIDs.compactMap { id in
             (try? state.library?.catalog.face(forID: id)) ?? nil
         }
         pairs = state.facePhotos(for: faces)
+        allPeople = (try? state.library?.catalog.people()) ?? []
     }
 }
 
@@ -921,14 +1021,18 @@ struct FaceCropView: View {
     /// When true, fill the container instead of a fixed `size`×`size` box (for use inside a grid
     /// tile whose parent already constrains the frame). `size` still drives the cache key + crop.
     var fill: Bool = false
+    /// When false, show the whole photo instead of the cropped face — lets a Faces/Photos toggle
+    /// flip the view without changing layout.
+    var cropToFace: Bool = true
 
     @State private var croppedImage: CGImage?
     @State private var rotation = 0   // the asset's display rotation, applied so the crop matches the photo
 
     private var cacheID: String {
-        if let faceID { return "face-\(faceID)@\(Int(size))" }
-        if let hash { return "face-hash-\(hash)@\(Int(size))" }
-        return "face-unknown@\(Int(size))"
+        let m = cropToFace ? "" : "-full"   // distinct key so toggling face/photo re-resolves
+        if let faceID { return "face-\(faceID)@\(Int(size))\(m)" }
+        if let hash { return "face-hash-\(hash)@\(Int(size))\(m)" }
+        return "face-unknown@\(Int(size))\(m)"
     }
 
     var body: some View {
@@ -996,6 +1100,8 @@ struct FaceCropView: View {
         }.value
 
         guard let thumb = thumbnail else { return }
+
+        if !cropToFace { croppedImage = thumb; return }   // Photos mode: show the whole photo
 
         // Crop the Vision rect out of the thumbnail.
         // Vision rect: bottom-left origin. Convert to display (top-left) pixel coords.

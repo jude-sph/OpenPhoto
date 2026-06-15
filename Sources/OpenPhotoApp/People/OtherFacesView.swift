@@ -15,6 +15,7 @@ struct OtherFacesDetailView: View {
     @State private var showNewField = false
     @State private var loading = false
     @State private var showingHidden = false
+    @State private var showDelete = false
 
     /// Cap how many faces we resolve+render at once so a huge bucket stays responsive.
     private let displayCap = 500
@@ -24,6 +25,10 @@ struct OtherFacesDetailView: View {
     private var photos: [TimelineItem] { pairs.map(\.item) }
     private var orderedSelectable: [SelectableItem] { pairs.map { SelectableItem(id: $0.id) } }
     private var selectedFaceIDs: [Int64] { Array(selection.selected).compactMap(Int64.init) }
+    /// Local photos for the selected faces (drive-only assets can't be evicted).
+    private var deletableItems: [TimelineItem] {
+        pairs.filter { selection.contains($0.id) }.map(\.item).filter { $0.driveRelPath == nil }
+    }
     private var sourceIDs: [Int64] { showingHidden ? state.hiddenFaceIDs : state.otherFaceIDs }
     private var truncated: Bool { sourceIDs.count > displayCap }
 
@@ -44,6 +49,16 @@ struct OtherFacesDetailView: View {
         .onAppear { reload() }
         .onChange(of: state.otherFaceIDs) { reload() }
         .onChange(of: state.hiddenFaceIDs) { reload() }
+        .alert("Delete \(deletableItems.count) photo\(deletableItems.count == 1 ? "" : "s")?",
+               isPresented: $showDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                let items = deletableItems
+                Task { await state.deletePhotos(items); selection.clear() }
+            }
+        } message: {
+            Text("They move to the Bin (restore anytime). This deletes the whole photo, not just the face — use Hide to remove only the face from this list.")
+        }
     }
 
     // MARK: Toolbar
@@ -132,6 +147,12 @@ struct OtherFacesDetailView: View {
                 .foregroundStyle(Theme.textDim)
             Spacer()
             Button("Deselect") { selection.clear() }.controlSize(.small)
+            Button("Delete") { if !deletableItems.isEmpty { showDelete = true } }
+                .buttonStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.red)
+                .disabled(deletableItems.isEmpty)
+                .help("Move the selected photos to the Bin")
             if showingHidden {
                 Button("Restore") {
                     state.unhideFaces(selectedFaceIDs)
