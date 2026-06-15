@@ -413,6 +413,33 @@ final class AppState {
         suggestedAdditions[personID] = nil
     }
 
+    /// Dismiss ONE suggested face for a person (the per-tile ✕): drop it back to the Other bucket.
+    /// In-session only, like dismissSuggestions(forPerson:) — a later reload may re-suggest it.
+    func dismissSuggestion(faceID: Int64, forPerson personID: Int64) {
+        guard var ids = suggestedAdditions[personID] else { return }
+        ids.removeAll { $0 == faceID }
+        suggestedAdditions[personID] = ids.isEmpty ? nil : ids
+        if !otherFaceIDs.contains(faceID) { otherFaceIDs.append(faceID) }
+    }
+
+    /// Optimistic UI: immediately remove these faces from every in-memory suggestion bucket so an
+    /// accept/move/name feels instant. The catalog + sidecar writes (and a reconciling
+    /// refreshSuggestions) follow in the background. Never touches confirmed assignments.
+    private func removeFromSuggestionBuckets(_ faceIDs: [Int64]) {
+        let drop = Set(faceIDs)
+        otherFaceIDs.removeAll { drop.contains($0) }
+        for (pid, ids) in suggestedAdditions {
+            let kept = ids.filter { !drop.contains($0) }
+            suggestedAdditions[pid] = kept.isEmpty ? nil : kept
+        }
+        suggestedClusters = suggestedClusters.compactMap { c in
+            let kept = c.faceIDs.filter { !drop.contains($0) }
+            guard !kept.isEmpty else { return nil }
+            let rep = kept.contains(c.representativeFaceID) ? c.representativeFaceID : (kept.first ?? c.representativeFaceID)
+            return FaceCluster(faceIDs: kept, representativeFaceID: rep, count: kept.count)
+        }
+    }
+
     /// Manually tag a person as present in the given photos WITHOUT a detected face (for obscured
     /// faces). The photos appear in the person's grid for VIEWING, but the tag carries no embedding, so
     /// it never informs clustering or the person's centroid. Sidecars are rewritten so the tag is
@@ -558,11 +585,12 @@ final class AppState {
     /// Called off the main actor via Task.detached; loadPeople() is re-called on main after.
     func nameCluster(_ faceIDs: [Int64], as name: String) {
         guard let lib = library else { return }
+        removeFromSuggestionBuckets(faceIDs)   // optimistic: the named faces leave the suggestion UI now
         Task.detached(priority: .userInitiated) { [weak self] in
             do {
                 let personID = try lib.catalog.createPerson(name: name)
                 try lib.catalog.assignFaces(faceIDs, to: personID)
-                self?.writeSidecarRegions(forPersonID: personID, lib: lib)
+                self?.rewriteSidecars(forFaceIDs: faceIDs, lib: lib)   // only the affected photos
             } catch { NSLog("nameCluster failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
@@ -595,9 +623,9 @@ final class AppState {
             do {
                 let newID = try lib.catalog.createPerson(name: name)
                 for id in faceIDs { try lib.catalog.reassignFace(id, to: newID) }
-                // Rewrite sidecars for both persons (new has the moved faces; old has lost them).
-                self?.writeSidecarRegions(forPersonID: newID, lib: lib)
-                self?.writeSidecarRegions(forPersonID: sourcePerson, lib: lib)
+                // Only the moved photos changed (region name old→new); rewrite just those — the
+                // source person's other photos are untouched.
+                self?.rewriteSidecars(forFaceIDs: faceIDs, lib: lib)
             } catch { NSLog("splitFaces failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
@@ -628,11 +656,12 @@ final class AppState {
     /// (loses them); both pull current catalog state per affected hash, so stale names drop.
     func moveFaces(_ faceIDs: [Int64], toPerson personID: Int64, fromPerson old: Int64?) {
         guard !faceIDs.isEmpty, let lib = library else { return }
+        removeFromSuggestionBuckets(faceIDs)   // optimistic: the tiles leave the suggestion UI now
         Task.detached(priority: .userInitiated) { [weak self] in
             do {
                 try lib.catalog.assignFaces(faceIDs, to: personID)
-                self?.writeSidecarRegions(forPersonID: personID, lib: lib)
-                if let old, old != personID { self?.writeSidecarRegions(forPersonID: old, lib: lib) }
+                // Rewrite ONLY the affected photos' sidecars (not the person's whole back-catalogue).
+                self?.rewriteSidecars(forFaceIDs: faceIDs, lib: lib)
             } catch { NSLog("moveFaces failed: \(error)") }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
@@ -645,15 +674,13 @@ final class AppState {
     func reassignFace(_ id: Int64, to personID: Int64?, fromPerson oldPersonID: Int64?) {
         guard let lib = library else { return }
         Task.detached(priority: .userInitiated) { [weak self] in
-            do {
-                try lib.catalog.reassignFace(id, to: personID)
-                if let personID { self?.writeSidecarRegions(forPersonID: personID, lib: lib) }
-                if let oldPersonID { self?.writeSidecarRegions(forPersonID: oldPersonID, lib: lib) }
-                // If unassigned (no new person), also clear this face's region from its sidecar.
-                if personID == nil {
-                    self?.clearSidecarRegion(forFaceID: id, lib: lib)
-                }
-            } catch { NSLog("reassignFace failed: \(error)") }
+            // Resolve the affected photo BEFORE the reassign (unassigning a manual tag deletes the row).
+            let hash = ((try? lib.catalog.face(forID: id)) ?? nil)?.hash
+            do { try lib.catalog.reassignFace(id, to: personID) }
+            catch { NSLog("reassignFace failed: \(error)") }
+            // Only the one affected photo's sidecar changes — rewrite it from current confirmed state
+            // (drops the region if now unassigned, updates the name if moved to a different person).
+            if let hash { self?.rewriteSidecarForHash(hash, lib: lib) }
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
                 self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
@@ -742,6 +769,19 @@ final class AppState {
                                       FaceRegion(name: personName, visionRect: $0.rect)
                                   })
         }
+    }
+
+    /// Rewrite ONLY the sidecars of the photos that contain `faceIDs` (the assets actually changed by
+    /// a move/assign/split/name), pulling current confirmed catalog state per hash. O(affected photos)
+    /// — unlike writeSidecarRegions(forPersonID:), which rewrites a person's ENTIRE back-catalogue and
+    /// is only needed when a name changes across all their photos (rename/merge). This is what keeps an
+    /// "add to person" instant instead of rewriting thousands of sidecars for a large person.
+    nonisolated private func rewriteSidecars(forFaceIDs faceIDs: [Int64], lib: LibraryService) {
+        var hashes = Set<String>()
+        for id in faceIDs {
+            if let row = (try? lib.catalog.face(forID: id)) ?? nil { hashes.insert(row.hash) }
+        }
+        for h in hashes { rewriteSidecarForHash(h, lib: lib) }
     }
 
     /// Clear the sidecar region for a single face that has been unassigned (no person).
