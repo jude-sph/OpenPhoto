@@ -232,19 +232,15 @@ final class AppState {
     var hiddenFaceIDs: [Int64] = []
     private var facesDirty = true
     private var geocodeDirty = true
-    /// Grouping sensitivity (0 = Strict … 1 = Loose). The slider writes this — it is the PENDING
-    /// value and does NOT change grouping until committed on the next Rescan Faces, so existing
-    /// groupings stay intact between rescans. Persisted; default 0.5 = historical behaviour.
+    /// Grouping sensitivity (0 = Strict … 1 = Loose), persisted. Drives the DBSCAN / centroid-match
+    /// params. Releasing the slider re-groups instantly over the already-embedded faces (see
+    /// `reclusterForSensitivity`) — it never reassigns confirmed faces, so named people stay intact.
+    /// Default 0.5 reproduces the original constants. (Re-embedding faces the gate skipped still needs
+    /// a Rescan Faces.)
     var faceSensitivity: Double = UserDefaults.standard.object(forKey: "faceSensitivity") as? Double ?? 0.5 {
         didSet { UserDefaults.standard.set(faceSensitivity, forKey: "faceSensitivity") }
     }
-    /// The sensitivity clustering actually uses. Committed `= faceSensitivity` only inside
-    /// rescanFaces(), which is the single point where the People screen re-groups.
-    private var appliedFaceSensitivity: Double =
-        UserDefaults.standard.object(forKey: "faceSensitivityApplied") as? Double ?? 0.5 {
-        didSet { UserDefaults.standard.set(appliedFaceSensitivity, forKey: "faceSensitivityApplied") }
-    }
-    private var faceClusterParams: FaceClusterParams { .forSensitivity(appliedFaceSensitivity) }
+    private var faceClusterParams: FaceClusterParams { .forSensitivity(faceSensitivity) }
     private var faceClusterEps: Double { faceClusterParams.eps }
     private var faceClusterMinPts: Int { faceClusterParams.minPts }
     private var faceMatchThreshold: Double { faceClusterParams.matchThreshold }
@@ -452,9 +448,13 @@ final class AppState {
     /// unassigned face vanish until the (slow, whole-library) re-derivation rebuilds them. Instead we
     /// just re-pend the face jobs; `replaceFaces` swaps each photo's faces in place as it is
     /// re-processed, so the People screen stays populated and updates progressively.
+    /// Re-group over the faces that are ALREADY embedded, using the current sensitivity — cheap, no
+    /// re-derivation. Confirmed people are never touched. Called when the sensitivity slider is
+    /// released. To (re)embed faces the size gate previously skipped, use `rescanFaces()`.
+    func reclusterForSensitivity() { loadPeople() }
+
     func rescanFaces() {
         guard let lib = library else { return }
-        appliedFaceSensitivity = faceSensitivity   // commit pending sensitivity → re-groups below
         Task {
             await Task.detached(priority: .userInitiated) {
                 try? lib.catalog.clearDerivationJobs(stage: FaceStage.id)

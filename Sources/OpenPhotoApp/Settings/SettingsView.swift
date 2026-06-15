@@ -67,12 +67,15 @@ struct SettingsView: View {
             Text("Grouping sensitivity").font(.system(size: 11)).foregroundStyle(Theme.textDim)
             HStack(spacing: 8) {
                 Text("Strict").font(.system(size: 10)).foregroundStyle(Theme.textDim)
-                Slider(value: $state.faceSensitivity, in: 0...1)
+                Slider(value: $state.faceSensitivity, in: 0...1) { editing in
+                    if !editing { state.reclusterForSensitivity() }   // regroup instantly, no re-derive
+                }
+                .disabled(state.library == nil)
                 Text("Loose").font(.system(size: 10)).foregroundStyle(Theme.textDim)
             }
             Button("Rescan Faces\u{2026}") { confirmRescanFaces() }
                 .disabled(state.library == nil)
-            Text("Lower groups more cautiously (fewer wrong matches); higher pulls more loose faces into groups. People you've named are always kept. Takes effect next time you Rescan Faces.")
+            Text("Higher pulls more loose faces into groups; lower groups more cautiously. Regroups instantly when you release the slider — people you've named are never changed. Run Rescan Faces to (re)detect and embed faces across your whole library.")
                 .font(.system(size: 11)).foregroundStyle(Theme.textDim)
                 .fixedSize(horizontal: false, vertical: true)
         }
