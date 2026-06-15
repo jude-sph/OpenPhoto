@@ -3,12 +3,12 @@
     <channel>
         <title>OpenPhoto</title>
         <item>
-            <title>0.1.27</title>
-            <pubDate>Mon, 15 Jun 2026 00:40:56 +0100</pubDate>
-            <sparkle:version>603</sparkle:version>
-            <sparkle:shortVersionString>0.1.27</sparkle:shortVersionString>
+            <title>0.1.28</title>
+            <pubDate>Mon, 15 Jun 2026 13:33:16 +0100</pubDate>
+            <sparkle:version>606</sparkle:version>
+            <sparkle:shortVersionString>0.1.28</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/jude-sph/OpenPhoto/releases/download/v0.1.27/OpenPhoto-0.1.27.zip" length="319921775" type="application/octet-stream" sparkle:edSignature="ZSPNK0TT5LEhURi4HV7GAf1dzeXazvUxxGNh/WW3W9fqeR74UjP32Tg+8qkwMTdPZ7Wf4Tjo5DP94kqLPATcBw=="/>
+            <enclosure url="https://github.com/jude-sph/OpenPhoto/releases/download/v0.1.28/OpenPhoto-0.1.28.zip" length="319921104" type="application/octet-stream" sparkle:edSignature="JQYdxKF64Its1bttsm017Hnor7gpan3n7LbOqUNBDyX+Ljtoj0bqBkYaHhNHRtsNHoElWlnk2TbmPriGToS9AQ=="/>
         </item>
     </channel>
 </rss>
