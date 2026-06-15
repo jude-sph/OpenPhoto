@@ -16,7 +16,10 @@ struct SettingsView: View {
             about
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 460, height: 280)
+        // Sized for the tallest tab (Library: folder + stats + People & Faces controls). All tabs
+        // share one frame, so this is set generously so nothing clips — the shorter tabs just have
+        // extra whitespace.
+        .frame(width: 480, height: 560)
         .tint(Theme.accent)
     }
 
