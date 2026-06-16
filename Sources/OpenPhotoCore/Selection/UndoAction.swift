@@ -23,6 +23,8 @@ public enum UndoAction: Sendable, Equatable {
     case movePhotos(moves: [MovedFileRecord])
     /// A folder rename/move: from and to are absolute or relative folder paths.
     case moveFolder(from: String, to: String)
+    /// A folder rename in place: from = original path, to = renamed path (same parent).
+    case renameFolder(from: String, to: String)
     /// relPath = the CURRENT (post-rename) path of the file.
     case rename(vaultID: String, relPath: String, oldName: String)
 
@@ -35,6 +37,8 @@ public enum UndoAction: Sendable, Equatable {
             return moves.count == 1 ? "Move 1 Photo" : "Move \(moves.count) Photos"
         case .moveFolder:
             return "Move Folder"
+        case .renameFolder:
+            return "Rename Folder"
         case .rename:
             return "Rename"
         }

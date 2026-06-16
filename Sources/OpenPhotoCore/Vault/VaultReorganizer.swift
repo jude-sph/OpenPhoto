@@ -27,6 +27,28 @@ public enum VaultReorganizer {
         return newPath
     }
 
+    /// Rename a folder in place (same parent, new last component). Same-volume atomic rename; the
+    /// subtree carries its `.openphoto/` sidecars, and the manifest paths are rewritten. Returns the
+    /// new relPath. Rejects an empty source (the library root), a name containing "/", or a collision.
+    @discardableResult
+    public static func renameFolder(in vault: Vault, relPath: String, toName newName: String) throws -> String {
+        let src = norm(relPath)
+        guard !src.isEmpty else { throw ReorgError.invalidTarget }
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.contains("/") else { throw ReorgError.invalidTarget }
+        let parent = (src as NSString).deletingLastPathComponent
+        let newPath = parent.isEmpty ? name : parent + "/" + name
+        if newPath == src { return src }
+        let fm = FileManager.default
+        let srcURL = vault.absoluteURL(forRelativePath: src)
+        let dstURL = vault.absoluteURL(forRelativePath: newPath)
+        guard fm.fileExists(atPath: srcURL.path) else { throw ReorgError.missing }
+        if fm.fileExists(atPath: dstURL.path) { throw ReorgError.destinationExists }
+        try fm.moveItem(at: srcURL, to: dstURL)
+        try rewriteManifest(vault, from: src, to: newPath)
+        return newPath
+    }
+
     public static func createFolder(in vault: Vault, relPath: String) throws {
         let p = norm(relPath); guard !p.isEmpty else { throw ReorgError.invalidTarget }
         try FileManager.default.createDirectory(at: vault.absoluteURL(forRelativePath: p),

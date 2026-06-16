@@ -75,6 +75,10 @@ extension AppState {
             // moveFolder surfaces its own collision/missing alerts.
             await moveFolder(from: to, into: (from as NSString).deletingLastPathComponent)
 
+        case .renameFolder(let from, let to):
+            // Rename back to the original leaf name; renameFolder surfaces its own alerts.
+            await renameFolder(to, to: (from as NSString).lastPathComponent)
+
         case .rename(let vaultID, let relPath, let oldName):
             guard let library else { return }
             let item = ((try? library.catalog.items(instanceIDs: [vaultID + "|" + relPath])) ?? [])

@@ -124,6 +124,8 @@ private struct FolderRow: View {
     @State private var tagAllName = ""
     @State private var showUntagAll = false
     @State private var untagName = ""
+    @State private var showRename = false
+    @State private var renameText = ""
 
     private var expanded: Bool { state.expandedFolders.contains(node.path) }
 
@@ -201,6 +203,11 @@ private struct FolderRow: View {
                     newChildFolderName = ""
                     showNewChildFolder = true
                 }
+                if !node.path.isEmpty {
+                    Button("Rename Folder\u{2026}", systemImage: "pencil") {
+                        renameText = node.name; showRename = true
+                    }
+                }
                 Divider()
                 if state.isFolderLocked(node.path) {
                     Button("Unlock", systemImage: "lock.open") {
@@ -241,6 +248,17 @@ private struct FolderRow: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Enter a name for the new folder inside \u{201C}\(node.name)\u{201D}.")
+        }
+        // Rename-folder prompt
+        .alert("Rename \u{201C}\(node.name)\u{201D}", isPresented: $showRename) {
+            TextField("Folder name", text: $renameText)
+            Button("Rename") {
+                let n = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !n.isEmpty, n != node.name { Task { await state.renameFolder(node.path, to: n) } }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Renames this folder on disk. Your photos and their edits are unaffected.")
         }
         // Tag-all-in-folder prompt
         .alert("Tag all photos in \u{201C}\(node.name)\u{201D}", isPresented: $showTagAll) {

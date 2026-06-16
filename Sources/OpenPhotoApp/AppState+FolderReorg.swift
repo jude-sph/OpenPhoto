@@ -99,6 +99,52 @@ extension AppState {
         remapUIPaths(from: src, to: newPath)
     }
 
+    // MARK: - Rename
+
+    /// Rename folder `src` in place (same parent, new name). Applies to the Mac primary vault,
+    /// propagates to connected durable drives, queues offline drives, then rescans and remaps the UI.
+    func renameFolder(_ src: String, to newName: String) async {
+        guard let library, let primaryVault = library.vaults.first, !src.isEmpty else { return }
+
+        let newPath: String
+        do {
+            newPath = try VaultReorganizer.renameFolder(in: primaryVault, relPath: src, toName: newName)
+        } catch {
+            NSAlert(error: error).runModal()   // surface collision/invalid-name to the user
+            return
+        }
+        guard newPath != src else { return }   // unchanged (same name)
+        recordUndo(.renameFolder(from: src, to: newPath))
+
+        // Propagate to connected durable drives that actually hold `src` (off-main).
+        if let basename = driveBasename() {
+            let drives = connectedDurableDrives().filter {
+                driveHasFolder($0.vault, macRelPath: src, basename: basename)
+            }
+            if !drives.isEmpty {
+                let newLeaf = (newPath as NSString).lastPathComponent
+                await Task.detached(priority: .userInitiated) {
+                    for d in drives {
+                        _ = try? VaultReorganizer.renameFolder(in: d.vault,
+                            relPath: mapToDriveStatic(src, basename: basename), toName: newLeaf)
+                    }
+                }.value
+            }
+        }
+
+        // Queue for offline drives (reconciled on their next connect).
+        for driveID in offlineDurableDriveIDs() {
+            _ = try? library.catalog.enqueueFolderOp(vaultID: driveID, op: "rename", src: src, dst: newPath)
+        }
+
+        // Re-key cached drive presence onto the new path (see moveFolder for why this is needed).
+        try? library.catalog.rewriteVaultPresencePaths(fromDir: src, toDir: newPath)
+        reloadCanonicalPresence()
+
+        await rescan()
+        remapUIPaths(from: src, to: newPath)
+    }
+
     // MARK: - Move photos (file-grain)
 
     /// Move the photos behind `ids` (grid instanceIDs) into folder `dest` ("" = library
@@ -308,6 +354,15 @@ extension AppState {
                         try VaultReorganizer.moveFolder(in: driveVault,
                             relPath: mapToDriveStatic(src, basename: basename),
                             intoParentRelPath: mapToDriveStatic(parentOf(dst), basename: basename))
+                    case "rename":
+                        guard let src = op.src, let dst = op.dst else { continue }
+                        do {
+                            try VaultReorganizer.renameFolder(in: driveVault,
+                                relPath: mapToDriveStatic(src, basename: basename),
+                                toName: (dst as NSString).lastPathComponent)
+                        } catch VaultReorganizer.ReorgError.missing {
+                            // The drive never held this folder — nothing to rename.
+                        }
                     case "create":
                         guard let dst = op.dst else { continue }
                         try VaultReorganizer.createFolder(in: driveVault,

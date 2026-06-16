@@ -46,6 +46,34 @@ private func seed(_ vault: Vault, relPath: String, bytes: String = "x") throws -
     #expect(throws: (any Error).self) { try VaultReorganizer.moveFolder(in: vault, relPath: "a", intoParentRelPath: "b") }
 }
 
+@Test func renameFolderRelocatesFilesAndRewritesManifest() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vaultRoot = t.root.appendingPathComponent("V")
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    let vault = try Vault.openOrCreate(at: vaultRoot, role: .canonical)
+    let h = try seed(vault, relPath: "2024/italy/x.jpg")
+    try Manifest.write([ManifestEntry(hash: h, path: "2024/italy/x.jpg", size: 1,
+                        mtime: ISO8601Millis.string(from: Date()))], to: vault.manifestURL)
+    let newPath = try VaultReorganizer.renameFolder(in: vault, relPath: "2024/italy", toName: "rome")
+    #expect(newPath == "2024/rome")                                   // same parent, new leaf
+    #expect(FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: "2024/rome/x.jpg").path))
+    #expect(!FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: "2024/italy/x.jpg").path))
+    let entries = try Manifest.read(from: vault.manifestURL)
+    #expect(entries.count == 1 && entries[0].path == "2024/rome/x.jpg" && entries[0].hash == h)
+}
+
+@Test func renameFolderRejectsCollisionSlashAndRoot() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vaultRoot = t.root.appendingPathComponent("V")
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    let vault = try Vault.openOrCreate(at: vaultRoot, role: .canonical)
+    _ = try seed(vault, relPath: "a/x.jpg")
+    _ = try seed(vault, relPath: "b/y.jpg")
+    #expect(throws: (any Error).self) { try VaultReorganizer.renameFolder(in: vault, relPath: "a", toName: "b") }    // collision
+    #expect(throws: (any Error).self) { try VaultReorganizer.renameFolder(in: vault, relPath: "a", toName: "c/d") }  // slash
+    #expect(throws: (any Error).self) { try VaultReorganizer.renameFolder(in: vault, relPath: "", toName: "x") }     // root
+}
+
 @Test func createAndDeleteEmptyFolder() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let vaultRoot = t.root.appendingPathComponent("V")
