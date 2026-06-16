@@ -264,20 +264,30 @@ public final class LibraryService: Sendable {
     /// `proposedTags` + the baseline, writes the merged set to EVERY local file, and stores the new
     /// baseline. Returns the merged set (the caller persists it to the XMP sidecar + catalog). A
     /// drive-only asset (no reachable local file) returns `proposedTags` unchanged and writes nothing.
-    public func reconcileFinderTags(forHash hash: String, proposedTags: [String]) throws -> [String] {
+    /// The favourite flag is folded in as the reserved `FinderTags.favoriteTagName` tag, so the SAME
+    /// 3-way merge governs it: favouriting in the app adds the Finder tag, the Finder tag sets the
+    /// favourite, and a removal on either side (relative to the baseline) propagates. On the FIRST
+    /// sync the baseline lacks the reserved tag, so an existing app favourite is *added* to Finder,
+    /// never cleared. Returns the merged regular tags (reserved stripped) and the merged favourite.
+    public func reconcileFinderTags(forHash hash: String, proposedTags: [String],
+                                    favorite: Bool) throws -> (tags: [String], favorite: Bool) {
+        let fav = FinderTags.favoriteTagName
+        let regular = proposedTags.filter { $0.caseInsensitiveCompare(fav) != .orderedSame }
         let urls: [URL] = ((try? catalog.instances(forHash: hash)) ?? []).compactMap { inst in
             guard let v = vault(id: inst.vaultID) else { return nil }
             let u = v.absoluteURL(forRelativePath: inst.relPath)
             return FileManager.default.fileExists(atPath: u.path) ? u : nil
         }
-        guard !urls.isEmpty else { return proposedTags }
+        guard !urls.isEmpty else { return (regular, favorite) }
         let finder = Set(urls.flatMap { FinderTags.read($0) })
         let baseline = Set((try? catalog.finderTagBaseline(forHash: hash)) ?? [])
-        let merged = TagMerge.merge(baseline: baseline, openphoto: Set(proposedTags), finder: finder)
+        var openphoto = Set(regular)
+        if favorite { openphoto.insert(fav) }
+        let merged = TagMerge.merge(baseline: baseline, openphoto: openphoto, finder: finder)
         let mergedArr = merged.sorted()
         for u in urls { try? FinderTags.write(mergedArr, to: u) }
         try? catalog.setFinderTagBaseline(hash: hash, tags: mergedArr)
-        return mergedArr
+        return (merged.subtracting([fav]).sorted(), merged.contains(fav))
     }
 
     /// Rename a file on disk (explicit user action). Sidecar moves with it.

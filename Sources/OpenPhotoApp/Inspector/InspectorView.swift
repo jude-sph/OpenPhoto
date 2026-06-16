@@ -114,7 +114,11 @@ struct InspectorView: View {
                             .textFieldStyle(.plain).font(.system(size: 12)).frame(width: 70)
                             .onSubmit {
                                 let t = newTag.trimmingCharacters(in: .whitespaces)
-                                if !t.isEmpty, !tags.contains(t) { tags.append(t); save() }
+                                // "Favourite" is reserved for the heart toggle, not a normal tag.
+                                if !t.isEmpty, !tags.contains(t),
+                                   t.caseInsensitiveCompare(FinderTags.favoriteTagName) != .orderedSame {
+                                    tags.append(t); save()
+                                }
                                 newTag = ""
                             }
                     }
@@ -505,10 +509,13 @@ struct InspectorView: View {
 
     private func save() {
         guard let lib = state.library else { return }
+        let reconciled = state.reconcileForSave(item: item, tags: tags, favorite: favorite)
         try? lib.updateMetadata(for: item,
-                                rating: rating, favorite: favorite,
+                                rating: rating, favorite: reconciled.favorite,
                                 caption: caption.isEmpty ? nil : caption,
-                                tags: state.tagsForSave(item: item, proposed: tags))
+                                tags: reconciled.tags)
+        favorite = reconciled.favorite   // reflect a Finder-driven favourite back into the heart
+        tags = reconciled.tags
         try? state.refreshQueries()
         if let updated = try? lib.item(hash: item.hash) { state.openedItem = updated }
     }

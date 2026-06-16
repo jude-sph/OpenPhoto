@@ -136,11 +136,14 @@ final class AppState {
         }
     }
 
-    /// When Finder sync is on, reconcile a tag edit with Finder (writes Finder + baseline) and return
-    /// the merged set to persist; otherwise return the user's set unchanged.
-    func tagsForSave(item: TimelineItem, proposed: [String]) -> [String] {
-        guard finderTagSyncEnabled, let lib = library else { return proposed }
-        return (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: proposed)) ?? proposed
+    /// Reconcile a save (tags + favourite) with Finder when sync is on, returning the merged values to
+    /// persist. The reserved "Favourite" tag is always stripped from regular tags (it's driven by the
+    /// favourite flag, never typed as a tag) — even when sync is off.
+    func reconcileForSave(item: TimelineItem, tags: [String], favorite: Bool) -> (tags: [String], favorite: Bool) {
+        let regular = tags.filter { $0.caseInsensitiveCompare(FinderTags.favoriteTagName) != .orderedSame }
+        guard finderTagSyncEnabled, let lib = library else { return (tags: regular, favorite: favorite) }
+        return (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: regular, favorite: favorite))
+            ?? (tags: regular, favorite: favorite)
     }
 
     /// Apply `tag` to every photo in `dir` (and its subfolders when `recursive`) in one pass, reusing
@@ -148,7 +151,8 @@ final class AppState {
     /// that already carry the tag are skipped. Runs off-main; grids refresh when it finishes.
     func tagAllInFolder(_ dir: String, tag: String, recursive: Bool = true) {
         let tag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let lib = library, !tag.isEmpty else { return }
+        guard let lib = library, !tag.isEmpty,
+              tag.caseInsensitiveCompare(FinderTags.favoriteTagName) != .orderedSame else { return }
         let syncFinder = finderTagSyncEnabled
         Task.detached(priority: .userInitiated) { [weak self] in
             let items = (try? lib.items(inDir: dir, recursive: recursive)) ?? []
@@ -156,10 +160,14 @@ final class AppState {
                 let existing = (try? JSONDecoder().decode([String].self, from: Data(item.tagsJSON.utf8))) ?? []
                 guard !existing.contains(tag) else { continue }
                 var newTags = existing + [tag]
+                var fav = item.favorite
                 if syncFinder {
-                    newTags = (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: newTags)) ?? newTags
+                    let r = (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: newTags,
+                                                          favorite: item.favorite))
+                        ?? (tags: newTags, favorite: item.favorite)
+                    newTags = r.tags; fav = r.favorite
                 }
-                try? lib.updateMetadata(for: item, rating: item.rating, favorite: item.favorite,
+                try? lib.updateMetadata(for: item, rating: item.rating, favorite: fav,
                                         caption: item.caption, tags: newTags)
             }
             await MainActor.run { [weak self] in
@@ -179,10 +187,12 @@ final class AppState {
             var seen = Set<String>()
             for item in items where seen.insert(item.hash).inserted {
                 let current = (try? JSONDecoder().decode([String].self, from: Data(item.tagsJSON.utf8))) ?? []
-                let merged = (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: current)) ?? current
-                if Set(merged) != Set(current) {
-                    try? lib.updateMetadata(for: item, rating: item.rating, favorite: item.favorite,
-                                            caption: item.caption, tags: merged)
+                let r = (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: current,
+                                                      favorite: item.favorite))
+                    ?? (tags: current, favorite: item.favorite)
+                if Set(r.tags) != Set(current) || r.favorite != item.favorite {
+                    try? lib.updateMetadata(for: item, rating: item.rating, favorite: r.favorite,
+                                            caption: item.caption, tags: r.tags)
                 }
             }
             await MainActor.run { [weak self] in try? self?.refreshQueries() }
