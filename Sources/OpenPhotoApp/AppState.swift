@@ -58,6 +58,9 @@ final class AppState {
     var openedItem: TimelineItem?            // non-nil → Viewer is presented
     var viewerItems: [TimelineItem] = []     // the set the viewer navigates (timeline or one folder)
     var inspectorShown = true
+    /// True while a text field in the Inspector (caption / tag) is focused — the Viewer's key
+    /// shortcuts (i, arrows, Delete) check this and yield, so typing doesn't navigate/delete/toggle.
+    var isEditingText = false
     // One shared grid-size value across Timeline + Folders, persisted across launches.
     var gridMinSize: CGFloat = {
         let v = UserDefaults.standard.double(forKey: "gridMinSize")

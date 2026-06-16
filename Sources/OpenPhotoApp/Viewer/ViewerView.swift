@@ -43,12 +43,14 @@ struct ViewerView: View {
             DispatchQueue.main.async { stageFocused = true }
         }
         .background(Color.black.opacity(0.96))
-        .onKeyPress(.escape) { state.openedItem = nil; return .handled }
-        .onKeyPress(.leftArrow) { step(-1); return .handled }
-        .onKeyPress(.rightArrow) { step(1); return .handled }
-        .onKeyPress(KeyEquivalent("i")) { state.inspectorShown.toggle(); return .handled }
-        .onKeyPress(.deleteForward) { deleteCurrent(); return .handled }
-        .onKeyPress(.delete) { deleteCurrent(); return .handled }
+        // All gated on isEditingText so typing in the Inspector's caption/tag fields isn't hijacked
+        // (e.g. "i" toggling the panel, Delete trashing the photo, arrows navigating away).
+        .onKeyPress(.escape) { if state.isEditingText { return .ignored }; state.openedItem = nil; return .handled }
+        .onKeyPress(.leftArrow) { if state.isEditingText { return .ignored }; step(-1); return .handled }
+        .onKeyPress(.rightArrow) { if state.isEditingText { return .ignored }; step(1); return .handled }
+        .onKeyPress(KeyEquivalent("i")) { if state.isEditingText { return .ignored }; state.inspectorShown.toggle(); return .handled }
+        .onKeyPress(.deleteForward) { if state.isEditingText { return .ignored }; deleteCurrent(); return .handled }
+        .onKeyPress(.delete) { if state.isEditingText { return .ignored }; deleteCurrent(); return .handled }
         .task(id: "\(state.openedItem?.instanceID ?? "")|\(state.openedItem?.rotation ?? 0)") { await loadFull() }
         .onChange(of: playingLive) { _, live in
             if live, let url = liveURL {

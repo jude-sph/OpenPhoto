@@ -22,6 +22,10 @@ struct InspectorView: View {
     @State private var assignNewName = ""
     @State private var showAssignNew = false
     @State private var pendingAssignFaceID: Int64?
+    /// Which inspector text field is focused — drives state.isEditingText so the viewer's key
+    /// shortcuts yield while you type.
+    private enum EditField: Hashable { case caption, tag }
+    @FocusState private var editField: EditField?
     @FocusState private var renameFocused: Bool
 
     var body: some View {
@@ -45,6 +49,7 @@ struct InspectorView: View {
                     TextField("Add a caption…", text: $caption, axis: .vertical)
                         .textFieldStyle(.plain).font(.system(size: 13))
                         .padding(8).background(Theme.elevated, in: RoundedRectangle(cornerRadius: 8))
+                        .focused($editField, equals: .caption)
                         .onSubmit { save() }
                 }
                 .disabled(state.isDriveOnly(item))
@@ -112,6 +117,7 @@ struct InspectorView: View {
                         }
                         TextField("Add tag", text: $newTag)
                             .textFieldStyle(.plain).font(.system(size: 12)).frame(width: 70)
+                            .focused($editField, equals: .tag)
                             .onSubmit {
                                 let t = newTag.trimmingCharacters(in: .whitespaces)
                                 // "Favourite" is reserved for the heart toggle, not a normal tag.
@@ -273,6 +279,9 @@ struct InspectorView: View {
         }
         .background(Theme.bg2)
         .task(id: item.hash) { load(); loadFaces(); loadInstances() }
+        // Tell the viewer to yield its key shortcuts while a caption/tag field is focused.
+        .onChange(of: editField) { state.isEditingText = editField != nil }
+        .onDisappear { state.isEditingText = false }
         .alert("Delete this photo?", isPresented: $showDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
