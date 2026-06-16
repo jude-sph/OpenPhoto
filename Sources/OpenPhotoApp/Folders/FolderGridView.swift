@@ -176,8 +176,12 @@ struct FolderGridView: View {
                 ForEach(allFolders, id: \.self) { f in
                     if f != state.selectedFolder {
                         Button(folderMenuLabel(f)) {
-                            let ids = Array(selection.selected)
-                            Task { await state.movePhotos(ids: ids, into: f) }
+                            let ids = selection.selected
+                            // Optimistic: the moved photos leave this folder's grid immediately; the
+                            // actual file move + rescan run in the background and reconcile on refresh.
+                            items.removeAll { ids.contains($0.instanceID) }
+                            selection.clear()
+                            Task { await state.movePhotos(ids: Array(ids), into: f) }
                         }
                     }
                 }
