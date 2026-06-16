@@ -26,6 +26,9 @@ struct InspectorView: View {
     /// shortcuts yield while you type.
     private enum EditField: Hashable { case caption, tag }
     @FocusState private var editField: EditField?
+    /// Bound camera so the location map re-centres when you navigate to a different photo
+    /// (initialPosition is applied only once, so the reused Map kept the prior photo's region).
+    @State private var mapCamera: MapCameraPosition = .automatic
     @FocusState private var renameFocused: Bool
 
     var body: some View {
@@ -143,10 +146,8 @@ struct InspectorView: View {
                     section("Location") {
                         let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
                         // Interactive: scroll to zoom, drag to pan (no rotate/pitch — keep it flat).
-                        Map(initialPosition: .region(MKCoordinateRegion(
-                            center: coord,
-                            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05))),
-                            interactionModes: [.pan, .zoom]) {
+                        // Bound position (reset per-item in load()) so it follows the current photo.
+                        Map(position: $mapCamera, interactionModes: [.pan, .zoom]) {
                             Marker("", coordinate: coord).tint(Theme.accent)
                         }
                         .frame(height: 120)
@@ -495,6 +496,12 @@ struct InspectorView: View {
         favorite = item.favorite
         tags = (try? JSONDecoder().decode([String].self,
                                           from: Data(item.tagsJSON.utf8))) ?? []
+        // Re-centre the location map on THIS photo (load() runs on .task(id: item.hash)).
+        if let lat = item.latitude, let lon = item.longitude {
+            mapCamera = .region(MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)))
+        }
     }
 
     /// Load the faces detected in this photo + a person lookup, newest-named first then by confidence.
