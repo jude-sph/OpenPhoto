@@ -352,43 +352,40 @@ struct InspectorView: View {
     @ViewBuilder private func faceChip(_ face: FaceRow) -> some View {
         let person = face.personID.flatMap { peopleByID[$0] }
         let isManualTag = face.source == "manual"
-        Menu {
-            if let person {
-                Button("Open \(person.name)") { state.openPerson(person) }
-                Button(role: .destructive) {
-                    state.reassignFace(face.id ?? -1, to: nil, fromPerson: face.personID)
-                } label: { Text(isManualTag ? "Remove tag" : "Remove from photo") }
-            } else if state.people.isEmpty {
-                Text("No people yet — use \u{201C}Tag someone\u{2026}\u{201D}")
-            } else {
-                ForEach(state.people, id: \.id) { p in
-                    Button(p.name) { state.reassignFace(face.id ?? -1, to: p.id, fromPerson: nil) }
-                }
-                Divider()
-                Button("New person\u{2026}") {
-                    assignNewName = ""; pendingAssignFaceID = face.id; showAssignNew = true
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                // Anchor the avatar to a hard 30×30 via Color.clear + overlay: a borderless Menu
-                // label won't honour a plain .frame on the resizable crop (it rendered full-size).
-                Color.clear
-                    .frame(width: 30, height: 30)
-                    .overlay {
-                        FaceCropView(state: state, faceID: face.id, hash: face.hash,
-                                     rect: face.rect, size: 30, fill: true)
+        // Render the circular avatar OUTSIDE the Menu — a borderless Menu label doesn't honour a
+        // .frame on a resizable image (it rendered at the crop's natural, varying size). Only the
+        // name is the menu trigger; its label is plain text, which the menu sizes correctly.
+        HStack(spacing: 6) {
+            FaceCropView(state: state, faceID: face.id, hash: face.hash, rect: face.rect, size: 30)
+                .frame(width: 30, height: 30)
+                .clipShape(Circle())
+            Menu {
+                if let person {
+                    Button("Open \(person.name)") { state.openPerson(person) }
+                    Button(role: .destructive) {
+                        state.reassignFace(face.id ?? -1, to: nil, fromPerson: face.personID)
+                    } label: { Text(isManualTag ? "Remove tag" : "Remove from photo") }
+                } else if state.people.isEmpty {
+                    Text("No people yet — use \u{201C}Tag someone\u{2026}\u{201D}")
+                } else {
+                    ForEach(state.people, id: \.id) { p in
+                        Button(p.name) { state.reassignFace(face.id ?? -1, to: p.id, fromPerson: nil) }
                     }
-                    .clipShape(Circle())
+                    Divider()
+                    Button("New person\u{2026}") {
+                        assignNewName = ""; pendingAssignFaceID = face.id; showAssignNew = true
+                    }
+                }
+            } label: {
                 Text(person?.name ?? "Unknown")
                     .font(.system(size: 12, weight: person != nil ? .medium : .regular))
                     .foregroundStyle(person != nil ? Theme.accent : Theme.textDim)
             }
-            .padding(.leading, 3).padding(.trailing, 9).padding(.vertical, 3)
-            .background(person != nil ? Theme.accentDim : Theme.elevated, in: Capsule())
+            .menuStyle(.borderlessButton).fixedSize()
+            .help(person != nil ? "Open or remove" : "Assign this face to someone")
         }
-        .menuStyle(.borderlessButton).fixedSize()
-        .help(person != nil ? "Open or remove" : "Assign this face to someone")
+        .padding(.leading, 3).padding(.trailing, 9).padding(.vertical, 3)
+        .background(person != nil ? Theme.accentDim : Theme.elevated, in: Capsule())
     }
 
     private var exifGrid: some View {
@@ -523,7 +520,14 @@ struct InspectorView: View {
         favorite = reconciled.favorite   // reflect a Finder-driven favourite back into the heart
         tags = reconciled.tags
         try? state.refreshQueries()
-        if let updated = try? lib.item(hash: item.hash) { state.openedItem = updated }
+        // Refresh BOTH the opened item AND the array the viewer pages through, so navigating away
+        // and back doesn't re-load a stale pre-edit snapshot (the heart was vanishing on return).
+        if let updated = try? lib.item(hash: item.hash) {
+            state.openedItem = updated
+            for i in state.viewerItems.indices where state.viewerItems[i].hash == updated.hash {
+                state.viewerItems[i] = updated
+            }
+        }
     }
 }
 
