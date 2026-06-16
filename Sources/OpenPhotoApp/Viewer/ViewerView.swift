@@ -276,20 +276,15 @@ struct ViewerView: View {
         guard deg != 0, let track = asset.tracks(withMediaType: .video).first else {
             return AVPlayer(playerItem: item)
         }
-        let naturalSize = track.naturalSize
-        let preferred = track.preferredTransform
-        // Size the video as preferredTransform orients it, then rotate that by the user's degrees.
-        let displaySize = CGSize(
-            width: abs(naturalSize.width * preferred.a + naturalSize.height * preferred.c),
-            height: abs(naturalSize.width * preferred.b + naturalSize.height * preferred.d))
-        let (rot, renderSize) = VideoRotation.render(displaySize: displaySize, degreesCW: deg)
+        let (transform, renderSize) = VideoRotation.render(
+            naturalSize: track.naturalSize, preferred: track.preferredTransform, degreesCW: deg)
         let comp = AVMutableVideoComposition()
         comp.renderSize = renderSize
         comp.frameDuration = CMTime(value: 1, timescale: 30)
         let instr = AVMutableVideoCompositionInstruction()
         instr.timeRange = CMTimeRange(start: .zero, duration: asset.duration)
         let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-        layer.setTransform(preferred.concatenating(rot), at: .zero)
+        layer.setTransform(transform, at: .zero)
         instr.layerInstructions = [layer]
         comp.instructions = [instr]
         item.videoComposition = comp
