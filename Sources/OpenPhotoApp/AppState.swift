@@ -2182,6 +2182,15 @@ final class AppState {
         deviceWatcher.devices.filter { sendDestination(for: $0) != nil }
     }
 
+    /// Local file URLs for the selected items, for the macOS system Share sheet (ShareLink).
+    /// Drive-only assets (no local copy) are skipped — there's nothing on this Mac to share.
+    func localFileURLs(for items: [TimelineItem]) -> [URL] {
+        items.compactMap { item -> URL? in
+            guard item.driveRelPath == nil, let vault = library?.vault(id: item.vaultID) else { return nil }
+            return vault.absoluteURL(forRelativePath: item.relPath)
+        }
+    }
+
     /// On-connect re-verify verdicts, keyed "<destinationKey>|<hash>". Rebuildable in-memory cache
     /// (re-derived on every device connect) — never persisted, no catalog table.
     private var reverified: [String: ReverifyVerdict] = [:]

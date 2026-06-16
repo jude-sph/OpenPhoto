@@ -11,8 +11,6 @@ struct FolderGridView: View {
     @State private var showDelete = false
     @State private var showSend = false
     @State private var dragToMove = false
-    @State private var moveDest = ""
-    @State private var newMoveFolderName = ""
 
     private var orderedSelectable: [SelectableItem] {
         items.map { SelectableItem(id: $0.instanceID) }
@@ -157,12 +155,16 @@ struct FolderGridView: View {
             tagControls: AnyView(TagPersonMenu(
                 state: state, hashes: selectedItems.map(\.hash),
                 onDone: { selection.clear(); selectMode = false; dragToMove = false })),
+            shareControls: AnyView(
+                ShareLink(items: state.localFileURLs(for: selectedItems)) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }.controlSize(.small)),
             onDeselect: { selection.clear() },
             onDone: { selection.clear(); selectMode = false; dragToMove = false })
     }
 
-    /// Destination dropdown + "New folder…" + Move (the import screen's pattern), plus
-    /// the drag-to-move toggle that flips grid dragging from rubber-band to drag-out.
+    /// A single "Move to…" folder menu (plus the drag-to-move toggle). Pick a destination and the
+    /// selected photos move there immediately — no inline new-folder field.
     private var moveControls: some View {
         HStack(spacing: 6) {
             Toggle(isOn: $dragToMove) {
@@ -170,26 +172,18 @@ struct FolderGridView: View {
             }
             .toggleStyle(.button).controlSize(.small)
             .help("Drag selected photos onto a folder in the sidebar. Turn off to rubber-band select again.")
-            Picker(selection: $moveDest) {
-                Text("Move to…").tag("")
-                ForEach(pickerFolders, id: \.self) { f in
-                    Text(f).tag(f)
+            Menu("Move to\u{2026}") {
+                ForEach(allFolders, id: \.self) { f in
+                    if f != state.selectedFolder {
+                        Button(folderMenuLabel(f)) {
+                            let ids = Array(selection.selected)
+                            Task { await state.movePhotos(ids: ids, into: f) }
+                        }
+                    }
                 }
-            } label: { EmptyView() }
-            .frame(maxWidth: 180)
-            TextField("New folder…", text: $newMoveFolderName)
-                .frame(width: 110)
-                .onSubmit {
-                    let t = newMoveFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !t.isEmpty { moveDest = t; newMoveFolderName = "" }
-                }
-            Button("Move") {
-                let ids = Array(selection.selected)
-                let dest = moveDest
-                Task { await state.movePhotos(ids: ids, into: dest) }
             }
-            .disabled(selection.count == 0 || moveDest.isEmpty || moveDest == state.selectedFolder)
-            .controlSize(.small)
+            .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
+            .disabled(selection.count == 0)
         }
     }
 
@@ -199,11 +193,10 @@ struct FolderGridView: View {
         walk(state.folderTree)
         return paths.sorted()
     }
-    /// Picker options including a just-typed new folder, so selecting it never blanks the menu.
-    private var pickerFolders: [String] {
-        var fs = allFolders
-        if !moveDest.isEmpty, !fs.contains(moveDest) { fs.insert(moveDest, at: 0) }
-        return fs
+    /// Human label for a folder path in the move menu ("" = library root).
+    private func folderMenuLabel(_ path: String) -> String {
+        if path.isEmpty { return state.folderTree.first { $0.path == "" }?.name ?? "Library Root" }
+        return path.replacingOccurrences(of: "/", with: " \u{203A} ")
     }
 
     /// Header label for the selected folder; the root node has dirPath "" so show its display name.

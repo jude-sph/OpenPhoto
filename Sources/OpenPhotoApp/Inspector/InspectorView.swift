@@ -371,8 +371,14 @@ struct InspectorView: View {
             }
         } label: {
             HStack(spacing: 6) {
-                FaceCropView(state: state, faceID: face.id, hash: face.hash, rect: face.rect, size: 30)
+                // Anchor the avatar to a hard 30×30 via Color.clear + overlay: a borderless Menu
+                // label won't honour a plain .frame on the resizable crop (it rendered full-size).
+                Color.clear
                     .frame(width: 30, height: 30)
+                    .overlay {
+                        FaceCropView(state: state, faceID: face.id, hash: face.hash,
+                                     rect: face.rect, size: 30, fill: true)
+                    }
                     .clipShape(Circle())
                 Text(person?.name ?? "Unknown")
                     .font(.system(size: 12, weight: person != nil ? .medium : .regular))
