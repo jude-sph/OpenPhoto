@@ -25,6 +25,8 @@ struct CleanupView: View {
     private var selectedItems: [TimelineItem] {
         allItems.filter { selection.contains($0.instanceID) }
     }
+    /// Total bytes of the currently-selected (to-be-deleted) photos — recomputed as selection changes.
+    private var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + $1.size } }
     /// Every tile any group suggests evicting (the union the "Apply all suggestions" action acts on).
     private var allSuggested: [TimelineItem] {
         state.cullGroups.flatMap { g in g.items.filter { g.suggestedEvict.contains($0.instanceID) } }
@@ -210,7 +212,7 @@ struct CleanupView: View {
 
     private var actionBar: some View {
         HStack(spacing: 12) {
-            Text("\(selection.count) selected")
+            Text("\(selection.count) selected · \(ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file)) to free")
                 .font(.system(size: 13, weight: .medium).monospacedDigit())
                 .foregroundStyle(Theme.textDim)
             Spacer()
