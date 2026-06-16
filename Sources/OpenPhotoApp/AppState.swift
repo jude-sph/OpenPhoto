@@ -84,6 +84,11 @@ final class AppState {
     /// sidebar shows it so the user knows what the on-device analysis is doing right now.
     var derivationStageName: String?
     var scanning = false
+    /// Set when `rescan()` is asked to run while a scan is already in flight (e.g. a watcher event
+    /// from the tail of a large Finder copy or import). The in-flight scan re-runs once it finishes,
+    /// so the final filesystem state is always picked up — without this, a dropped trailing event
+    /// leaves the folder counts stuck at whatever was present when the scan began.
+    private var rescanRequested = false
     var refreshToken = 0
     /// Bumped after a per-photo move so the folder grid clears its (now-stale) selection.
     var photoMoveToken = 0
@@ -1889,18 +1894,26 @@ final class AppState {
     }
 
     func rescan() async {
-        guard let library, !scanning else { return }
+        guard let library else { return }
+        // Coalesce: if a scan is already running, note that the library changed again so the
+        // in-flight scan loops once more when it finishes. A watcher event that lands mid-scan
+        // (the tail of a large copy/import) would otherwise be dropped, leaving counts stale.
+        if scanning { rescanRequested = true; return }
         scanning = true
         defer { scanning = false; scanProgress = nil }
-        do {
-            try await library.scanAll { [weak self] p in
-                Task { @MainActor in if p.total > 50 { self?.scanProgress = p } }
+        repeat {
+            rescanRequested = false
+            do {
+                try await library.scanAll { [weak self] p in
+                    Task { @MainActor in if p.total > 50 { self?.scanProgress = p } }
+                }
+                try refreshQueries()
+                pokeDerivation()
+            } catch {
+                NSAlert(error: error).runModal()
+                break
             }
-            try refreshQueries()
-            pokeDerivation()
-        } catch {
-            NSAlert(error: error).runModal()
-        }
+        } while rescanRequested
     }
 
     private var derivationTask: Task<Void, Never>?
