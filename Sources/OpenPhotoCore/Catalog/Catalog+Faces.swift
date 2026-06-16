@@ -269,6 +269,38 @@ extension Catalog {
         }
     }
 
+    // MARK: Dismissed suggestions ("not this person")
+
+    /// Record that the user rejected these faces as members of `personID` (the suggestion strip's ✕),
+    /// so they are never re-suggested for that person. Idempotent; other people are unaffected.
+    public func dismissSuggestions(_ faceIDs: [Int64], forPerson personID: Int64) throws {
+        guard !faceIDs.isEmpty else { return }
+        try dbQueue.write { db in
+            for fid in faceIDs {
+                try db.execute(sql: "INSERT OR IGNORE INTO dismissed_suggestions (personID, faceID) VALUES (?, ?)",
+                               arguments: [personID, fid])
+            }
+        }
+    }
+
+    /// Map of personID → faceIDs the user has dismissed for that person. Used to drop those pairs
+    /// from suggested additions when (re)computing the People screen.
+    public func dismissedSuggestions() throws -> [Int64: Set<Int64>] {
+        try dbQueue.read { db in
+            var out: [Int64: Set<Int64>] = [:]
+            for r in try Row.fetchAll(db, sql: "SELECT personID, faceID FROM dismissed_suggestions") {
+                let pid: Int64 = r["personID"], fid: Int64 = r["faceID"]
+                out[pid, default: []].insert(fid)
+            }
+            return out
+        }
+    }
+
+    /// Clear all dismissals — called on a full face re-derivation (Rescan Faces), where faceIDs change.
+    public func clearDismissedSuggestions() throws {
+        try dbQueue.write { db in try db.execute(sql: "DELETE FROM dismissed_suggestions") }
+    }
+
     /// Reassign one face. nil → unassign (personID NULL, source back to 'auto'). A MANUAL tag (no real
     /// detected face) is deleted on unassign instead of returned to the pool — it has no embedding and
     /// only existed as a hand-added membership.

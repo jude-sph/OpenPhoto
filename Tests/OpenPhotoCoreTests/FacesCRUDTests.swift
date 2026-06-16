@@ -91,6 +91,19 @@ private func face(_ hash: String, _ vec: [Float], source: String = "auto",
     #expect(try cat.meta("faceModelVersion") == "next")
 }
 
+@Test func dismissedSuggestionsPersistFilterAndClear() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.dismissSuggestions([100, 101], forPerson: 7)
+    try cat.dismissSuggestions([100], forPerson: 8)
+    try cat.dismissSuggestions([100], forPerson: 7)          // idempotent (duplicate pair)
+    let d = try cat.dismissedSuggestions()
+    #expect(d[7] == [100, 101])
+    #expect(d[8] == [100])                                   // same face, different person — independent
+    try cat.clearDismissedSuggestions()
+    #expect(try cat.dismissedSuggestions().isEmpty)
+}
+
 @Test func manualPersonTagIsViewableButExcludedFromTheAlgorithm() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))

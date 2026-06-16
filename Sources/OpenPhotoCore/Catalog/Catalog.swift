@@ -242,6 +242,17 @@ public final class Catalog: Sendable {
                 t.add(column: "locked", .integer).notNull().defaults(to: 0)
             }
         }
+        migrator.registerMigration("v17") { db in
+            // Per-(person, face) "not this person" dismissals from the suggestion strip's ✕ — suppresses
+            // re-suggesting a face to a group the user rejected it for (a face can still be suggested for
+            // OTHER people). Catalog-only (rebuildable), NO sidecar / NO on-disk format change: a full
+            // face re-derivation (Rescan Faces) changes faceIDs, so it's cleared there.
+            try db.create(table: "dismissed_suggestions") { t in
+                t.column("personID", .integer).notNull()
+                t.column("faceID", .integer).notNull()
+                t.primaryKey(["personID", "faceID"])
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 

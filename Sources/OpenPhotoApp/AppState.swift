@@ -269,8 +269,15 @@ final class AppState {
                     }
 
                     // Match unassigned → nearest person (suggestions); cluster the rest; bucket the noise.
-                    let (matched, unmatched) = FaceMatcher.match(
+                    let (rawMatched, unmatched) = FaceMatcher.match(
                         faces: unassigned, centroids: centroids, threshold: matchThreshold)
+                    // Drop faces the user dismissed for a person ("not this person") — they fall through
+                    // to the Other bucket rather than being re-suggested to that same person.
+                    let dismissed = (try? lib.catalog.dismissedSuggestions()) ?? [:]
+                    let matched = rawMatched.compactMap { m -> (personID: Int64, faceIDs: [Int64])? in
+                        let kept = m.faceIDs.filter { !(dismissed[m.personID]?.contains($0) ?? false) }
+                        return kept.isEmpty ? nil : (personID: m.personID, faceIDs: kept)
+                    }
                     let additions = Dictionary(uniqueKeysWithValues: matched.map { ($0.personID, $0.faceIDs) })
                     let groups = DBSCAN.groups(unmatched, eps: eps, minPts: minPts)
                     let conf = groups.map { FaceCluster(faceIDs: $0, representativeFaceID: $0.first ?? 0,
@@ -330,8 +337,14 @@ final class AppState {
                     let centroids = byPerson.compactMap { pid, vecs in
                         FaceMatcher.centroid(vecs).map { (pid, $0) }
                     }
-                    let (matched, _) = FaceMatcher.match(
+                    let (rawMatched, _) = FaceMatcher.match(
                         faces: unassigned, centroids: centroids, threshold: matchThreshold)
+                    // Honour user dismissals ("not this person") — never re-suggest a dismissed pair.
+                    let dismissed = (try? lib.catalog.dismissedSuggestions()) ?? [:]
+                    let matched = rawMatched.compactMap { m -> (personID: Int64, faceIDs: [Int64])? in
+                        let kept = m.faceIDs.filter { !(dismissed[m.personID]?.contains($0) ?? false) }
+                        return kept.isEmpty ? nil : (personID: m.personID, faceIDs: kept)
+                    }
                     let additions = Dictionary(uniqueKeysWithValues: matched.map { ($0.personID, $0.faceIDs) })
                     let matchedIDs = Set(matched.flatMap { $0.faceIDs })
 
@@ -406,20 +419,33 @@ final class AppState {
         }
     }
 
-    /// Dismiss a person's suggested additions (in-session): the faces drop to the Other-faces bucket.
-    /// Not persisted — a later People reload may re-suggest them once the centroid sharpens (by design).
+    /// Dismiss a person's suggested additions: the faces drop to the Other-faces bucket and are
+    /// remembered (persisted) as "not this person", so they're never re-suggested for this person.
     func dismissSuggestions(forPerson personID: Int64) {
-        if let ids = suggestedAdditions[personID] { otherFaceIDs.append(contentsOf: ids) }
+        let ids = suggestedAdditions[personID] ?? []
+        otherFaceIDs.append(contentsOf: ids)
         suggestedAdditions[personID] = nil
+        persistDismissals(ids, forPerson: personID)
     }
 
-    /// Dismiss ONE suggested face for a person (the per-tile ✕): drop it back to the Other bucket.
-    /// In-session only, like dismissSuggestions(forPerson:) — a later reload may re-suggest it.
+    /// Dismiss ONE suggested face for a person (the per-tile ✕): drop it to the Other bucket AND
+    /// remember it so it is never re-suggested for this person again (persisted in the catalog).
     func dismissSuggestion(faceID: Int64, forPerson personID: Int64) {
-        guard var ids = suggestedAdditions[personID] else { return }
-        ids.removeAll { $0 == faceID }
-        suggestedAdditions[personID] = ids.isEmpty ? nil : ids
+        if var ids = suggestedAdditions[personID] {
+            ids.removeAll { $0 == faceID }
+            suggestedAdditions[personID] = ids.isEmpty ? nil : ids
+        }
         if !otherFaceIDs.contains(faceID) { otherFaceIDs.append(faceID) }
+        persistDismissals([faceID], forPerson: personID)
+    }
+
+    /// Persist "not this person" dismissals off-main. `loadPeople`/`refreshSuggestions` read these
+    /// back and exclude the pairs from suggested additions.
+    private func persistDismissals(_ faceIDs: [Int64], forPerson personID: Int64) {
+        guard let lib = library, !faceIDs.isEmpty else { return }
+        Task.detached(priority: .userInitiated) {
+            try? lib.catalog.dismissSuggestions(faceIDs, forPerson: personID)
+        }
     }
 
     /// Optimistic UI: immediately remove these faces from every in-memory suggestion bucket so an
@@ -485,6 +511,7 @@ final class AppState {
         Task {
             await Task.detached(priority: .userInitiated) {
                 try? lib.catalog.clearDerivationJobs(stage: FaceStage.id)
+                try? lib.catalog.clearDismissedSuggestions()   // faceIDs change on re-derive
             }.value
             loadPeople()        // refresh from current state (faces still present)
             pokeDerivation()    // re-detect + re-embed in the background; drain refreshes People
