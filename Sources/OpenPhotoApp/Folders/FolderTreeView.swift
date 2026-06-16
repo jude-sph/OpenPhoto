@@ -120,6 +120,8 @@ private struct FolderRow: View {
     @State private var showNewChildFolder = false
     @State private var newChildFolderName = ""
     @State private var showDeleteConfirm = false
+    @State private var showTagAll = false
+    @State private var tagAllName = ""
 
     private var expanded: Bool { state.expandedFolders.contains(node.path) }
 
@@ -208,6 +210,10 @@ private struct FolderRow: View {
                     }
                 }
                 Divider()
+                Button("Tag All in Folder\u{2026}", systemImage: "tag") {
+                    tagAllName = ""; showTagAll = true
+                }
+                Divider()
                 Button("Delete Folder\u{2026}", role: .destructive) {
                     showDeleteConfirm = true
                 }
@@ -230,6 +236,14 @@ private struct FolderRow: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Enter a name for the new folder inside \u{201C}\(node.name)\u{201D}.")
+        }
+        // Tag-all-in-folder prompt
+        .alert("Tag all photos in \u{201C}\(node.name)\u{201D}", isPresented: $showTagAll) {
+            TextField("Tag", text: $tagAllName)
+            Button("Apply") { state.tagAllInFolder(node.path, tag: tagAllName, recursive: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Adds the tag to every photo in this folder and its subfolders. Photos that already have it are skipped.")
         }
         // Delete confirmation
         .alert("Delete \u{201C}\(node.name)\u{201D}?", isPresented: $showDeleteConfirm) {

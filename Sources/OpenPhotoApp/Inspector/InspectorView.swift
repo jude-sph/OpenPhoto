@@ -19,6 +19,9 @@ struct InspectorView: View {
     @State private var imageFaces: [FaceRow] = []
     @State private var instances: [InstanceRecord] = []   // all files of this content (multi-folder)
     @State private var peopleByID: [Int64: PersonRow] = [:]
+    @State private var assignNewName = ""
+    @State private var showAssignNew = false
+    @State private var pendingAssignFaceID: Int64?
     @FocusState private var renameFocused: Bool
 
     var body: some View {
@@ -320,33 +323,62 @@ struct InspectorView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !imageFaces.isEmpty {
                     FlowLayoutLite(spacing: 8) {
-                        ForEach(imageFaces, id: \.id) { face in
-                            let person = face.personID.flatMap { peopleByID[$0] }
-                            Button {
-                                if let person { state.openPerson(person) }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    FaceCropView(state: state, faceID: face.id, hash: face.hash,
-                                                 rect: face.rect, size: 30)
-                                        .frame(width: 30, height: 30)
-                                        .clipShape(Circle())
-                                    Text(person?.name ?? "Unknown")
-                                        .font(.system(size: 12, weight: person != nil ? .medium : .regular))
-                                        .foregroundStyle(person != nil ? Theme.accent : Theme.textDim)
-                                }
-                                .padding(.leading, 3).padding(.trailing, 9).padding(.vertical, 3)
-                                .background(person != nil ? Theme.accentDim : Theme.elevated, in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(person == nil)
-                        }
+                        ForEach(imageFaces, id: \.id) { face in faceChip(face) }
                     }
                 }
                 // Manually tag someone present even when no face was detected (obscured faces).
                 TagPersonMenu(state: state, hashes: [item.hash], label: "Tag someone\u{2026}")
-                    .onChange(of: state.refreshToken) { loadFaces() }   // reflect the new tag chip
             }
+            .onChange(of: state.refreshToken) { loadFaces() }   // reflect tag/assignment changes
         }
+        .alert("Assign face to a new person", isPresented: $showAssignNew) {
+            TextField("Name", text: $assignNewName)
+            Button("Create") {
+                let n = assignNewName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let fid = pendingAssignFaceID, !n.isEmpty { state.nameCluster([fid], as: n) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// One face/person chip. A named face or manual tag offers "Open" + "Remove"; an Unknown detected
+    /// face offers a person picker to assign THAT face. Removing a detected face unassigns it (back to
+    /// the Other bucket); removing a manual tag deletes it (the catalog drops manual tags on unassign,
+    /// so no stray unassigned face is left behind).
+    @ViewBuilder private func faceChip(_ face: FaceRow) -> some View {
+        let person = face.personID.flatMap { peopleByID[$0] }
+        let isManualTag = face.source == "manual"
+        Menu {
+            if let person {
+                Button("Open \(person.name)") { state.openPerson(person) }
+                Button(role: .destructive) {
+                    state.reassignFace(face.id ?? -1, to: nil, fromPerson: face.personID)
+                } label: { Text(isManualTag ? "Remove tag" : "Remove from photo") }
+            } else if state.people.isEmpty {
+                Text("No people yet — use \u{201C}Tag someone\u{2026}\u{201D}")
+            } else {
+                ForEach(state.people, id: \.id) { p in
+                    Button(p.name) { state.reassignFace(face.id ?? -1, to: p.id, fromPerson: nil) }
+                }
+                Divider()
+                Button("New person\u{2026}") {
+                    assignNewName = ""; pendingAssignFaceID = face.id; showAssignNew = true
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                FaceCropView(state: state, faceID: face.id, hash: face.hash, rect: face.rect, size: 30)
+                    .frame(width: 30, height: 30)
+                    .clipShape(Circle())
+                Text(person?.name ?? "Unknown")
+                    .font(.system(size: 12, weight: person != nil ? .medium : .regular))
+                    .foregroundStyle(person != nil ? Theme.accent : Theme.textDim)
+            }
+            .padding(.leading, 3).padding(.trailing, 9).padding(.vertical, 3)
+            .background(person != nil ? Theme.accentDim : Theme.elevated, in: Capsule())
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .help(person != nil ? "Open or remove" : "Assign this face to someone")
     }
 
     private var exifGrid: some View {

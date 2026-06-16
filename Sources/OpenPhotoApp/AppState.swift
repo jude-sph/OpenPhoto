@@ -143,6 +143,32 @@ final class AppState {
         return (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: proposed)) ?? proposed
     }
 
+    /// Apply `tag` to every photo in `dir` (and its subfolders when `recursive`) in one pass, reusing
+    /// the per-photo write path (sidecar + catalog, and a Finder reconcile when sync is on). Photos
+    /// that already carry the tag are skipped. Runs off-main; grids refresh when it finishes.
+    func tagAllInFolder(_ dir: String, tag: String, recursive: Bool = true) {
+        let tag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let lib = library, !tag.isEmpty else { return }
+        let syncFinder = finderTagSyncEnabled
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let items = (try? lib.items(inDir: dir, recursive: recursive)) ?? []
+            for item in items {
+                let existing = (try? JSONDecoder().decode([String].self, from: Data(item.tagsJSON.utf8))) ?? []
+                guard !existing.contains(tag) else { continue }
+                var newTags = existing + [tag]
+                if syncFinder {
+                    newTags = (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: newTags)) ?? newTags
+                }
+                try? lib.updateMetadata(for: item, rating: item.rating, favorite: item.favorite,
+                                        caption: item.caption, tags: newTags)
+            }
+            await MainActor.run { [weak self] in
+                try? self?.refreshQueries()
+                self?.refreshToken &+= 1
+            }
+        }
+    }
+
     /// Full reconcile pass over every asset (off-main). Picks up Finder-side edits and pushes
     /// OpenPhoto tags to Finder; persists the merged set to the sidecar + catalog when it changed.
     /// No-op when the toggle is off.
@@ -224,10 +250,6 @@ final class AppState {
     /// True → the People view shows the "Other faces" bucket grid.
     var browsingOtherFaces = false
     var facesLoading = false
-    /// True while an explicit "Find more suggestions" run is in flight (drives a brief status).
-    var findingSuggestions = false
-    /// Set when an explicit "Find more suggestions" run finishes → People shows a result popup, then clears.
-    var suggestionResultMessage: String?
     /// Hidden auto-face IDs (user-dismissed faces that should not appear in the Other bucket).
     var hiddenFaceIDs: [Int64] = []
     private var facesDirty = true
@@ -316,10 +338,8 @@ final class AppState {
     /// re-runs the cheap centroid match — NOT the O(n²) DBSCAN clustering, and NOT face re-derivation —
     /// so confirming a suggestion immediately surfaces the next batch the sharpened centroid now
     /// matches, with no "Rescan Faces" needed. Existing clusters are pruned of now-assigned faces.
-    func refreshSuggestions(announce: Bool = false) {
+    func refreshSuggestions() {
         guard let lib = library else { return }
-        let beforeSuggested = announce ? Set(suggestedAdditions.values.flatMap { $0 }) : Set<Int64>()
-        if announce { findingSuggestions = true }
         let matchThreshold = faceMatchThreshold, minPts = faceClusterMinPts
         let existingClusters = suggestedClusters
         Task {
@@ -363,20 +383,6 @@ final class AppState {
             self.suggestedClusters = result.clusters
             self.suggestedAdditions = result.additions
             self.otherFaceIDs = preservingOtherOrder(result.other)
-            if announce {
-                self.findingSuggestions = false
-                let nowSuggested = Set(result.additions.values.flatMap { $0 })
-                let newFaceIDs = nowSuggested.subtracting(beforeSuggested)
-                if newFaceIDs.isEmpty {
-                    self.suggestionResultMessage =
-                        "No new suggestions. Assign or confirm more faces to a person, then try again."
-                } else {
-                    let people = result.additions.filter { _, ids in ids.contains { newFaceIDs.contains($0) } }.count
-                    let f = newFaceIDs.count
-                    self.suggestionResultMessage =
-                        "Found \(f) more face\(f == 1 ? "" : "s") that might belong to \(people) \(people == 1 ? "person" : "people"). Open a person to review their suggested faces."
-                }
-            }
         }
     }
 
@@ -622,6 +628,7 @@ final class AppState {
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
                 self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
+                self?.refreshToken &+= 1      // reflect the new assignment in the Inspector
             }
         }
     }
@@ -711,6 +718,7 @@ final class AppState {
             await MainActor.run { [weak self] in
                 self?.facesDirty = true
                 self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
+                self?.refreshToken &+= 1      // reflect the change in the Inspector's "In this image"
             }
         }
     }
