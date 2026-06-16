@@ -142,14 +142,15 @@ struct InspectorView: View {
                 if let lat = item.latitude, let lon = item.longitude {
                     section("Location") {
                         let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                        // Interactive: scroll to zoom, drag to pan (no rotate/pitch — keep it flat).
                         Map(initialPosition: .region(MKCoordinateRegion(
                             center: coord,
-                            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)))) {
+                            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05))),
+                            interactionModes: [.pan, .zoom]) {
                             Marker("", coordinate: coord).tint(Theme.accent)
                         }
                         .frame(height: 120)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .allowsHitTesting(false)
                         Text(String(format: "%.4f, %.4f", lat, lon))
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Theme.textFaint)
