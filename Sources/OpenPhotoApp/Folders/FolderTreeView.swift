@@ -122,6 +122,8 @@ private struct FolderRow: View {
     @State private var showDeleteConfirm = false
     @State private var showTagAll = false
     @State private var tagAllName = ""
+    @State private var showUntagAll = false
+    @State private var untagName = ""
 
     private var expanded: Bool { state.expandedFolders.contains(node.path) }
 
@@ -213,6 +215,9 @@ private struct FolderRow: View {
                 Button("Tag All in Folder\u{2026}", systemImage: "tag") {
                     tagAllName = ""; showTagAll = true
                 }
+                Button("Remove Tag from Folder\u{2026}", systemImage: "tag.slash") {
+                    untagName = ""; showUntagAll = true
+                }
                 Divider()
                 Button("Delete Folder\u{2026}", role: .destructive) {
                     showDeleteConfirm = true
@@ -244,6 +249,14 @@ private struct FolderRow: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Adds the tag to every photo in this folder and its subfolders. Photos that already have it are skipped.")
+        }
+        // Remove-tag-from-folder prompt
+        .alert("Remove a tag from \u{201C}\(node.name)\u{201D}", isPresented: $showUntagAll) {
+            TextField("Tag", text: $untagName)
+            Button("Remove") { state.untagAllInFolder(node.path, tag: untagName, recursive: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes the tag from every photo in this folder and its subfolders that has it.")
         }
         // Delete confirmation
         .alert("Delete \u{201C}\(node.name)\u{201D}?", isPresented: $showDeleteConfirm) {

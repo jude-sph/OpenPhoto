@@ -177,6 +177,37 @@ final class AppState {
         }
     }
 
+    /// Inverse of tagAllInFolder: remove `tag` from every photo in `dir` (and subfolders when
+    /// recursive) that has it. Case-insensitive match. Reuses the per-photo write path (sidecar +
+    /// catalog, and a Finder reconcile when sync is on). Runs off-main; grids refresh when done.
+    func untagAllInFolder(_ dir: String, tag: String, recursive: Bool = true) {
+        let tag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let lib = library, !tag.isEmpty,
+              tag.caseInsensitiveCompare(FinderTags.favoriteTagName) != .orderedSame else { return }
+        let syncFinder = finderTagSyncEnabled
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let items = (try? lib.items(inDir: dir, recursive: recursive)) ?? []
+            for item in items {
+                let existing = (try? JSONDecoder().decode([String].self, from: Data(item.tagsJSON.utf8))) ?? []
+                guard existing.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) else { continue }
+                var newTags = existing.filter { $0.caseInsensitiveCompare(tag) != .orderedSame }
+                var fav = item.favorite
+                if syncFinder {
+                    let r = (try? lib.reconcileFinderTags(forHash: item.hash, proposedTags: newTags,
+                                                          favorite: item.favorite))
+                        ?? (tags: newTags, favorite: item.favorite)
+                    newTags = r.tags; fav = r.favorite
+                }
+                try? lib.updateMetadata(for: item, rating: item.rating, favorite: fav,
+                                        caption: item.caption, tags: newTags)
+            }
+            await MainActor.run { [weak self] in
+                try? self?.refreshQueries()
+                self?.refreshToken &+= 1
+            }
+        }
+    }
+
     /// Full reconcile pass over every asset (off-main). Picks up Finder-side edits and pushes
     /// OpenPhoto tags to Finder; persists the merged set to the sidecar + catalog when it changed.
     /// No-op when the toggle is off.
