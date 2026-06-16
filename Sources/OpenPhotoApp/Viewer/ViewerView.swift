@@ -19,7 +19,6 @@ struct ViewerView: View {
     /// TimelineItem we were handed can be a stale copy from a grid list that wasn't refreshed after a
     /// rotate, which is why re-opening from the grid used to show the pre-rotation orientation.
     @State private var liveRotation = 0
-    private var rotationDeg: Double { Double(liveRotation) }
     private var index: Int? { flatItems.firstIndex { $0.instanceID == state.openedItem?.instanceID } }
 
     var body: some View {
@@ -49,6 +48,13 @@ struct ViewerView: View {
         .onKeyPress(.leftArrow) { if state.isEditingText { return .ignored }; step(-1); return .handled }
         .onKeyPress(.rightArrow) { if state.isEditingText { return .ignored }; step(1); return .handled }
         .onKeyPress(KeyEquivalent("i")) { if state.isEditingText { return .ignored }; state.inspectorShown.toggle(); return .handled }
+        // Space toggles video playback from the moment the viewer opens — without this, the stage
+        // (not the AVPlayerView) holds focus initially, so Space "donks" until you click the player.
+        .onKeyPress(.space) {
+            guard !state.isEditingText, let player else { return .ignored }
+            if player.rate == 0 { player.play() } else { player.pause() }
+            return .handled
+        }
         .onKeyPress(.deleteForward) { if state.isEditingText { return .ignored }; deleteCurrent(); return .handled }
         .onKeyPress(.delete) { if state.isEditingText { return .ignored }; deleteCurrent(); return .handled }
         .task(id: "\(state.openedItem?.instanceID ?? "")|\(state.openedItem?.rotation ?? 0)") { await loadFull() }
@@ -76,7 +82,6 @@ struct ViewerView: View {
                     // under it — with the top bar floating over the video.
                     ZStack(alignment: .top) {
                         PlayerView(player: player)
-                            .rotationEffect(.degrees(rotationDeg))
                             .ignoresSafeArea(.container, edges: .top)   // still reaches the top edge
                         // A tight drop shadow on the controls keeps them legible over bright video
                         // without the top-of-window vignette a gradient background created.
@@ -146,11 +151,11 @@ struct ViewerView: View {
                 }
             } else if item.kind == MediaKind.video.rawValue {
                 if let player {
-                    PlayerView(player: player).rotationEffect(.degrees(rotationDeg))
+                    PlayerView(player: player)
                 }
             } else if playingLive {
                 if let player {
-                    PlayerView(player: player).rotationEffect(.degrees(rotationDeg))
+                    PlayerView(player: player)
                 }
             } else if let fullImage {
                 // GPU-composited zoom/pan via a CALayer — no SwiftUI re-render during gestures, so it
@@ -245,7 +250,9 @@ struct ViewerView: View {
             return
         }
         if item.kind == MediaKind.video.rawValue {
-            player = AVPlayer(url: url)
+            // Bake any user display-rotation into the video itself (composition) so the player's
+            // native controls stay upright — a .rotationEffect rotated the whole player, controls too.
+            player = Self.makeVideoPlayer(url: url, rotationCW: liveRotation)
             return
         }
         liveURL = resolveLiveURL(for: item, photoURL: url)
@@ -256,6 +263,37 @@ struct ViewerView: View {
         if let data, let img = NSImage(data: data) {
             fullImage = Self.rotated(img, degrees: liveRotation)
         }
+    }
+
+    /// Build a video player, baking a user display-rotation into the frames via a video composition
+    /// (so the AVPlayerView's native controls stay upright). No rotation → a plain player.
+    private static func makeVideoPlayer(url: URL, rotationCW: Int) -> AVPlayer {
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset)
+        let deg = ((rotationCW % 360) + 360) % 360
+        // Synchronous track access (deprecated but fine for a local file, and only for rotated videos)
+        // — keeps the non-Sendable AVAssetTrack off any actor hop.
+        guard deg != 0, let track = asset.tracks(withMediaType: .video).first else {
+            return AVPlayer(playerItem: item)
+        }
+        let naturalSize = track.naturalSize
+        let preferred = track.preferredTransform
+        // Size the video as preferredTransform orients it, then rotate that by the user's degrees.
+        let displaySize = CGSize(
+            width: abs(naturalSize.width * preferred.a + naturalSize.height * preferred.c),
+            height: abs(naturalSize.width * preferred.b + naturalSize.height * preferred.d))
+        let (rot, renderSize) = VideoRotation.render(displaySize: displaySize, degreesCW: deg)
+        let comp = AVMutableVideoComposition()
+        comp.renderSize = renderSize
+        comp.frameDuration = CMTime(value: 1, timescale: 30)
+        let instr = AVMutableVideoCompositionInstruction()
+        instr.timeRange = CMTimeRange(start: .zero, duration: asset.duration)
+        let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+        layer.setTransform(preferred.concatenating(rot), at: .zero)
+        instr.layerInstructions = [layer]
+        comp.instructions = [instr]
+        item.videoComposition = comp
+        return AVPlayer(playerItem: item)
     }
 
     /// Rotate an NSImage 0/90/180/270 CW for display — the original file is never modified.
