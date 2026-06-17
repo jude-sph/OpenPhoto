@@ -140,6 +140,7 @@ struct TimelineView: View {
     private var selectionBar: some View {
         SelectionActionBar(
             count: selection.count,
+            moveControls: AnyView(moveControls),
             sendTargetName: {
                 let targets = state.connectedSendTargets()
                 return targets.count > 1 ? "device\u{2026}" : targets.first?.name
@@ -164,6 +165,35 @@ struct TimelineView: View {
                 }.controlSize(.small)),
             onDeselect: { selection.clear() },
             onDone: { selection.clear(); selectMode = false })
+    }
+
+    /// "Move to…" folder menu — parity with the Folders view. The Timeline is deduped by content
+    /// hash (not folder-scoped), so move each selected photo's representative local instance into
+    /// the chosen folder; the photo stays in the timeline. Drive-only items re-key via movePhotos.
+    private var moveControls: some View {
+        Menu("Move to\u{2026}") {
+            ForEach(allFolders, id: \.self) { f in
+                Button(folderMenuLabel(f)) {
+                    let ids = selectedItems.map(\.instanceID)
+                    selection.clear(); selectMode = false
+                    Task { await state.movePhotos(ids: ids, into: f) }
+                }
+            }
+        }
+        .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
+        .disabled(selection.count == 0)
+    }
+
+    private var allFolders: [String] {
+        var paths: [String] = []
+        func walk(_ nodes: [FolderNode]) { for n in nodes { paths.append(n.path); walk(n.children) } }
+        walk(state.folderTree)
+        return paths.sorted()
+    }
+    /// Human label for a folder path in the move menu ("" = library root).
+    private func folderMenuLabel(_ path: String) -> String {
+        if path.isEmpty { return state.folderTree.first { $0.path == "" }?.name ?? "Library Root" }
+        return path.replacingOccurrences(of: "/", with: " \u{203A} ")
     }
 
     private var toolbar: some View {
