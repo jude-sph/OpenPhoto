@@ -240,6 +240,38 @@ extension Catalog {
         }
     }
 
+    /// hash → durationSeconds for every asset that has one (i.e. videos). The scanner feeds these
+    /// to `LivePhotoPairer` so its basename fallback can reject a video too long to be Live motion.
+    public func videoDurations() throws -> [String: Double] {
+        try dbQueue.read { db in
+            var out: [String: Double] = [:]
+            for r in try Row.fetchAll(db, sql:
+                "SELECT hash, durationSeconds FROM assets WHERE durationSeconds IS NOT NULL") {
+                out[r["hash"]] = r["durationSeconds"]
+            }
+            return out
+        }
+    }
+
+    /// Self-heal mis-pairings: un-pair any video flagged as Live motion whose stored duration proves
+    /// it can't be (longer than `maxSeconds`) — e.g. a 7-minute clip wrongly folded into a same-named
+    /// photo before the duration guard existed. Clears both the video flag and the photo's pointer.
+    /// Targeted by duration (not "not re-derived"), so a legitimately-paired short clip is untouched.
+    @discardableResult
+    public func unpairOverlongVideos(maxSeconds: Double) throws -> Int {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                UPDATE assets SET livePairHash = NULL
+                WHERE livePairHash IN (SELECT hash FROM assets WHERE durationSeconds > ?)
+                """, arguments: [maxSeconds])
+            try db.execute(sql: """
+                UPDATE assets SET isLivePairedVideo = 0
+                WHERE isLivePairedVideo = 1 AND durationSeconds > ?
+                """, arguments: [maxSeconds])
+            return db.changesCount
+        }
+    }
+
     /// Mirror a sidecar edit into the catalog (sidecar written separately).
     /// True if an instance with this hash already exists in the given folder of the vault.
     public func hashPresent(inVault vaultID: String, dirPath: String, hash: String) throws -> Bool {

@@ -131,10 +131,21 @@ public enum Scanner {
         //    ALL pairs so healing works even when both halves were already cataloged (Fix 3).
         //    setLivePair is idempotent — calling it for already-paired assets is a cheap no-op.
         try catalog.upsert(assets: newAssets)
-        for pair in LivePhotoPairer.pair(candidates: pairCandidates) {
+        // Attach durations (from the catalog — new assets just upserted, existing ones already
+        // carry theirs) so the basename fallback can reject a video too long to be Live motion.
+        let durByHash = try catalog.videoDurations()
+        let candidates = pairCandidates.map { c -> LivePhotoPairer.Candidate in
+            LivePhotoPairer.Candidate(hash: c.hash, relPath: c.relPath, kind: c.kind,
+                takenAt: c.takenAt, contentIdentifier: c.contentIdentifier,
+                durationSeconds: durByHash[c.hash.stringValue])
+        }
+        for pair in LivePhotoPairer.pair(candidates: candidates) {
             try catalog.setLivePair(photoHash: pair.photoHash.stringValue,
                                     videoHash: pair.videoHash.stringValue)
         }
+        // Self-heal existing data: un-pair any video whose duration proves it can't be Live motion
+        // (mis-paired by basename before the duration guard existed) so it returns to the timeline.
+        try catalog.unpairOverlongVideos(maxSeconds: LivePhotoPairer.maxLiveMotionSeconds)
 
         // 5. Persist: instances (wholesale replace), manifest (atomic).
         let instances = aligned.map { entry, f in

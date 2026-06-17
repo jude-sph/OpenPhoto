@@ -8,12 +8,20 @@ public enum LivePhotoPairer {
         public let kind: MediaKind
         public let takenAt: Date
         public let contentIdentifier: String?
+        public let durationSeconds: Double?
         public init(hash: ContentHash, relPath: String, kind: MediaKind,
-                    takenAt: Date, contentIdentifier: String?) {
+                    takenAt: Date, contentIdentifier: String?, durationSeconds: Double? = nil) {
             self.hash = hash; self.relPath = relPath; self.kind = kind
             self.takenAt = takenAt; self.contentIdentifier = contentIdentifier
+            self.durationSeconds = durationSeconds
         }
     }
+
+    /// Apple Live Photo motion is ~3s. A video longer than this that merely shares a still's
+    /// basename (e.g. a 7-minute clip that happens to be named like a photo) is a coincidence,
+    /// not Live Photo motion — pairing it would wrongly hide the video from the timeline. The cap
+    /// is generous; it only gates the basename fallback, never the authoritative content-id match.
+    public static let maxLiveMotionSeconds = 6.0
     public struct Pair: Equatable, Sendable {
         public let photoHash: ContentHash
         public let videoHash: ContentHash
@@ -57,6 +65,9 @@ public enum LivePhotoPairer {
         for p in unpaired {
             let key = dir(p.relPath) + "|" + base(p.relPath)
             guard let v = videosByKey[key], !usedVideos.contains(v.relPath) else { continue }
+            // Reject a same-basename video that's too long to be Live Photo motion (only when the
+            // duration is known — nil keeps the old behaviour so loose imports still pair).
+            if let d = v.durationSeconds, d > maxLiveMotionSeconds { continue }
             usedVideos.insert(v.relPath)
             result.append(Pair(photoHash: p.hash, videoHash: v.hash,
                                photoRelPath: p.relPath, videoRelPath: v.relPath))
