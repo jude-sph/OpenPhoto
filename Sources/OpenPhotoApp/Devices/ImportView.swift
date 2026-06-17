@@ -15,6 +15,7 @@ struct ImportView: View {
     @State private var sessionImported: [ImportEngine.ImportedItem] = []   // across batches
     @State private var sessionImportedIDs = Set<String>()
     @State private var lastResult: ImportEngine.BatchResult?
+    @State private var showFailures = false
     @State private var showFreeUp = false
     @State private var stateStreamTask: Task<Void, Never>?
     @State private var importedIDCache = Set<String>()
@@ -175,11 +176,25 @@ struct ImportView: View {
             default:
                 if let r = lastResult {
                     Label("\(r.imported.count) imported & verified" +
-                          (r.skipped.isEmpty ? "" : " · \(r.skipped.count) duplicates skipped") +
-                          (r.failed.isEmpty ? "" : " · \(r.failed.count) FAILED"),
+                          (r.skipped.isEmpty ? "" : " · \(r.skipped.count) duplicates skipped"),
                           systemImage: r.failed.isEmpty ? "checkmark.seal" : "exclamationmark.triangle")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(r.failed.isEmpty ? Theme.green : Theme.amber)
+                    if !r.failed.isEmpty {
+                        // Click to see exactly which items failed and why — the per-item reason
+                        // (verification mismatch, disk space, fetch error, …) is otherwise invisible.
+                        Button { showFailures = true } label: {
+                            Text("· \(r.failed.count) FAILED")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.amber)
+                                .underline()
+                        }
+                        .buttonStyle(.plain)
+                        .help("Click to see which item\(r.failed.count == 1 ? "" : "s") failed and why")
+                        .popover(isPresented: $showFailures, arrowEdge: .bottom) {
+                            failureList(r.failed)
+                        }
+                    }
                 }
                 Text("\(selectedDisplayCount) selected")
                     .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)
@@ -202,6 +217,61 @@ struct ImportView: View {
             }
         }
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight + 8)
+    }
+
+    // MARK: Failure detail
+
+    /// Popover listing every item that failed this import, with its source name and the engine's
+    /// reason (selectable so it can be copied). Reasons come straight from `ImportEngine`: a
+    /// checksum "verification mismatch", "not enough disk space", a fetch/IO error, or "rescan
+    /// failed (files are placed and will be adopted by the next scan)".
+    private func failureList(_ failures: [ImportEngine.FailedItem]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(failures.count) item\(failures.count == 1 ? "" : "s") couldn't be imported")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.text)
+            Divider().overlay(Theme.hairline)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(failures.enumerated()), id: \.offset) { _, f in
+                        HStack(alignment: .top, spacing: 10) {
+                            failureThumb(f.item)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(f.item.name)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(Theme.text)
+                                    .textSelection(.enabled)
+                                Text(f.reason)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.textDim)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 240)
+        }
+        .padding(14)
+        .frame(width: 380)
+    }
+
+    /// A small preview of the failed source item, pulled from the same per-source thumbnail provider
+    /// the import grid uses. Falls back to a photo glyph if the source is gone or can't render it.
+    @ViewBuilder private func failureThumb(_ item: ImportItem) -> some View {
+        let side: CGFloat = 46
+        if let src = source {
+            ThumbnailImage(id: item.id, provider: { px in await src.thumbnail(item, maxPixel: px) },
+                           targetPixel: 128)
+                .frame(width: side, height: side)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        } else {
+            RoundedRectangle(cornerRadius: 5).fill(Theme.bg2)
+                .frame(width: side, height: side)
+                .overlay(Image(systemName: "photo").foregroundStyle(Theme.textFaint))
+        }
     }
 
     // MARK: Destination picker
