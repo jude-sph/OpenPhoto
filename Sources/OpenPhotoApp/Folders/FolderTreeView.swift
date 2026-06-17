@@ -12,6 +12,7 @@ struct FolderTreeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            VideosOnlyBanner(state: state)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(state.folderTree) { node in

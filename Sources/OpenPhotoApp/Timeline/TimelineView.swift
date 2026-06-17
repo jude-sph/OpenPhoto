@@ -29,6 +29,7 @@ struct TimelineView: View {
         VStack(spacing: 0) {
             if selectMode { selectionBar } else { toolbar }
             Divider().overlay(Theme.hairline)
+            VideosOnlyBanner(state: state)
             grid
         }
         .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
