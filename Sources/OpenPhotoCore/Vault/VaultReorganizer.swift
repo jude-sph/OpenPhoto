@@ -16,6 +16,7 @@ public enum VaultReorganizer {
         let name = (src as NSString).lastPathComponent
         let newPath = dstParent.isEmpty ? name : dstParent + "/" + name
         if newPath == src { return src }
+        try assertContained(src, in: vault); try assertContained(newPath, in: vault)
         let fm = FileManager.default
         let srcURL = vault.absoluteURL(forRelativePath: src)
         let dstURL = vault.absoluteURL(forRelativePath: newPath)
@@ -39,6 +40,7 @@ public enum VaultReorganizer {
         let parent = (src as NSString).deletingLastPathComponent
         let newPath = parent.isEmpty ? name : parent + "/" + name
         if newPath == src { return src }
+        try assertContained(src, in: vault); try assertContained(newPath, in: vault)
         let fm = FileManager.default
         let srcURL = vault.absoluteURL(forRelativePath: src)
         let dstURL = vault.absoluteURL(forRelativePath: newPath)
@@ -51,12 +53,14 @@ public enum VaultReorganizer {
 
     public static func createFolder(in vault: Vault, relPath: String) throws {
         let p = norm(relPath); guard !p.isEmpty else { throw ReorgError.invalidTarget }
+        try assertContained(p, in: vault)
         try FileManager.default.createDirectory(at: vault.absoluteURL(forRelativePath: p),
                                                 withIntermediateDirectories: true)
     }
 
     public static func deleteEmptyFolder(in vault: Vault, relPath: String) throws {
         let p = norm(relPath); guard !p.isEmpty else { throw ReorgError.invalidTarget }
+        try assertContained(p, in: vault)
         let url = vault.absoluteURL(forRelativePath: p)
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
         if contents.contains(where: { $0 != ".openphoto" && !$0.hasPrefix(".") }) {
@@ -91,6 +95,7 @@ public enum VaultReorganizer {
         var dst = norm(target)
         guard !src.isEmpty, !dst.isEmpty else { throw ReorgError.invalidTarget }
         if dst == src { return src }   // already there — no-op
+        try assertContained(src, in: vault); try assertContained(dst, in: vault)
         let fm = FileManager.default
         let srcURL = vault.absoluteURL(forRelativePath: src)
         guard fm.fileExists(atPath: srcURL.path) else { throw ReorgError.missing }
@@ -136,5 +141,18 @@ public enum VaultReorganizer {
 
     private static func norm(_ s: String) -> String {
         s.precomposedStringWithCanonicalMapping.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    /// Reject any user-influenced path that contains a `.`/`..`/empty component, or that resolves
+    /// outside the vault root — defence-in-depth against path-traversal from UI-typed folder names
+    /// (e.g. renaming a folder to ".." or moving into "../../somewhere"). Call on the target (and
+    /// source) relPath before any filesystem mutation. Hard invariant: nothing escapes the vault.
+    static func assertContained(_ relPath: String, in vault: Vault) throws {
+        for c in relPath.split(separator: "/", omittingEmptySubsequences: false) {
+            if c.isEmpty || c == "." || c == ".." { throw ReorgError.invalidTarget }
+        }
+        let root = vault.rootURL.standardizedFileURL.path
+        let resolved = vault.absoluteURL(forRelativePath: relPath).standardizedFileURL.path
+        guard resolved == root || resolved.hasPrefix(root + "/") else { throw ReorgError.invalidTarget }
     }
 }

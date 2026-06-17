@@ -17,9 +17,20 @@ public enum XMP {
         switch o { case 6: return 90; case 3: return 180; case 8: return 270; default: return 0 }
     }
 
+    /// XML 1.0 forbids the C0 control characters (everything below 0x20 except tab, LF, CR)
+    /// *entirely* — they cannot even be represented as numeric character references — so a
+    /// pasted caption carrying e.g. a NUL or 0x1B would make the whole sidecar unparseable.
+    /// Drop them before escaping; this is the only data XML can't round-trip.
+    static func stripIllegalXMLScalars(_ s: String) -> String {
+        String(String.UnicodeScalarView(s.unicodeScalars.filter { sc in
+            sc.value == 0x09 || sc.value == 0x0A || sc.value == 0x0D || sc.value >= 0x20
+        }))
+    }
+
     public static func serialize(_ d: SidecarData) -> String {
         func esc(_ s: String) -> String {
-            s.replacingOccurrences(of: "&", with: "&amp;")
+            stripIllegalXMLScalars(s)
+                .replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;")
                 .replacingOccurrences(of: "\"", with: "&quot;")

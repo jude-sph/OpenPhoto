@@ -36,6 +36,36 @@ private func seed(_ vault: Vault, relPath: String, bytes: String = "x") throws -
     #expect(throws: (any Error).self) { try VaultReorganizer.moveFolder(in: vault, relPath: "a", intoParentRelPath: "a") }
 }
 
+@Test func renameToDotDotIsRejectedAndDoesNotEscapeVault() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vaultRoot = t.root.appendingPathComponent("V")
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    let vault = try Vault.openOrCreate(at: vaultRoot, role: .canonical)
+    _ = try seed(vault, relPath: "a/x.jpg")
+    // A folder rename to ".." (path traversal) must throw, not move the folder up to the vault's
+    // sibling. The folder stays put and nothing is created outside the root.
+    #expect(throws: VaultReorganizer.ReorgError.self) {
+        try VaultReorganizer.renameFolder(in: vault, relPath: "a", toName: "..")
+    }
+    #expect(FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: "a/x.jpg").path))
+}
+
+@Test func reorgPathsContainingDotDotAreRejected() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vaultRoot = t.root.appendingPathComponent("V")
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    let vault = try Vault.openOrCreate(at: vaultRoot, role: .canonical)
+    _ = try seed(vault, relPath: "a/x.jpg")
+    // Every reorg entry point must reject a `..` component before touching the filesystem.
+    #expect(throws: (any Error).self) { try VaultReorganizer.moveFolder(in: vault, relPath: "a", intoParentRelPath: "../escape") }
+    #expect(throws: (any Error).self) { try VaultReorganizer.createFolder(in: vault, relPath: "../escape") }
+    #expect(throws: (any Error).self) { try VaultReorganizer.moveFile(in: vault, relPath: "a/x.jpg", toRelPath: "../escape/x.jpg") }
+    // The directly-typed helper also rejects "." and embedded "//".
+    #expect(throws: VaultReorganizer.ReorgError.self) { try VaultReorganizer.assertContained("a/../b", in: vault) }
+    #expect(throws: VaultReorganizer.ReorgError.self) { try VaultReorganizer.assertContained("a//b", in: vault) }
+    try VaultReorganizer.assertContained("a/b/c", in: vault)   // a clean path does not throw
+}
+
 @Test func moveOntoExistingNameThrows() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let vaultRoot = t.root.appendingPathComponent("V")

@@ -236,7 +236,7 @@ Append-only journal of import/sync/clone/evict sessions, one JSON object per lin
 If your software (e.g. a photo server ingesting a plugged-in canonical drive) wants to *write* to a vault rather than just read it:
 
 1. **Never modify or overwrite an existing media file.** Ever. New content = new file.
-2. Write atomically: temp file in the same filesystem → fsync → rename.
+2. Write atomically: temp file in the same filesystem → fsync → rename. For crash-durability OpenPhoto uses `F_FULLFSYNC` on the temp file (forces the drive to flush its write cache, which a plain `fsync` does not guarantee on macOS) and then fsyncs the parent directory after the rename so the rename itself survives power-loss; third-party writers SHOULD do the same where the platform supports it.
 3. Adding a file: place it, then add its manifest line (atomic rewrite).
 4. Renaming/moving: rename media + sidecar together, update the manifest.
 5. Deleting: follow §8. Never `unlink`.

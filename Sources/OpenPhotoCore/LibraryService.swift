@@ -285,8 +285,15 @@ public final class LibraryService: Sendable {
         if favorite { openphoto.insert(fav) }
         let merged = TagMerge.merge(baseline: baseline, openphoto: openphoto, finder: finder)
         let mergedArr = merged.sorted()
-        for u in urls { try? FinderTags.write(mergedArr, to: u) }
-        try? catalog.setFinderTagBaseline(hash: hash, tags: mergedArr)
+        // Only advance the baseline if every on-disk write succeeded. If a write failed, the file
+        // still carries its old tags; persisting `mergedArr` as the baseline would make the next
+        // 3-way merge read that staleness as a deliberate Finder-side removal and delete the tags.
+        // Leaving the baseline unchanged makes the next reconcile re-merge from the true disk state.
+        var allWritten = true
+        for u in urls {
+            do { try FinderTags.write(mergedArr, to: u) } catch { allWritten = false }
+        }
+        if allWritten { try? catalog.setFinderTagBaseline(hash: hash, tags: mergedArr) }
         return (merged.subtracting([fav]).sorted(), merged.contains(fav))
     }
 
@@ -333,6 +340,11 @@ public final class LibraryService: Sendable {
         var byVault: [String: [TimelineItem]] = [:]
         for it in items { byVault[it.vaultID, default: []].append(it) }
         var deleted = 0
+        // Resilient: a per-item enqueue or a per-vault rescan failure must not abort the whole
+        // batch and (worse) skip the reconciling rescan, which would leave the catalog showing
+        // files that are already in the bin. Process every vault, always rescan the ones we
+        // touched, and surface the first error only after everything has been attempted.
+        var firstError: Error?
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         for (vaultID, group) in byVault {
             guard let bin = binStores[vaultID] else { continue }
@@ -342,7 +354,11 @@ public final class LibraryService: Sendable {
                     try bin.moveToBin(relPath: item.relPath,
                                       hash: ContentHash(stringValue: item.hash), origin: .user)
                 } catch { continue }   // primary already gone / unreadable — skip, not counted
-                try catalog.enqueuePendingDeletion(hash: item.hash, relPath: item.relPath, deletedAtMs: nowMs)
+                // The file is binned; if recording the pending deletion fails, keep going (the
+                // rescan below still reconciles the catalog) but remember the error to report.
+                do {
+                    try catalog.enqueuePendingDeletion(hash: item.hash, relPath: item.relPath, deletedAtMs: nowMs)
+                } catch { if firstError == nil { firstError = error } }
                 n += 1
                 // Best-effort: the Live pair's video is binned + queued alongside it.
                 if let pairHash = item.livePairHash,
@@ -353,8 +369,12 @@ public final class LibraryService: Sendable {
                                                         deletedAtMs: nowMs)
                 }
             }
-            if n > 0 { try await rescan(vaultID: vaultID); deleted += n }
+            if n > 0 {
+                do { try await rescan(vaultID: vaultID); deleted += n }
+                catch { if firstError == nil { firstError = error } }
+            }
         }
+        if let firstError { throw firstError }
         return deleted
     }
 

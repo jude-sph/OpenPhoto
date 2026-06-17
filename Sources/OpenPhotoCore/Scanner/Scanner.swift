@@ -1,6 +1,10 @@
 import Foundation
 
 public enum Scanner {
+    /// The vault root couldn't be enumerated — typically an ejected external drive or a stale
+    /// security-scoped bookmark. Thrown (not force-unwrapped) so the caller can recover.
+    public enum ScanError: Error { case unreadableRoot(URL) }
+
     public struct Progress: Sendable {
         public enum Stage: String, Sendable { case walking, hashing, extracting, finishing }
         public let stage: Stage
@@ -24,8 +28,10 @@ public enum Scanner {
         var found: [(rel: String, url: URL, size: Int64?, mtime: Date, kind: MediaKind)] = []
         var skipped = 0
         let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey, .fileSizeKey, .contentModificationDateKey]
-        let enumerator = fm.enumerator(at: vault.rootURL, includingPropertiesForKeys: keys,
-                                       options: [.skipsHiddenFiles])!
+        guard let enumerator = fm.enumerator(at: vault.rootURL, includingPropertiesForKeys: keys,
+                                             options: [.skipsHiddenFiles]) else {
+            throw ScanError.unreadableRoot(vault.rootURL)
+        }
         for case let url as URL in enumerator {
             do {
                 let values = try url.resourceValues(forKeys: Set(keys))

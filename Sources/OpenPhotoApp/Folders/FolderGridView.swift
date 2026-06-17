@@ -115,23 +115,27 @@ struct FolderGridView: View {
     }
 
     @ViewBuilder private func tile(_ item: TimelineItem) -> some View {
-        MediaTile(
-            id: item.instanceID,
-            selectMode: selectMode,
-            selected: selection.contains(item.instanceID),
-            rubberBandSpace: "foldergrid",
-            thumbnail: ThumbnailImage(timelineItem: item, library: state.library!, targetPixel: thumbPixels),
-            badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
-            onTap: {
-                if selectMode {
-                    if let idx = items.firstIndex(where: { $0.instanceID == item.instanceID }) {
-                        selection.tap(index: idx, items: orderedSelectable,
-                                      extendingRange: NSEvent.modifierFlags.contains(.shift))
+        // Guard the library: a teardown (Close Library) can nil it while a grid/sheet is still
+        // on screen, and a force-unwrap here would crash (S57). Render nothing if it's gone.
+        if let library = state.library {
+            MediaTile(
+                id: item.instanceID,
+                selectMode: selectMode,
+                selected: selection.contains(item.instanceID),
+                rubberBandSpace: "foldergrid",
+                thumbnail: ThumbnailImage(timelineItem: item, library: library, targetPixel: thumbPixels),
+                badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
+                onTap: {
+                    if selectMode {
+                        if let idx = items.firstIndex(where: { $0.instanceID == item.instanceID }) {
+                            selection.tap(index: idx, items: orderedSelectable,
+                                          extendingRange: NSEvent.modifierFlags.contains(.shift))
+                        }
+                    } else {
+                        state.openViewer(item, within: items)
                     }
-                } else {
-                    state.openViewer(item, within: items)
-                }
-            })
+                })
+        }
     }
 
     private func reload() {

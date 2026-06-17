@@ -89,6 +89,11 @@ final class AppState {
     /// so the final filesystem state is always picked up — without this, a dropped trailing event
     /// leaves the folder counts stuck at whatever was present when the scan began.
     private var rescanRequested = false
+    /// Held while a folder/photo reorg is mutating the manifest/catalog so a background scan can't
+    /// run concurrently and revert it (S03). `beginReorg()`/`endReorg()` gate it; scans and reorgs
+    /// take turns through `libraryMutationWaiters` (continuation-based, no busy-spin).
+    private var reorganizing = false
+    private var libraryMutationWaiters: [CheckedContinuation<Void, Never>] = []
     var refreshToken = 0
     /// Bumped after a per-photo move so the folder grid clears its (now-stale) selection.
     var photoMoveToken = 0
@@ -1898,9 +1903,12 @@ final class AppState {
         // Coalesce: if a scan is already running, note that the library changed again so the
         // in-flight scan loops once more when it finishes. A watcher event that lands mid-scan
         // (the tail of a large copy/import) would otherwise be dropped, leaving counts stale.
-        if scanning { rescanRequested = true; return }
+        // Also defer while a reorg is mutating the manifest — the scan runs off-main (Task.detached
+        // in scanAll), so an ungated scan would read-modify-write the manifest concurrently with the
+        // reorg's own rewrite and silently revert it (S03). The deferred run is honoured below.
+        if scanning || reorganizing { rescanRequested = true; return }
         scanning = true
-        defer { scanning = false; scanProgress = nil }
+        defer { scanning = false; scanProgress = nil; wakeLibraryMutationWaiters() }
         repeat {
             rescanRequested = false
             do {
@@ -1914,6 +1922,29 @@ final class AppState {
                 break
             }
         } while rescanRequested
+    }
+
+    /// Take exclusive access to the manifest/catalog for a reorg: await any in-flight scan or other
+    /// reorg, then mark `reorganizing` so a new scan defers (see `rescan()`). Continuation-based, so
+    /// it doesn't busy-spin the main actor while a multi-second scan finishes. Always pair with
+    /// `endReorg()`. Serializes reorgs against the background scan (S03) and against each other (S25).
+    func beginReorg() async {
+        while scanning || reorganizing {
+            await withCheckedContinuation { libraryMutationWaiters.append($0) }
+        }
+        reorganizing = true
+    }
+
+    /// Release the reorg lock and wake whoever is waiting (a queued scan or the next reorg).
+    func endReorg() {
+        reorganizing = false
+        wakeLibraryMutationWaiters()
+    }
+
+    private func wakeLibraryMutationWaiters() {
+        let waiters = libraryMutationWaiters
+        libraryMutationWaiters = []
+        for w in waiters { w.resume() }
     }
 
     private var derivationTask: Task<Void, Never>?

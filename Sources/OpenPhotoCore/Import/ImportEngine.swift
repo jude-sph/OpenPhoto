@@ -85,7 +85,9 @@ public final class ImportEngine: Sendable {
         }
         if !missingPartnerIDs.isEmpty {
             let all = (try? await source.enumerateItems()) ?? []
-            let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+            // Merging init (not uniqueKeysWithValues, which traps): a source returning two items
+            // with the same id must not crash the import; keep the first.
+            let byID = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for pid in missingPartnerIDs {
                 if let partner = byID[pid] { work.append(partner) }
             }
@@ -190,8 +192,10 @@ public final class ImportEngine: Sendable {
 
         // 6. Verify: manifest hash (scanner's independent computation) must
         //    equal the staging hash. Only verified items enter the registry.
-        let manifestByPath = Dictionary(uniqueKeysWithValues:
-            ((try? Manifest.read(from: vault.manifestURL)) ?? []).map { ($0.path, $0.hash.stringValue) })
+        // Merging init: a manifest with a duplicate path (corruption) must not trap mid-import.
+        let manifestByPath = Dictionary(
+            ((try? Manifest.read(from: vault.manifestURL)) ?? []).map { ($0.path, $0.hash.stringValue) },
+            uniquingKeysWith: { first, _ in first })
         var importEntries: [ImportRegistry.Entry] = []
         for p in placed {
             if manifestByPath[p.relPath] == p.hash {

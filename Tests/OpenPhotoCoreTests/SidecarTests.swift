@@ -11,6 +11,19 @@ import Foundation
     #expect(parsed == data)
 }
 
+@Test func captionWithControlCharsStaysParseable() throws {
+    // A pasted caption can carry C0 control chars (NUL, ESC, …) that XML 1.0 forbids entirely.
+    // The serializer must strip them so the sidecar still parses, not produce a corrupt document.
+    let data = SidecarData(rating: 0, favorite: false,
+                           caption: "line1\u{0}\u{1B}\u{7}line2\ttab\nnewline",
+                           tags: ["a\u{0}b"])
+    let xml = XMP.serialize(data)
+    #expect(!xml.unicodeScalars.contains { $0.value < 0x20 && $0.value != 0x09 && $0.value != 0x0A && $0.value != 0x0D })
+    let parsed = try XMP.parse(Data(xml.utf8))   // must not throw
+    #expect(parsed.caption == "line1line2\ttab\nnewline")   // illegal scalars dropped, legal kept
+    #expect(parsed.tags == ["ab"])
+}
+
 @Test func emptySidecarOmitsElements() throws {
     let xml = XMP.serialize(SidecarData(rating: 0, favorite: false, caption: nil, tags: []))
     #expect(!xml.contains("dc:subject"))

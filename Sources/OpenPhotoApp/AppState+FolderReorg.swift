@@ -53,12 +53,14 @@ extension AppState {
     /// rescans and remaps the UI (selection + expanded set) onto the new path.
     func moveFolder(from src: String, into parent: String) async {
         guard let library, let primaryVault = library.vaults.first else { return }
+        await beginReorg()                                   // exclude the background scan (S03)
 
         let newPath: String
         do {
             newPath = try VaultReorganizer.moveFolder(in: primaryVault, relPath: src,
                                                       intoParentRelPath: parent)
         } catch {
+            endReorg()
             NSAlert(error: error).runModal()   // surface collision/invalid-target to the user
             return
         }
@@ -95,6 +97,7 @@ extension AppState {
         try? library.catalog.rewriteVaultPresencePaths(fromDir: src, toDir: newPath)
         reloadCanonicalPresence()
 
+        endReorg()                                           // release before the post-reorg scan
         await rescan()
         remapUIPaths(from: src, to: newPath)
     }
@@ -105,15 +108,17 @@ extension AppState {
     /// propagates to connected durable drives, queues offline drives, then rescans and remaps the UI.
     func renameFolder(_ src: String, to newName: String) async {
         guard let library, let primaryVault = library.vaults.first, !src.isEmpty else { return }
+        await beginReorg()                                   // exclude the background scan (S03)
 
         let newPath: String
         do {
             newPath = try VaultReorganizer.renameFolder(in: primaryVault, relPath: src, toName: newName)
         } catch {
+            endReorg()
             NSAlert(error: error).runModal()   // surface collision/invalid-name to the user
             return
         }
-        guard newPath != src else { return }   // unchanged (same name)
+        guard newPath != src else { endReorg(); return }   // unchanged (same name)
         recordUndo(.renameFolder(from: src, to: newPath))
 
         // Propagate to connected durable drives that actually hold `src` (off-main).
@@ -141,6 +146,7 @@ extension AppState {
         try? library.catalog.rewriteVaultPresencePaths(fromDir: src, toDir: newPath)
         reloadCanonicalPresence()
 
+        endReorg()                                           // release before the post-reorg scan
         await rescan()
         remapUIPaths(from: src, to: newPath)
     }
@@ -158,6 +164,7 @@ extension AppState {
         guard !items.isEmpty else { return }
         let destDir = dest.precomposedStringWithCanonicalMapping
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        await beginReorg()                                   // exclude the background scan (S03)
 
         // 1. Mac primary vault (local instances; movePhotos skips drive-only + in-dest).
         let result = library.movePhotos(items.filter { $0.driveRelPath == nil }, toDir: destDir)
@@ -237,6 +244,7 @@ extension AppState {
         }
 
         reloadCanonicalPresence()
+        endReorg()                                           // release before the post-reorg scan
         await rescan()
         photoMoveToken += 1
         if !undoMoves.isEmpty { recordUndo(.movePhotos(moves: undoMoves)) }

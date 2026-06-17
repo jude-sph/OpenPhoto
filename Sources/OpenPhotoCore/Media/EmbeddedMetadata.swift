@@ -65,10 +65,18 @@ public enum EmbeddedMetadata {
         ]
         var err: Unmanaged<CFError>?
         let ok = CGImageDestinationCopyImageSource(dest, src, opts as CFDictionary, &err)
-        guard ok else { throw (err?.takeRetainedValue() as Error?) ?? EmbedError.cantWrite }
-        let fm = FileManager.default
-        _ = try? fm.removeItem(at: url)
-        try fm.moveItem(at: tmp, to: url)
+        guard ok else {
+            try? FileManager.default.removeItem(at: tmp)
+            throw (err?.takeRetainedValue() as Error?) ?? EmbedError.cantWrite
+        }
+        // Atomic swap: never delete the original before the replacement is in place. The old
+        // code did remove-then-move, so a failed move destroyed the user's only copy.
+        do {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+        } catch {
+            try? FileManager.default.removeItem(at: tmp)
+            throw error
+        }
     }
 
     /// Read the embedded XMP packet (if any) back into a `SidecarData`. Nil when the
