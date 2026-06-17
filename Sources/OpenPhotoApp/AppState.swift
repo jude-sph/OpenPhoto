@@ -171,7 +171,9 @@ final class AppState {
             let items = (try? lib.items(inDir: dir, recursive: recursive)) ?? []
             for item in items {
                 let existing = (try? JSONDecoder().decode([String].self, from: Data(item.tagsJSON.utf8))) ?? []
-                guard !existing.contains(tag) else { continue }
+                // Skip if the photo already has the tag — case-insensitively, so "Vacation" isn't
+                // double-tagged by "vacation" (matches untagAllInFolder's case-insensitive match).
+                guard !existing.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) else { continue }
                 var newTags = existing + [tag]
                 var fav = item.favorite
                 if syncFinder {
