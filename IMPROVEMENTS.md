@@ -2,6 +2,24 @@
 
 _Consolidated improvement reference, generated 2026-06-13. Read-only: assembled from two prior multi-agent investigations; no source files were changed. Source detail lives in `CODE_AUDIT.md` and `DESIGN_AND_SCALE_AUDIT.md`._
 
+## 0. Status log
+
+This audit is a snapshot dated 2026-06-13; the codebase has moved since. Findings resolved so far (verify against code, not this table):
+
+**Resolved before / outside this audit (the audit text describing these is now stale):**
+- **S01** (Critical) — `updateMetadata` now read-modify-writes the sidecar, preserving `faces`. Done.
+- **S06 / S71** — viewer decodes the full-resolution still in a detached task (`ViewerView.loadFull`), off the main thread. Done.
+- **S04 / S39** — the per-stage decoders (Face/Embed/OCR/pHash) are wrapped in `autoreleasepool`. Mostly done (only the outer drain batch is unpooled; marginal).
+- **I23 / D09 / D10** — the face system was rebuilt: it uses an **AdaFace IR-101 face-identity embedding** + `FaceMatcher` centroid recognition against named people + DBSCAN, **not** a generic scene feature-print with single-link chaining. The §7/§8 face critique describing the old design is obsolete.
+- Scan staleness — `AppState.rescan()` now coalesces overlapping scans (a watcher event landing mid-scan re-runs the scan), so folder counts don't stick at a partial scan.
+
+**Resolved 2026-06-17 — Batch A (data-integrity & crash hardening), Tier 0:**
+- **S13** path-traversal containment in `VaultReorganizer`; **S12** crash-durable `AtomicFile` (`F_FULLFSYNC` + parent-dir fsync); **S03** (+**S25**) reorg serialized against the off-main scanner; **S59** atomic `EmbeddedMetadata` replace; **S68** XMP control-char stripping; **S58** `ImportEngine` duplicate-key safety; **S08** `Scanner` enumerator throws instead of crashing; **S64** Finder-tag baseline only advances on a successful write; **S69** resilient `delete()` batch; **S57** `FolderGridView` library force-unwrap guarded.
+
+**Triaged but deliberately deferred** (scale beyond ~50k or large refactor, low value for a personal-use library): I7/S02/D01 (refreshQueries off-main), I12–I17 (pagination / index / batch-mutation storage / quadratic drive adopt), I18 (AppState decomposition), I22/I24 (indexed matchers, SemanticIndex Float16). Tile plan (§5) Step 1 and a Step 2 spike remain open and recommended.
+
+---
+
 ## 1. About this document
 
 This is the single reference for a reviewer. It merges two investigations into one prioritized improvement plan and a complete finding catalog.
