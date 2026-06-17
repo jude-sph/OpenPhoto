@@ -35,14 +35,20 @@ struct RubberBandModifier: ViewModifier {
     let space: String
     let enabled: Bool
     @State private var cellFrames: [String: CGRect] = [:]
-    @State private var dragRect: CGRect?
+    @State private var dragRect: CGRect?             // visual marquee, viewport space
     // Auto-scroll while the pointer is dragged near the top/bottom edge.
     @State private var scrollPos = ScrollPosition(edge: .top)
     @State private var viewportH: CGFloat = 0
     @State private var contentOffsetY: CGFloat = 0
     @State private var maxOffsetY: CGFloat = 0
     @State private var edgeDir: CGFloat = 0          // -1 up, +1 down, 0 none
-    @State private var lastRect: CGRect = .zero
+    // Drag anchor + current pointer. The anchor is stored in CONTENT coordinates (viewport +
+    // scroll offset) so the selection rect spans from the drag start to the pointer no matter how
+    // far the view auto-scrolls; a viewport-fixed rect would deselect rows that scroll above it.
+    @State private var dragging = false
+    @State private var anchorContentY: CGFloat = 0
+    @State private var anchorX: CGFloat = 0
+    @State private var pointerViewport: CGPoint = .zero
 
     private struct ScrollMetrics: Equatable { var offset: CGFloat; var maxOffset: CGFloat }
     private let edgeZone: CGFloat = 48
@@ -81,14 +87,14 @@ struct RubberBandModifier: ViewModifier {
         DragGesture(minimumDistance: 8, coordinateSpace: .named(space))
             .onChanged { v in
                 guard enabled else { return }
-                if dragRect == nil { selection.beginDrag(subtracting: NSEvent.modifierFlags.contains(.shift)) }
-                let rect = CGRect(x: min(v.startLocation.x, v.location.x),
-                                  y: min(v.startLocation.y, v.location.y),
-                                  width: abs(v.location.x - v.startLocation.x),
-                                  height: abs(v.location.y - v.startLocation.y))
-                dragRect = rect
-                lastRect = rect
-                selection.updateDrag(rect: rect, frames: cellFrames, items: items)
+                if !dragging {
+                    dragging = true
+                    selection.beginDrag(subtracting: NSEvent.modifierFlags.contains(.shift))
+                    anchorContentY = v.startLocation.y + contentOffsetY   // anchor in content space
+                    anchorX = v.startLocation.x
+                }
+                pointerViewport = v.location
+                applySelection()
                 // Near an edge → start/keep auto-scrolling in that direction.
                 let y = v.location.y
                 edgeDir = y < edgeZone ? -1
@@ -96,8 +102,28 @@ struct RubberBandModifier: ViewModifier {
             }
             .onEnded { _ in
                 guard enabled else { return }
-                selection.endDrag(); dragRect = nil; edgeDir = 0
+                selection.endDrag(); dragRect = nil; edgeDir = 0; dragging = false
             }
+    }
+
+    /// Recompute the selection (and the visual marquee) from the content-space anchor and the
+    /// current pointer at the live scroll offset. Working in content coordinates means a row that
+    /// scrolls above the viewport during auto-scroll stays inside the rect instead of reverting.
+    private func applySelection() {
+        let offset = contentOffsetY
+        let curContentY = pointerViewport.y + offset
+        let top = min(anchorContentY, curContentY), bottom = max(anchorContentY, curContentY)
+        let left = min(anchorX, pointerViewport.x), right = max(anchorX, pointerViewport.x)
+        let contentRect = CGRect(x: left, y: top, width: right - left, height: bottom - top)
+        // Cell frames arrive in the (viewport-relative) named space; lift them into content space.
+        var contentFrames: [String: CGRect] = [:]
+        contentFrames.reserveCapacity(cellFrames.count)
+        for (id, f) in cellFrames {
+            contentFrames[id] = CGRect(x: f.minX, y: f.minY + offset, width: f.width, height: f.height)
+        }
+        selection.updateDrag(rect: contentRect, frames: contentFrames, items: items)
+        // Marquee back in viewport space — its top lifts off-screen as you scroll, which is correct.
+        dragRect = CGRect(x: left, y: top - offset, width: right - left, height: bottom - top)
     }
 
     /// While held near an edge, scroll that way (animations off, for smoothness)
@@ -109,7 +135,7 @@ struct RubberBandModifier: ViewModifier {
             target = min(maxOffsetY, max(0, target + 22 * edgeDir))
             var tx = Transaction(); tx.disablesAnimations = true
             withTransaction(tx) { scrollPos.scrollTo(y: target) }
-            selection.updateDrag(rect: lastRect, frames: cellFrames, items: items)
+            applySelection()   // content-anchored: extends the rect as the view scrolls
             try? await Task.sleep(for: .milliseconds(16))
         }
     }
