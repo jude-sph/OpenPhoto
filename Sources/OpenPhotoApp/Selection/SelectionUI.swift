@@ -122,8 +122,13 @@ struct RubberBandModifier: ViewModifier {
             contentFrames[id] = CGRect(x: f.minX, y: f.minY + offset, width: f.width, height: f.height)
         }
         selection.updateDrag(rect: contentRect, frames: contentFrames, items: items)
-        // Marquee back in viewport space — its top lifts off-screen as you scroll, which is correct.
-        dragRect = CGRect(x: left, y: top - offset, width: right - left, height: bottom - top)
+        // Visual marquee in viewport space, CLAMPED to the viewport — once the anchor scrolls off the
+        // top, `top - offset` goes negative and the (unclipped) overlay would otherwise paint up over
+        // the toolbar. Selection still uses the full content rect above; only the drawing is clamped.
+        let vh = viewportH > 0 ? viewportH : .greatestFiniteMagnitude
+        let vTop = max(0, top - offset)
+        let vBottom = min(vh, bottom - offset)
+        dragRect = CGRect(x: left, y: vTop, width: right - left, height: max(0, vBottom - vTop))
     }
 
     /// While held near an edge, scroll that way (animations off, for smoothness)
