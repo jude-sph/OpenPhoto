@@ -178,9 +178,13 @@ private struct FolderRow: View {
             )
             .contentShape(Rectangle())
             .onTapGesture {
-                state.selectedFolder = node.path
                 if state.isFolderLocked(node.path) && !state.lockedRevealed {
-                    Task { _ = await state.revealLockedContent() }
+                    // Authenticate BEFORE entering: never select (and load) a locked folder until
+                    // Touch ID succeeds. A failed/cancelled prompt leaves the current folder intact,
+                    // so the locked contents are never shown behind the prompt or "for free" on fail.
+                    Task { if await state.revealLockedContent() { state.selectedFolder = node.path } }
+                } else {
+                    state.selectedFolder = node.path
                 }
             }
             .draggable(node.path)

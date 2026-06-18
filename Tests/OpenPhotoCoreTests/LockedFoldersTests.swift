@@ -84,6 +84,36 @@ private func seeded() throws -> (TestDirs, Catalog) {
     #expect(locked == 2, "exactly the two instances under /A are locked")
 }
 
+@Test func replaceInstancesPreservesLockedAcrossRescan() throws {
+    let (t, cat) = try seeded(); defer { t.cleanup() }
+    try cat.applyLockedFolders(["A"])
+    cat.revealLocked = false
+
+    // Simulate a re-scan: the scanner replaces all instances wholesale, and InstanceRecord carries
+    // no `locked` field — so without preservation this would reset every lock to 0 and expose the
+    // folder. The lock MUST survive a rescan with no explicit re-apply.
+    try cat.replaceInstances(inVault: "mac", with: [
+        inst(HA, "A/photo.jpg"),
+        inst(HB, "A/sub/photo.jpg"),
+        inst(HC, "B/photo.jpg"),
+    ])
+    #expect(try cat.items(inDir: "A").isEmpty, "locked folder must stay hidden after a rescan")
+    #expect(try cat.items(inDir: "A/sub").isEmpty, "locked subfolder must stay hidden after a rescan")
+    #expect(try cat.items(inDir: "B").count == 1, "unlocked folder still visible after a rescan")
+
+    // A new file appearing in the already-locked folder inherits the lock across the replace.
+    let HN = "sha256:" + String(repeating: "f", count: 64)
+    try cat.upsert(assets: [asset(HN)])
+    try cat.replaceInstances(inVault: "mac", with: [
+        inst(HA, "A/photo.jpg"), inst(HB, "A/sub/photo.jpg"),
+        inst(HC, "B/photo.jpg"), inst(HN, "A/new.jpg"),
+    ])
+    let lockedNew = try cat.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT locked FROM instances WHERE relPath = 'A/new.jpg'") ?? 0
+    }
+    #expect(lockedNew == 1, "a new file in an already-locked folder inherits the lock across rescan")
+}
+
 // MARK: - revealLocked default / toggle
 
 @Test func revealLockedDefaultsToFalse() throws {

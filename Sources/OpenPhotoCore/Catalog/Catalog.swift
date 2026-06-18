@@ -525,8 +525,23 @@ public final class Catalog: Sendable {
     /// Wholesale replacement of a vault's instances (scan reconcile).
     public func replaceInstances(inVault vaultID: String, with instances: [InstanceRecord]) throws {
         try dbQueue.write { db in
+            // Preserve the per-folder `locked` flag across this wholesale replace. `InstanceRecord`
+            // doesn't model `locked`, so a plain DELETE+re-insert resets it to the column default (0)
+            // — which silently defeated the locked-folder gate (browse hides rows WHERE locked=0)
+            // on EVERY scan, exposing locked folders in the grid, timeline, faces and search until a
+            // manual lock/unlock re-applied it. Capture the locked folders first, then re-mark them
+            // (recursively) after re-insert, so a scan can no longer leak locked content.
+            let lockedDirs = try String.fetchAll(db, sql:
+                "SELECT DISTINCT dirPath FROM instances WHERE vaultID = ? AND locked = 1",
+                arguments: [vaultID])
             try db.execute(sql: "DELETE FROM instances WHERE vaultID = ?", arguments: [vaultID])
             for i in instances { try i.upsert(db) }
+            for dir in lockedDirs {
+                try db.execute(sql: """
+                    UPDATE instances SET locked = 1
+                    WHERE vaultID = ? AND (dirPath = ? OR dirPath GLOB ?)
+                    """, arguments: [vaultID, dir, dir + "/*"])
+            }
         }
     }
 
