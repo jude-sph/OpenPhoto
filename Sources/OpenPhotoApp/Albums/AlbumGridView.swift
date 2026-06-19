@@ -107,8 +107,8 @@ struct AlbumGridView: View {
                  Folders are where your photos physically live on disk — each photo sits in exactly one \
                  folder, and moving it changes its location.
 
-                 Albums are flexible collections — add a photo to as many albums as you like (Birthdays, \
-                 Esoteric, Show Sister) without moving or copying the file.
+                 Albums are flexible collections — add a photo to as many albums as you like (birthdays, \
+                 event X, situation Y) without moving or copying the file.
 
                  Deleting an album never deletes the photos.
                  """)
