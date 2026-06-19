@@ -75,11 +75,14 @@ extension Catalog {
             // visible member by position (so the sidebar thumbnail never shows a locked-only photo).
             return try Row.fetchAll(db, sql: """
                 SELECT al.id AS id, al.name AS name,
-                  (SELECT m.hash FROM album_members m
-                     JOIN assets a ON a.hash = m.hash AND a.isLivePairedVideo = 0
-                     WHERE m.albumID = al.id \(lvc)
-                     ORDER BY (CASE WHEN m.hash = al.coverHash THEN 0 ELSE 1 END), m.position
-                     LIMIT 1) AS coverHash,
+                  COALESCE(
+                    (SELECT m.hash FROM album_members m
+                       JOIN assets a ON a.hash = m.hash AND a.isLivePairedVideo = 0
+                       WHERE m.albumID = al.id AND m.hash = al.coverHash \(lvc) LIMIT 1),
+                    (SELECT m.hash FROM album_members m
+                       JOIN assets a ON a.hash = m.hash AND a.isLivePairedVideo = 0
+                       WHERE m.albumID = al.id \(lvc) ORDER BY m.position LIMIT 1)
+                  ) AS coverHash,
                   (SELECT COUNT(*) FROM album_members m
                      JOIN assets a ON a.hash = m.hash AND a.isLivePairedVideo = 0
                      WHERE m.albumID = al.id \(lvc)) AS cnt
