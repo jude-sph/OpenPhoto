@@ -36,6 +36,28 @@ private func album(_ id: String, _ name: String, members: [String] = []) -> Albu
     #expect(loaded.count == 1 && loaded[0].id == "b")
 }
 
+@Test func albumStoreSyncToDriveMirrorsAndPropagatesDeletes() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try t.sub("lib")
+    let driveState = try t.sub("drive/.openphoto")
+    // Source library has albums A and B.
+    try AlbumStore.save(album("A", "Alpha", members: ["h1"]), libraryRoot: lib)
+    try AlbumStore.save(album("B", "Bravo"), libraryRoot: lib)
+    // Drive already has a stale B and an orphan C (no longer on source).
+    let driveAlbums = driveState.appendingPathComponent("albums")
+    try FileManager.default.createDirectory(at: driveAlbums, withIntermediateDirectories: true)
+    try Data("old".utf8).write(to: driveAlbums.appendingPathComponent("B.json"))
+    try Data("orphan".utf8).write(to: driveAlbums.appendingPathComponent("C.json"))
+
+    try AlbumStore.syncToDrive(libraryRoot: lib, driveStateDir: driveState)
+
+    // Drive now mirrors source exactly: A + fresh B, C gone.
+    let names = Set(((try? FileManager.default.contentsOfDirectory(atPath: driveAlbums.path)) ?? []))
+    #expect(names == ["A.json", "B.json"])
+    let driveB = try Data(contentsOf: driveAlbums.appendingPathComponent("B.json"))
+    #expect((try? JSONDecoder().decode(AlbumRecord.self, from: driveB))?.name == "Bravo")  // overwritten
+}
+
 @Test func albumStoreLoadSingle() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     try AlbumStore.save(album("x", "X", members: ["h1"]), libraryRoot: t.root)

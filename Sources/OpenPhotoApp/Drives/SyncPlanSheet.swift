@@ -113,8 +113,10 @@ struct SyncPlanSheet: View {
         let chosen = pending.filter { deletionSelection.contains($0.hash) }
         if !chosen.isEmpty { _ = await state.propagateDeletions(drive: drive, selected: chosen) }
         let cat = lib.catalog, thumbs = lib.thumbnails, syncedDrive = drive
+        let macRoot = lib.vaults.first?.rootURL
         await Task.detached(priority: .utility) {
             try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: syncedDrive)
+            if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: syncedDrive.stateDirURL) }
         }.value
         result = r
         running = false

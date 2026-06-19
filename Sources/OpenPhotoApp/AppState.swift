@@ -1233,7 +1233,11 @@ final class AppState {
         }.value
         try? refreshCanonicalPresence(driveVault: newVault)
         let cat = lib.catalog, thumbs = lib.thumbnails
-        await Task.detached(priority: .utility) { try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: newVault) }.value
+        let macRoot = lib.vaults.first?.rootURL
+        await Task.detached(priority: .utility) {
+            try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: newVault)
+            if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: newVault.stateDirURL) }
+        }.value
         reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
     }
 
@@ -1261,8 +1265,10 @@ final class AppState {
         reloadDrives()
         try? refreshQueries()
         let cat = lib.catalog, thumbs = lib.thumbnails
+        let macRoot = lib.vaults.first?.rootURL
         await Task.detached(priority: .utility) {
             try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: target)
+            if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: target.stateDirURL) }
         }.value
         return result
     }

@@ -44,4 +44,26 @@ public enum AlbumStore {
     public static func delete(id: String, libraryRoot: URL) {
         try? FileManager.default.removeItem(at: fileURL(id: id, libraryRoot: libraryRoot))
     }
+
+    /// One-way mirror of the album files to a drive's `<driveStateDir>/albums/`: copy every source
+    /// album (atomic/overwrite) and delete drive album files whose id no longer exists on the source,
+    /// so renames/edits/deletions all propagate. Members are content hashes, so files copy verbatim —
+    /// the drive holds the same content by hash, no path remapping. `driveStateDir` is `.openphoto`.
+    public static func syncToDrive(libraryRoot: URL, driveStateDir: URL) throws {
+        let fm = FileManager.default
+        let srcDir = directoryURL(libraryRoot: libraryRoot)
+        let dstDir = driveStateDir.appendingPathComponent("albums")
+        let srcFiles = ((try? fm.contentsOfDirectory(at: srcDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "json" }
+        try fm.createDirectory(at: dstDir, withIntermediateDirectories: true)
+        let srcNames = Set(srcFiles.map(\.lastPathComponent))
+        for f in srcFiles {
+            try AtomicFile.write(try Data(contentsOf: f), to: dstDir.appendingPathComponent(f.lastPathComponent))
+        }
+        let dstFiles = ((try? fm.contentsOfDirectory(at: dstDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "json" }
+        for f in dstFiles where !srcNames.contains(f.lastPathComponent) {
+            try? fm.removeItem(at: f)
+        }
+    }
 }
