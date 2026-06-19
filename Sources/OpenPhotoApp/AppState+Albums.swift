@@ -53,6 +53,13 @@ extension AppState {
         }
     }
 
+    /// Convenience for drops/selections keyed by instanceID (Folders grid, sidebar drops): resolve
+    /// to content hashes first, then add.
+    func addToAlbum(instanceIDs ids: [String], albumID: String) {
+        let hashes = ((try? library?.catalog.items(instanceIDs: ids)) ?? []).map(\.hash)
+        if !hashes.isEmpty { addToAlbum(hashes: hashes, albumID: albumID) }
+    }
+
     func removeFromAlbum(hashes: [String], albumID: String) {
         let drop = Set(hashes)
         mutateAlbum(albumID) { rec in rec.members.removeAll { drop.contains($0) } }

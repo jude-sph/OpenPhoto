@@ -125,6 +125,7 @@ struct RootView: View {
             switch state.selection {
             case .timeline: TimelineView(state: state)
             case .folders: FoldersView(state: state)
+            case .albums: AlbumsView(state: state)
             case .people: PeopleView(state: state)
             case .map: MapView(state: state)
             case .search: SearchView(state: state)
