@@ -159,6 +159,9 @@ struct FolderGridView: View {
             tagControls: AnyView(TagPersonMenu(
                 state: state, hashes: selectedItems.map(\.hash),
                 onDone: { selection.clear(); selectMode = false; dragToMove = false })),
+            albumControls: AnyView(AddToAlbumMenu(
+                state: state, hashes: selectedItems.map(\.hash),
+                onDone: { selection.clear(); selectMode = false; dragToMove = false })),
             shareControls: AnyView(
                 ShareLink(items: state.localFileURLs(for: selectedItems)) {
                     Label("Share", systemImage: "square.and.arrow.up")

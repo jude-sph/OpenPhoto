@@ -74,6 +74,18 @@ extension AppState {
         mutateAlbum(id) { $0.coverHash = hash }
     }
 
+    /// Album ids that already contain EVERY one of `hashes` (for the "Add to Album" ✓ marks).
+    func albumsContainingAll(_ hashes: [String]) -> Set<String> {
+        guard let cat = library?.catalog, !hashes.isEmpty else { return [] }
+        var result: Set<String>?
+        for h in hashes {
+            let s = (try? cat.albumIDsContaining(hash: h)) ?? []
+            result = result.map { $0.intersection(s) } ?? s
+            if result?.isEmpty == true { break }
+        }
+        return result ?? []
+    }
+
     // MARK: helpers
 
     private func dedupHashes(_ hashes: [String]) -> [String] {

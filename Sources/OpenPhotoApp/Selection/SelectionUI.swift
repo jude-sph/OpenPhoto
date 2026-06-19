@@ -185,6 +185,7 @@ struct SelectionActionBar: View {
     var showRehydrate: Bool = false
     var onRehydrate: () -> Void = {}
     var tagControls: AnyView? = nil     // "Tag person…" menu (Timeline + Folders inject it)
+    var albumControls: AnyView? = nil   // "Add to Album…" menu (Timeline + Folders inject it)
     var shareControls: AnyView? = nil   // native ShareLink (Timeline + Folders inject it)
     let onDeselect: () -> Void
     let onDone: () -> Void
@@ -196,6 +197,7 @@ struct SelectionActionBar: View {
             Spacer()
             if let moveControls { moveControls }
             if let tagControls, count > 0 { tagControls }
+            if let albumControls, count > 0 { albumControls }
             Button("Deselect", action: onDeselect).disabled(count == 0).controlSize(.small)
             if let shareControls, count > 0 { shareControls }
             if let name = sendTargetName {
