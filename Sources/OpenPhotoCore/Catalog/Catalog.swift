@@ -21,7 +21,7 @@ public final class Catalog: Sendable {
     /// On-disk catalog schema version — the latest registered migration below. Written into a
     /// drive's `catalog-snapshot/snapshot.json` (`catalog_schema_version`) and documented in
     /// `docs/format/catalog-schema.md`; bump in lockstep whenever a migration adds/changes tables.
-    public static let schemaVersion = 12
+    public static let schemaVersion = 13
 
     // MARK: Locked-folder state (in-memory; Touch ID resets on quit — visibility only, not encryption)
     // `fileprivate` so the `extension Catalog` in Queries.swift can read/write through the lock.
@@ -251,6 +251,24 @@ public final class Catalog: Sendable {
                 t.column("personID", .integer).notNull()
                 t.column("faceID", .integer).notNull()
                 t.primaryKey(["personID", "faceID"])
+            }
+        }
+        migrator.registerMigration("v18") { db in
+            // Albums mirror (rebuildable from the sovereign `.openphoto/albums/*.json` files).
+            // Members are content hashes with an explicit order; lock-gating reuses the same
+            // instance visibility rules as the rest of browse.
+            try db.create(table: "albums") { t in
+                t.primaryKey("id", .text)            // UUID == album file stem
+                t.column("name", .text).notNull()
+                t.column("coverHash", .text)
+                t.column("createdAtMs", .integer).notNull()
+                t.column("modifiedAtMs", .integer).notNull()
+            }
+            try db.create(table: "album_members") { t in
+                t.column("albumID", .text).notNull()
+                t.column("hash", .text).notNull().indexed()
+                t.column("position", .integer).notNull()
+                t.primaryKey(["albumID", "hash"])
             }
         }
         try migrator.migrate(dbQueue)
