@@ -18,6 +18,7 @@ struct InspectorView: View {
     @State private var showEvict = false
     @State private var imageFaces: [FaceRow] = []
     @State private var instances: [InstanceRecord] = []   // all files of this content (multi-folder)
+    @State private var memberAlbumIDs: Set<String> = []   // albums this photo belongs to
     @State private var peopleByID: [Int64: PersonRow] = [:]
     @State private var assignNewName = ""
     @State private var showAssignNew = false
@@ -133,6 +134,29 @@ struct InspectorView: View {
                     }
                 }
                 .disabled(state.isDriveOnly(item))
+
+                section("Albums") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        let containing = state.albums.filter { memberAlbumIDs.contains($0.id) }
+                        if !containing.isEmpty {
+                            FlowLayoutLite(spacing: 6) {
+                                ForEach(containing) { album in
+                                    Button {
+                                        state.selection = .albums
+                                        state.selectedAlbumID = album.id
+                                        state.openedItem = nil
+                                    } label: { Text(album.name).font(.system(size: 12)) }
+                                    .buttonStyle(.plain)
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(Theme.accentDim, in: RoundedRectangle(cornerRadius: 7))
+                                    .foregroundStyle(Theme.accent)
+                                }
+                            }
+                        }
+                        AddToAlbumMenu(state: state, hashes: [item.hash],
+                                       onDone: { loadAlbumMembership() })
+                    }
+                }
 
                 inThisImageSection
 
@@ -280,7 +304,8 @@ struct InspectorView: View {
             .padding(16)
         }
         .background(Theme.bg2)
-        .task(id: item.hash) { load(); loadFaces(); loadInstances() }
+        .task(id: item.hash) { load(); loadFaces(); loadInstances(); loadAlbumMembership() }
+        .task(id: state.refreshToken) { loadAlbumMembership() }   // reflect adds/removes elsewhere
         // Tell the viewer to yield its key shortcuts while a caption/tag field is focused.
         .onChange(of: editField) { state.isEditingText = editField != nil }
         .onDisappear { state.isEditingText = false }
@@ -518,6 +543,10 @@ struct InspectorView: View {
 
     private func loadInstances() {
         instances = (try? state.library?.catalog.visibleInstances(forHash: item.hash)) ?? []
+    }
+
+    private func loadAlbumMembership() {
+        memberAlbumIDs = (try? state.library?.catalog.albumIDsContaining(hash: item.hash)) ?? []
     }
 
     private func revealInstance(_ inst: InstanceRecord) {

@@ -4,8 +4,21 @@ import OpenPhotoCore
 struct SearchView: View {
     @Bindable var state: AppState
     @State private var debounceTask: Task<Void, Never>?
+    @State private var selectMode = false
+    @State private var selection = SelectionModel()
+    @State private var showEvict = false
+    @State private var showForceEvict = false
+    @State private var showDelete = false
+    @State private var showSend = false
+    @State private var sendChooser = false
+    @State private var chosenSendDevice: ConnectedDevice?
 
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
+    // Search results are deduped by content, so a tile is keyed by its `hash` (like the Timeline).
+    private var orderedSelectable: [SelectableItem] { state.searchResults.map { SelectableItem(id: $0.hash) } }
+    private var selectedItems: [TimelineItem] { state.searchResults.filter { selection.contains($0.hash) } }
+    private var evictableItems: [TimelineItem] { selectedItems.filter { $0.driveRelPath == nil } }
+    private var rehydratableItems: [TimelineItem] { state.rehydratableItems(selectedItems) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,8 +46,108 @@ struct SearchView: View {
                 if state.proOnlyFilterCount > 0 { proFiltersHint }
             }
             Divider().overlay(Theme.hairline)
+            if selectMode {
+                selectionBar       // thin action bar below the search header, only while selecting
+                Divider().overlay(Theme.hairline)
+            }
             resultGrid
         }
+        .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
+            Button("Cancel", role: .cancel) {}
+            Button("Move to Bin", role: .destructive) {
+                let items = evictableItems
+                Task { await state.evict(items); selection.clear(); selectMode = false }
+            }
+        } message: {
+            Text(evictAlertMessage(total: evictableItems.count, onlyCopy: state.onlyCopyCount(evictableItems)))
+        }
+        .alert("Delete \(evictableItems.count) photo\(evictableItems.count == 1 ? "" : "s")?",
+               isPresented: $showDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                let items = evictableItems
+                Task { await state.deletePhotos(items); selection.clear(); selectMode = false }
+            }
+        } message: {
+            Text("They move to the bin (restore anytime). On connected drives, their copies are then queued for removal — review under the drive before anything is deleted there.")
+        }
+        .sheet(isPresented: $showSend, onDismiss: { chosenSendDevice = nil }) {
+            if let target = chosenSendDevice ?? state.connectedSendTarget() {
+                SendSheet(state: state, items: selectedItems, device: target) {
+                    selection.clear(); selectMode = false
+                }
+            }
+        }
+        .confirmationDialog("Send to which device?", isPresented: $sendChooser, titleVisibility: .visible) {
+            ForEach(state.connectedSendTargets(), id: \.id) { dev in
+                Button(dev.name) { chosenSendDevice = dev; showSend = true }
+            }
+        }
+        .sheet(isPresented: $showForceEvict) {
+            ForceEvictSheet(count: evictableItems.count) {
+                let items = evictableItems
+                Task { _ = await state.evict(items, mode: .forced); selection.clear(); selectMode = false }
+            }
+        }
+    }
+
+    private var selectionBar: some View {
+        SelectionActionBar(
+            count: selection.count,
+            moveControls: AnyView(moveControls),
+            sendTargetName: {
+                let targets = state.connectedSendTargets()
+                return targets.count > 1 ? "device\u{2026}" : targets.first?.name
+            }(),
+            onSend: {
+                let targets = state.connectedSendTargets()
+                if targets.count <= 1 { showSend = true } else { sendChooser = true }
+            },
+            onDelete: { if !evictableItems.isEmpty { showDelete = true } },
+            onEvict: { if !evictableItems.isEmpty { showEvict = true } },
+            onForceEvict: { if !evictableItems.isEmpty { showForceEvict = true } },
+            showRehydrate: !rehydratableItems.isEmpty,
+            onRehydrate: { let items = rehydratableItems
+                           Task { _ = await state.rehydrate(items); selection.clear(); selectMode = false } },
+            tagControls: AnyView(TagPersonMenu(
+                state: state, hashes: selectedItems.map(\.hash),
+                onDone: { selection.clear(); selectMode = false })),
+            albumControls: AnyView(AddToAlbumMenu(
+                state: state, hashes: selectedItems.map(\.hash),
+                onDone: { selection.clear(); selectMode = false })),
+            shareControls: AnyView(
+                ShareLink(items: state.localFileURLs(for: selectedItems)) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }.controlSize(.small)),
+            onDeselect: { selection.clear() },
+            onDone: { selection.clear(); selectMode = false })
+    }
+
+    /// "Move to…" folder menu — parity with the Timeline. Moves each selected photo's representative
+    /// instance into the chosen folder (results are deduped by content hash).
+    private var moveControls: some View {
+        Menu("Move to\u{2026}") {
+            ForEach(allFolders, id: \.self) { f in
+                Button(folderMenuLabel(f)) {
+                    let ids = selectedItems.map(\.instanceID)
+                    selection.clear(); selectMode = false
+                    Task { await state.movePhotos(ids: ids, into: f) }
+                }
+            }
+        }
+        .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
+        .disabled(selection.count == 0)
+    }
+
+    private var allFolders: [String] {
+        var paths: [String] = []
+        func walk(_ nodes: [FolderNode]) { for n in nodes { paths.append(n.path); walk(n.children) } }
+        walk(state.folderTree)
+        return paths.sorted()
+    }
+    private func folderMenuLabel(_ path: String) -> String {
+        if path.isEmpty { return state.folderTree.first { $0.path == "" }?.name ?? "Library Root" }
+        return path.replacingOccurrences(of: "/", with: " \u{203A} ")
     }
 
     /// Shown in Simple mode when the active filters include things Simple can't display
@@ -96,6 +209,10 @@ struct SearchView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            if !state.searchResults.isEmpty && !selectMode {
+                Button("Select") { selectMode = true }.controlSize(.small)
+            }
         }
         .padding(.horizontal, 16)
         .frame(height: Theme.toolbarHeight)
@@ -126,9 +243,9 @@ struct SearchView: View {
                     ForEach(state.searchResults, id: \.hash) { item in   // search is deduped by content
                         MediaTile(
                             id: item.hash,
-                            selectMode: false,
-                            selected: false,
-                            rubberBandSpace: nil,
+                            selectMode: selectMode,
+                            selected: selection.contains(item.hash),
+                            rubberBandSpace: "searchgrid",
                             thumbnail: ThumbnailImage(
                                 timelineItem: item,
                                 library: state.library!,
@@ -141,13 +258,24 @@ struct SearchView: View {
                                 )
                             },
                             onTap: {
-                                state.openViewer(item, within: state.searchResults)
+                                if selectMode {
+                                    if let idx = state.searchResults.firstIndex(where: { $0.hash == item.hash }) {
+                                        selection.tap(index: idx, items: orderedSelectable,
+                                                      extendingRange: NSEvent.modifierFlags.contains(.shift))
+                                    }
+                                } else {
+                                    state.openViewer(item, within: state.searchResults)
+                                }
                             }
                         )
                     }
                 }
                 .padding(Theme.gridGap)
             }
+            .coordinateSpace(name: "searchgrid")
+            .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
+                                         space: "searchgrid", enabled: selectMode))
+            .pinchZoomGrid($state.gridMinSize)
         }
     }
 
