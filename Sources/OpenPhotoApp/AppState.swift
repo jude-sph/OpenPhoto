@@ -134,6 +134,14 @@ final class AppState {
     var lockedFolders: [String] = []
     /// True once the user has passed Touch ID this session (locked folders then appear everywhere).
     var lockedRevealed = false
+
+    // MARK: — Albums (manual virtual collections)
+
+    /// Album summaries for the sidebar (rebuilt from the sovereign `.openphoto/albums/` files via the
+    /// catalog mirror). Source of truth is the JSON files; see `AppState+Albums`.
+    var albums: [AlbumSummary] = []
+    /// The album currently open in the Albums detail view (its `id`/UUID), or nil for the empty state.
+    var selectedAlbumID: String?
     /// Folder view: include photos from every descendant folder (the whole subtree), not just the
     /// selected folder.
     var foldersRecursive: Bool = UserDefaults.standard.bool(forKey: "foldersRecursive") {
@@ -1811,11 +1819,13 @@ final class AppState {
             if let root = library?.vaults.first?.rootURL {
                 lockedFolders = LockedFolderStore.load(libraryRoot: root)
                 try? library?.catalog.applyLockedFolders(lockedFolders)
+                try? library?.catalog.replaceAlbums(AlbumStore.loadAll(libraryRoot: root))
             } else {
                 lockedFolders = []
             }
             library?.catalog.revealLocked = false
             lockedRevealed = false
+            refreshAlbums()
             if finderTagSyncEnabled { syncFinderTagsNow() }   // initial Finder-tag reconcile pass
             deviceWatcher.onVolumesChanged = { [weak self] in
                 Task { @MainActor in
@@ -1872,6 +1882,8 @@ final class AppState {
         expandedFolders = []
         lockedFolders = []
         lockedRevealed = false
+        albums = []
+        selectedAlbumID = nil
 
         // MUST-FIX: clear DeviceWatcher closures that close over the old library.
         deviceWatcher.knownVaultIDs = { [] }
