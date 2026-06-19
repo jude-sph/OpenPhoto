@@ -1,4 +1,4 @@
-# OpenPhoto Catalog Schema — Version 12
+# OpenPhoto Catalog Schema — Version 13
 
 **Status:** NORMATIVE for readers of `catalog-snapshot/catalog.sqlite` and for the Mac's live catalog database. Field names are stable from schema version 4 onward; any change bumps the version in `snapshot.json`'s `catalog_schema_version` field.
 
@@ -224,7 +224,28 @@ One row per asset that has participated in macOS Finder-tag sync. The `baseline`
 
 A snapshot reader MAY ignore this table entirely — it is Mac-local Finder-tag sync state (which tags the source Mac's last sync settled on), not part of the portable record. It is a **droppable cache** — a reader MUST NOT rely on it being present in snapshots older than schema version 11, and MUST treat it as absent if the table is missing.
 
-`Catalog.schemaVersion` is **12** (written into `snapshot.json`'s `catalog_schema_version` field).
+### `albums` (v13, rebuildable mirror of `.openphoto/albums/*.json`)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT **PK** | Album UUID, equal to the album file's stem. |
+| `name` | TEXT **NOT NULL** | Display name. |
+| `coverHash` | TEXT | Optional content hash chosen as cover; NULL → first member. |
+| `createdAtMs` | INTEGER **NOT NULL** | Epoch ms. |
+| `modifiedAtMs` | INTEGER **NOT NULL** | Epoch ms. |
+
+### `album_members` (v13, rebuildable)
+
+| Column | Type | Notes |
+|---|---|---|
+| `albumID` | TEXT **NOT NULL** | References `albums.id`. |
+| `hash` | TEXT **NOT NULL** (indexed) | Member content hash (`assets.hash`). |
+| `position` | INTEGER **NOT NULL** | 0-based order within the album. |
+| | | **PK** (`albumID`, `hash`) — a photo appears once per album. |
+
+Both tables are a **rebuildable mirror** of the sovereign album files (`vault-format-v1.md §15`), which are the authoritative record. A snapshot reader MAY use them to browse album contents in order, but MUST treat them as a droppable cache: read the album JSON files directly when present, and do not rely on these tables in snapshots from schema versions below 13.
+
+`Catalog.schemaVersion` is **13** (written into `snapshot.json`'s `catalog_schema_version` field).
 
 ---
 

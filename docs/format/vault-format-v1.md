@@ -24,6 +24,8 @@ A **vault** is a folder tree containing media files, organized however the user 
     imports.jsonl                  ← device-import registry (§12)
     sends.jsonl                    ← confirmed-send registry (§13)
     devices.jsonl                  ← known-device registry (§14)
+    albums/                        ← manual album definitions, one JSON per album (§15)
+    locked-folders.json            ← Touch-ID-locked folder list (app visibility gate; not encryption)
     staging/                       ← transient import workspace — readers MUST ignore
   rome2022/
     IMG_4123.heic
@@ -295,3 +297,33 @@ Known devices OpenPhoto has seen, for friendly names in the UI. One JSON object 
 - `key` — stable device identity (same keyspace as above). `kind` — `"phone"` | `"volume"`.
 - `name` and `last_seen` update on each connect; `first_seen` is preserved. Informative; readers MUST NOT require it.
 - Lives in the **primary** vault's `.openphoto/`.
+
+## 15. Albums (`albums/`)
+
+A **manual album** is a human-authored, ordered collection of photos that does **not** move or copy the files — a photo may belong to any number of albums, and deleting an album never deletes photos. Albums are **normative, sovereign state**: this is the authoritative record (the catalog merely mirrors it, and is rebuildable from these files).
+
+- **Location:** one JSON file per album at `<primary-vault-root>/.openphoto/albums/<id>.json`, where `<id>` is the album's UUID and equals the filename stem.
+- **Drive propagation:** when OpenPhoto syncs to a canonical/backup drive it mirrors this directory to the drive's `.openphoto/albums/` (copying present files, deleting absent ones). Because members are content hashes and the drive holds the same content by hash, the files copy verbatim — no path remapping.
+
+Schema:
+
+```json
+{
+  "id": "5C2E9F1A-…-UUID",
+  "name": "Birthdays",
+  "description": null,
+  "coverHash": null,
+  "createdAtMs": 1718800000000,
+  "modifiedAtMs": 1718800000000,
+  "members": ["sha256:…", "sha256:…"]
+}
+```
+
+- `id` — UUID string, immutable, equal to the filename stem. The album's stable identity (survives renames and catalog rebuilds).
+- `name` — display name (human-authored, editable, non-empty). Uniqueness is not required.
+- `description` — optional free text, or `null`.
+- `coverHash` — optional content hash to use as the cover; `null` → the cover is the first (browse-visible) member.
+- `createdAtMs` / `modifiedAtMs` — epoch-milliseconds timestamps.
+- `members` — an **ordered** array of content hashes (§2). A hash appears at most once. Each is resolved to a file via the manifest/catalog at display time; a member whose content is absent (binned/missing) is simply not shown.
+
+Reader obligations: an unreadable/corrupt album file MUST be skipped without affecting the others. Writers MUST write atomically (§10 step 2). Smart/rule-based albums are not part of v1.
