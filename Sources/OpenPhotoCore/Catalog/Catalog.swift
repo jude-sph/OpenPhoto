@@ -271,6 +271,17 @@ public final class Catalog: Sendable {
                 t.primaryKey(["albumID", "hash"])
             }
         }
+        migrator.registerMigration("v19") { db in
+            // 2D positions for the Face Map (rebuildable local cache; NOT part of the sovereign
+            // drive snapshot — schemaVersion intentionally not bumped). Recomputed whenever the
+            // face set changes; see Catalog.faceSetFingerprint / catalog_meta "faceLayoutFingerprint".
+            try db.create(table: "face_layout") { t in
+                t.primaryKey("faceID", .integer)        // → faces.id
+                t.column("x", .double).notNull()
+                t.column("y", .double).notNull()
+                t.column("layoutVersion", .integer).notNull()
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 
