@@ -14,6 +14,9 @@ struct FaceMapData: Sendable {
     var points: [FaceMapPoint] = []
     /// personID → its mean position (island centroid) for drawing lookalike lines / labels.
     var personCentersByID: [Int64: SIMD2<Float>] = [:]
+    /// personID → a real on-island anchor point (the medoid face's position) — lines terminate here so
+    /// they visibly land on the island instead of in the empty space the mean can fall into.
+    var personAnchorByID: [Int64: SIMD2<Float>] = [:]
     var lookalikes: [Int64: [FaceResemblance.Lookalike]] = [:]
     /// personID → (medoidFaceID, outlierFaceIDs)
     var typicalityByID: [Int64: FaceResemblance.Typicality] = [:]

@@ -437,9 +437,15 @@ final class AppState {
                 for (pid, c) in centroids {
                     typ[pid] = FaceResemblance.typicality(centroid: c, faces: perPersonVecs[pid] ?? [], outlierCount: 5)
                 }
+                // On-island anchor per person = its medoid face's position (a real dot), falling back
+                // to the mean. Lookalike lines and morph hops terminate here so they land on the island.
+                var anchors: [Int64: SIMD2<Float>] = [:]
+                for (pid, t) in typ {
+                    if let m = t.medoid, let p = posByID[m] { anchors[pid] = p } else { anchors[pid] = centers[pid] }
+                }
                 var d = FaceMapData()
-                d.points = points; d.personCentersByID = centers; d.lookalikes = look
-                d.typicalityByID = typ; d.centroidsByID = centroids
+                d.points = points; d.personCentersByID = centers; d.personAnchorByID = anchors
+                d.lookalikes = look; d.typicalityByID = typ; d.centroidsByID = centroids
                 return d
             }.value
             self.faceMap = data
