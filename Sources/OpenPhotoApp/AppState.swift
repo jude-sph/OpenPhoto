@@ -416,9 +416,13 @@ final class AppState {
                     layout = rows
                 }
                 let posByID = Dictionary(uniqueKeysWithValues: layout.map { ($0.faceID, SIMD2<Float>(Float($0.x), Float($0.y))) })
-                let points = faces.compactMap { f -> FaceMapPoint? in
-                    guard let p = posByID[f.id] else { return nil }
-                    return FaceMapPoint(id: f.id, personID: f.personID, pos: p)
+                var points: [FaceMapPoint] = []
+                var vectors: [Float] = []      // flat points.count × 512, aligned with `points`
+                vectors.reserveCapacity(faces.count * 512)
+                for f in faces {
+                    guard let p = posByID[f.id] else { continue }
+                    points.append(FaceMapPoint(id: f.id, personID: f.personID, pos: p))
+                    vectors.append(contentsOf: f.vector)
                 }
 
                 // Per-person aggregates for overlays.
@@ -444,7 +448,8 @@ final class AppState {
                     if let m = t.medoid, let p = posByID[m] { anchors[pid] = p } else { anchors[pid] = centers[pid] }
                 }
                 var d = FaceMapData()
-                d.points = points; d.personCentersByID = centers; d.personAnchorByID = anchors
+                d.points = points; d.vectors = vectors; d.dim = 512
+                d.personCentersByID = centers; d.personAnchorByID = anchors
                 d.lookalikes = look; d.typicalityByID = typ; d.centroidsByID = centroids
                 return d
             }.value

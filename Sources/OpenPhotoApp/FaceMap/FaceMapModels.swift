@@ -12,6 +12,10 @@ struct FaceMapPoint: Identifiable, Sendable {
 /// Everything the map view needs, computed once per (re)load.
 struct FaceMapData: Sendable {
     var points: [FaceMapPoint] = []
+    /// Row-major `points.count × dim` unit face vectors, aligned with `points` — powers the live
+    /// similarity lens (cosine == dot). Held in memory so the lens can recompute under the cursor.
+    var vectors: [Float] = []
+    var dim: Int = 512
     /// personID → its mean position (island centroid) for drawing lookalike lines / labels.
     var personCentersByID: [Int64: SIMD2<Float>] = [:]
     /// personID → a real on-island anchor point (the medoid face's position) — lines terminate here so

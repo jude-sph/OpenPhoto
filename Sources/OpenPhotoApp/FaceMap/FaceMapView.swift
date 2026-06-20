@@ -1,5 +1,6 @@
 import SwiftUI
 import OpenPhotoCore
+import Accelerate
 
 struct FaceMapView: View {
     @Bindable var state: AppState
@@ -11,6 +12,8 @@ struct FaceMapView: View {
     @State private var selectedFace: FaceMapPoint?  // clicked dot → pinned inspector (reassign lives here)
     @State private var inspectorShowFaces = true     // Face/Photo toggle in the inspector (mirrors People)
     @State private var lastScale: Float = 1        // magnify-gesture anchor
+    @State private var lensOn = false               // similarity lens: recolor galaxy by similarity to hovered face
+    @State private var lensSims: [Float]?           // per-point cosine similarity to the hovered face (nil = off)
 
     var body: some View {
         GeometryReader { geo in
@@ -25,8 +28,13 @@ struct FaceMapView: View {
                         .gesture(magnifyGesture())
                         .onContinuousHover { phase in
                             switch phase {
-                            case .active(let pt): hovered = nearestPoint(to: pt, viewSize: geo.size, fit: fit); hoverScreen = pt
-                            case .ended: hovered = nil
+                            case .active(let pt):
+                                hoverScreen = pt
+                                let idx = nearestIndex(to: pt, viewSize: geo.size, fit: fit)
+                                hovered = idx.map { state.faceMap.points[$0] }
+                                lensSims = lensOn ? idx.flatMap(computeLensSims) : nil
+                            case .ended:
+                                hovered = nil; lensSims = nil
                             }
                         }
                         .onTapGesture(coordinateSpace: .local) { pt in
@@ -45,6 +53,7 @@ struct FaceMapView: View {
             .onKeyPress(.init("+")) { zoom(by: 1.25); return .handled }
             .onKeyPress(.init("-")) { zoom(by: 1 / 1.25); return .handled }
             .onKeyPress(.init("_")) { zoom(by: 1 / 1.25); return .handled }
+            .onKeyPress(.init("l")) { lensOn.toggle(); if !lensOn { lensSims = nil }; return .handled }
         }
         .task { if state.faceMap.points.isEmpty { state.loadFaceMap() } }
         .navigationTitle("Face Map")
@@ -65,18 +74,40 @@ struct FaceMapView: View {
             @inline(__always) func dot(_ s: CGPoint, _ r: CGFloat, _ c: Color) {
                 ctx.fill(Path(ellipseIn: CGRect(x: s.x - r, y: s.y - r, width: r * 2, height: r * 2)), with: .color(c))
             }
-            // Pass 1 — unassigned faces: a faint background haze (still hover-detected; hit-testing is
-            // independent of draw order). Drawn first so named people sit on top.
-            let faint = Theme.personColorUnassigned.opacity(0.3)
-            for p in pts where p.personID == nil {
-                let s = camera.worldToScreen(p.pos, viewSize: size, fit: fit)
-                if onScreen(s) { dot(s, rFaint, faint) }
-            }
-            // Pass 2 — named faces: full colour, on top.
-            for p in pts {
-                guard let pid = p.personID else { continue }
-                let s = camera.worldToScreen(p.pos, viewSize: size, fit: fit)
-                if onScreen(s) { dot(s, rNamed, Theme.colorForPerson(pid)) }
+            if lensOn, let sims = lensSims, sims.count == pts.count {
+                // Similarity lens: each dot's brightness/size tracks cosine similarity to the hovered
+                // face — similar faces blaze (in their person colour, white-hot at the very top), the
+                // rest recede to near-black. Two passes so the bright ones land on top.
+                let lo: Float = 0.10, hi: Float = 0.55
+                func tval(_ i: Int) -> Double { Double(max(0, min(1, (sims[i] - lo) / (hi - lo)))) }
+                for i in pts.indices where tval(i) < 0.4 {        // dim background
+                    let s = camera.worldToScreen(pts[i].pos, viewSize: size, fit: fit)
+                    if !onScreen(s) { continue }
+                    let base = pts[i].personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
+                    dot(s, rFaint, base.opacity(0.05 + 0.35 * tval(i)))
+                }
+                for i in pts.indices where tval(i) >= 0.4 {       // similar faces, bright + larger
+                    let s = camera.worldToScreen(pts[i].pos, viewSize: size, fit: fit)
+                    if !onScreen(s) { continue }
+                    let t = tval(i)
+                    let base = pts[i].personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
+                    dot(s, rFaint + (rNamed - rFaint + 2) * CGFloat(t), base.opacity(0.25 + 0.75 * t))
+                    if t > 0.85 { dot(s, rNamed * 0.6, .white.opacity((t - 0.85) / 0.15)) }
+                }
+            } else {
+                // Pass 1 — unassigned faces: a faint background haze (still hover-detected; hit-testing
+                // is independent of draw order). Drawn first so named people sit on top.
+                let faint = Theme.personColorUnassigned.opacity(0.3)
+                for p in pts where p.personID == nil {
+                    let s = camera.worldToScreen(p.pos, viewSize: size, fit: fit)
+                    if onScreen(s) { dot(s, rFaint, faint) }
+                }
+                // Pass 2 — named faces: full colour, on top.
+                for p in pts {
+                    guard let pid = p.personID else { continue }
+                    let s = camera.worldToScreen(p.pos, viewSize: size, fit: fit)
+                    if onScreen(s) { dot(s, rNamed, Theme.colorForPerson(pid)) }
+                }
             }
         }
         .drawingGroup() // GPU-composite the dot layer
@@ -141,6 +172,16 @@ struct FaceMapView: View {
                     Circle().fill(Theme.colorForPerson(p.id)).frame(width: 8, height: 8)
                     Text(p.name).font(.caption2).foregroundStyle(Theme.text)
                 }
+            }
+            Divider().padding(.vertical, 1)
+            Toggle(isOn: $lensOn) {
+                Label("Similarity lens", systemImage: "scope").font(.caption2)
+            }
+            .toggleStyle(.switch).controlSize(.mini).tint(Theme.accent)
+            .onChange(of: lensOn) { _, on in if !on { lensSims = nil } }
+            if lensOn {
+                Text("hover a face — the galaxy glows by resemblance")
+                    .font(.system(size: 9)).foregroundStyle(Theme.textDim).frame(width: 150, alignment: .leading)
             }
         }.padding(8).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(10)
     }
@@ -241,13 +282,32 @@ struct FaceMapView: View {
             .onEnded { _ in dragStart = nil }
     }
 
-    private func nearestPoint(to pt: CGPoint, viewSize: CGSize, fit: Float) -> FaceMapPoint? {
-        var best: FaceMapPoint?; var bestD = CGFloat(18*18) // 18pt pick radius
-        for p in state.faceMap.points {
-            let s = camera.worldToScreen(p.pos, viewSize: viewSize, fit: fit)
+    private func nearestIndex(to pt: CGPoint, viewSize: CGSize, fit: Float) -> Int? {
+        var best: Int?; var bestD = CGFloat(18*18) // 18pt pick radius
+        let pts = state.faceMap.points
+        for i in pts.indices {
+            let s = camera.worldToScreen(pts[i].pos, viewSize: viewSize, fit: fit)
             let d = (s.x-pt.x)*(s.x-pt.x) + (s.y-pt.y)*(s.y-pt.y)
-            if d < bestD { bestD = d; best = p }
+            if d < bestD { bestD = d; best = i }
         }
         return best
+    }
+
+    private func nearestPoint(to pt: CGPoint, viewSize: CGSize, fit: Float) -> FaceMapPoint? {
+        nearestIndex(to: pt, viewSize: viewSize, fit: fit).map { state.faceMap.points[$0] }
+    }
+
+    /// Cosine similarity (== dot, vectors are unit) from face `idx` to every face, via Accelerate.
+    private func computeLensSims(_ idx: Int) -> [Float]? {
+        let data = state.faceMap
+        let n = data.points.count, dim = data.dim
+        guard idx < n, data.vectors.count == n * dim else { return nil }
+        var sims = [Float](repeating: 0, count: n)
+        data.vectors.withUnsafeBufferPointer { mb in
+            guard let m = mb.baseAddress else { return }
+            cblas_sgemv(CblasRowMajor, CblasNoTrans, Int32(n), Int32(dim),
+                        1, m, Int32(dim), m + idx * dim, 1, 0, &sims, 1)
+        }
+        return sims
     }
 }
