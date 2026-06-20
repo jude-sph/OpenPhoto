@@ -14,6 +14,9 @@ struct FaceMapView: View {
     @State private var lastScale: Float = 1        // magnify-gesture anchor
     @State private var lensOn = false               // similarity lens: recolor galaxy by similarity to hovered face
     @State private var lensSims: [Float]?           // per-point cosine similarity to the hovered face (nil = off)
+    @State private var newPersonName = ""           // "Assign → New person…" prompt
+    @State private var showNewPersonAlert = false
+    @State private var pendingAssignFace: Int64?
 
     var body: some View {
         GeometryReader { geo in
@@ -240,9 +243,18 @@ struct FaceMapView: View {
             if isReassignableOutlier(p) {
                 Text("looks unlike this person").font(.caption2).foregroundStyle(Theme.amber)
             }
-            if p.personID != nil { reassignControl(for: p) }
+            if p.personID != nil { reassignControl(for: p) } else { assignControl(for: p) }
         }
         .padding(10).frame(width: 170)
+        .alert("New person", isPresented: $showNewPersonAlert) {
+            TextField("Name", text: $newPersonName)
+            Button("Create") {
+                let name = newPersonName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let fid = pendingAssignFace, !name.isEmpty { state.nameCluster([fid], as: name) }
+                selectedFace = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Assign this face to a new person.") }
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline))
         .padding(12)
@@ -268,6 +280,25 @@ struct FaceMapView: View {
             }
             .menuStyle(.borderlessButton).font(.caption2).foregroundStyle(Theme.accent)
         }
+    }
+
+    /// "Assign to…" menu for an UNASSIGNED face: a new person, or any existing one. Existing-person
+    /// assignment goes through `reassignFace` (which reloads the map); new person through `nameCluster`.
+    @ViewBuilder private func assignControl(for p: FaceMapPoint) -> some View {
+        Menu("Assign to…") {
+            Button("New person…") {
+                newPersonName = ""; pendingAssignFace = p.id; showNewPersonAlert = true
+            }
+            if !state.people.isEmpty {
+                Divider()
+                ForEach(state.people.sorted { $0.faceCount > $1.faceCount }, id: \.id) { person in
+                    Button(person.name) {
+                        state.reassignFace(p.id, to: person.id, fromPerson: nil); selectedFace = nil
+                    }
+                }
+            }
+        }
+        .menuStyle(.borderlessButton).font(.caption2).foregroundStyle(Theme.accent)
     }
 
     // MARK: interaction

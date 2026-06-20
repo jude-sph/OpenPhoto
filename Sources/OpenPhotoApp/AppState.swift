@@ -768,6 +768,7 @@ final class AppState {
                 self?.facesDirty = true
                 self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
                 self?.refreshToken &+= 1      // reflect the new assignment in the Inspector
+                if !(self?.faceMap.points.isEmpty ?? true) { self?.loadFaceMap() }  // recolor the map dot
             }
         }
     }
