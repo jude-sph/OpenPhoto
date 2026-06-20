@@ -4,13 +4,14 @@ import OpenPhotoCore
 typealias Scanner = OpenPhotoCore.Scanner   // Foundation.Scanner collision
 
 enum SidebarItem: String, Hashable, CaseIterable {
-    case timeline, folders, albums, people, map, search, drives, tidyUp, bin
+    case timeline, folders, albums, people, faceMap, map, search, drives, tidyUp, bin
     var label: String {
         switch self {
         case .timeline: "Timeline"
         case .folders: "Folders"
         case .albums: "Albums"
         case .people: "People"
+        case .faceMap: "Face Map"
         case .map: "Map"
         case .search: "Search"
         case .drives: "Drives"
@@ -24,6 +25,7 @@ enum SidebarItem: String, Hashable, CaseIterable {
         case .folders: "folder"
         case .albums: "rectangle.stack"
         case .people: "person.2"
+        case .faceMap: "circle.hexagongrid"
         case .map: "map"
         case .search: "magnifyingglass"
         case .drives: "externaldrive"
@@ -302,6 +304,10 @@ final class AppState {
     private var semanticIndex: SemanticIndex?
     private var semanticIndexDirty = true     // set true after an embed drain
 
+    // MARK: — Face Map state
+    var faceMap = FaceMapData()
+    var faceMapLoading = false
+
     // MARK: — People state
     var people: [PersonRow] = []
     var suggestedClusters: [FaceCluster] = []
@@ -387,6 +393,62 @@ final class AppState {
             self.facesDirty = false
         }
     }
+
+    /// Load the Face Map: recompute the projection if the face set changed, then assemble points +
+    /// resemblance analyses off the main actor. Cheap on repeat opens (reads cached `face_layout`).
+    func loadFaceMap() {
+        guard let lib = library else { return }
+        faceMapLoading = true
+        Task {
+            let data = await Task.detached(priority: .userInitiated) { () -> FaceMapData in
+                let cat = lib.catalog
+                let faces = (try? cat.facesForLayout()) ?? []
+                guard !faces.isEmpty else { return FaceMapData() }
+
+                // Recompute projection only when stale.
+                let fp = (try? cat.faceSetFingerprint()) ?? ""
+                let cachedFP = (try? cat.faceLayoutFingerprint()) ?? nil
+                var layout = (try? cat.readFaceLayout()) ?? []
+                if cachedFP != fp || layout.isEmpty {
+                    let coords = FaceProjection.project(faces.map { $0.vector }, seed: 1)
+                    let rows = zip(faces, coords).map { (faceID: $0.0.id, x: Double($0.1.x), y: Double($0.1.y)) }
+                    try? cat.writeFaceLayout(rows, version: 1)
+                    layout = rows
+                }
+                let posByID = Dictionary(uniqueKeysWithValues: layout.map { ($0.faceID, SIMD2<Float>(Float($0.x), Float($0.y))) })
+                let points = faces.compactMap { f -> FaceMapPoint? in
+                    guard let p = posByID[f.id] else { return nil }
+                    return FaceMapPoint(id: f.id, personID: f.personID, pos: p)
+                }
+
+                // Per-person aggregates for overlays.
+                var perPersonVecs: [Int64: [(id: Int64, vector: [Float])]] = [:]
+                var perPersonPos: [Int64: [SIMD2<Float>]] = [:]
+                for f in faces where f.personID != nil {
+                    perPersonVecs[f.personID!, default: []].append((f.id, f.vector))
+                    if let p = posByID[f.id] { perPersonPos[f.personID!, default: []].append(p) }
+                }
+                let centroids = perPersonVecs.compactMapValues { FaceMatcher.centroid($0.map { $0.vector }) }
+                let centers = perPersonPos.mapValues { ps -> SIMD2<Float> in
+                    var s = SIMD2<Float>(0,0); for p in ps { s += p }; return s / Float(max(ps.count,1))
+                }
+                let look = FaceResemblance.lookalikes(centroids: centroids, topK: 3)
+                var typ: [Int64: FaceResemblance.Typicality] = [:]
+                for (pid, c) in centroids {
+                    typ[pid] = FaceResemblance.typicality(centroid: c, faces: perPersonVecs[pid] ?? [], outlierCount: 5)
+                }
+                var d = FaceMapData()
+                d.points = points; d.personCentersByID = centers; d.lookalikes = look
+                d.typicalityByID = typ; d.centroidsByID = centroids
+                return d
+            }.value
+            self.faceMap = data
+            self.faceMapLoading = false
+        }
+    }
+
+    /// Person display name for the map popover/labels.
+    func personName(_ id: Int64) -> String? { people.first { $0.id == id }?.name }
 
     /// Preserve the current display order of the Other-faces bucket across a re-fetch: faces still
     /// present keep their position (so a Shuffle — or any manual ordering — survives assigning or

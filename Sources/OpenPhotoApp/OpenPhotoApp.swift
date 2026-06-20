@@ -127,6 +127,7 @@ struct RootView: View {
             case .folders: FoldersView(state: state)
             case .albums: AlbumsView(state: state)
             case .people: PeopleView(state: state)
+            case .faceMap: Text("Face Map").foregroundStyle(Theme.textDim)
             case .map: MapView(state: state)
             case .search: SearchView(state: state)
             case .drives: DrivesView(state: state)
