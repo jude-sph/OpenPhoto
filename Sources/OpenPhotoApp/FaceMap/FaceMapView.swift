@@ -181,9 +181,13 @@ struct FaceMapView: View {
             .onChange(of: lensOn) { _, on in if !on { lensSims = nil } }
             if lensOn {
                 Text("hover a face — the galaxy glows by resemblance")
-                    .font(.system(size: 9)).foregroundStyle(Theme.textDim).frame(width: 150, alignment: .leading)
+                    .font(.system(size: 9)).foregroundStyle(Theme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.padding(8).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(10)
+        }
+        .frame(width: 184, alignment: .leading)   // compact key; without this the Divider stretches it full-width
+        .padding(8).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(10)
     }
 
     /// True when `p` belongs to the currently selected person AND is one of that person's outliers,
