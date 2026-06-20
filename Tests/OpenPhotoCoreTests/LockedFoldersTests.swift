@@ -415,6 +415,41 @@ private func seededLF2() throws -> (TestDirs, Catalog) {
     #expect(ids.count == faceCount, "all faces must appear when revealLocked = true")
 }
 
+// MARK: facesForLayout (Face Map)
+
+@Test func facesForLayoutExcludesLockedFaceWhenNotRevealed() throws {
+    let (t, cat) = try seededLF2(); defer { t.cleanup() }
+    cat.revealLocked = false
+    let faceHashes = try cat.dbQueue.read { db in
+        try Row.fetchAll(db, sql: "SELECT id, hash FROM faces").map {
+            (id: $0["id"] as Int64, hash: $0["hash"] as String)
+        }
+    }
+    let lockedID  = faceHashes.first { $0.hash == HA }!.id
+    let visibleID = faceHashes.first { $0.hash == HC }!.id
+    let layoutIDs = Set(try cat.facesForLayout().map(\.id))
+    #expect(!layoutIDs.contains(lockedID),  "locked HA face must NOT appear in the Face Map")
+    #expect(layoutIDs.contains(visibleID),  "unlocked HC face must appear in the Face Map")
+}
+
+@Test func facesForLayoutShowsAllWhenRevealed() throws {
+    let (t, cat) = try seededLF2(); defer { t.cleanup() }
+    cat.revealLocked = true
+    let total = try cat.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM faces WHERE dim = 512") ?? 0
+    }
+    #expect(try cat.facesForLayout().count == total, "all faces appear when revealLocked = true")
+}
+
+@Test func faceSetFingerprintReflectsLockState() throws {
+    let (t, cat) = try seededLF2(); defer { t.cleanup() }
+    cat.revealLocked = false
+    let hidden = try cat.faceSetFingerprint()
+    cat.revealLocked = true
+    let revealed = try cat.faceSetFingerprint()
+    #expect(hidden != revealed, "fingerprint must change with lock state so the map recomputes")
+}
+
 // MARK: geotaggedAssets (map)
 
 @Test func geotaggedAssetsExcludesLockedWhenNotRevealed() throws {
