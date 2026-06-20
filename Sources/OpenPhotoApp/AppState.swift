@@ -412,7 +412,7 @@ final class AppState {
                 if cachedFP != fp || layout.isEmpty {
                     let coords = FaceProjection.project(faces.map { $0.vector }, seed: 1)
                     let rows = zip(faces, coords).map { (faceID: $0.0.id, x: Double($0.1.x), y: Double($0.1.y)) }
-                    try? cat.writeFaceLayout(rows, version: 1)
+                    try? cat.writeFaceLayout(rows, version: Catalog.faceLayoutAlgoVersion)
                     layout = rows
                 }
                 let posByID = Dictionary(uniqueKeysWithValues: layout.map { ($0.faceID, SIMD2<Float>(Float($0.x), Float($0.y))) })

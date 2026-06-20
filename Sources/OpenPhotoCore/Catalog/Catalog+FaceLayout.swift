@@ -2,6 +2,10 @@ import Foundation
 import GRDB
 
 extension Catalog {
+    /// Bump when the projection algorithm changes so cached coordinates from an older build are
+    /// recomputed (it's woven into the fingerprint below, not just a display column).
+    public static let faceLayoutAlgoVersion = 2
+
     /// All current-model faces (assigned + unassigned) that have a real embedding — the projection input.
     public func facesForLayout() throws -> [(id: Int64, personID: Int64?, vector: [Float])] {
         try dbQueue.read { db in
@@ -31,7 +35,7 @@ extension Catalog {
                 SELECT COUNT(*) AS c, COALESCE(MAX(id),0) AS m, COALESCE(SUM(id),0) AS s
                 FROM faces WHERE dim = \(FaceEmbedder.dimension)
                 """)!
-            let fp = "\(row["c"] as Int64)-\(row["m"] as Int64)-\(row["s"] as Int64)"
+            let fp = "a\(Self.faceLayoutAlgoVersion)-\(row["c"] as Int64)-\(row["m"] as Int64)-\(row["s"] as Int64)"
             try db.execute(sql: """
                 INSERT INTO catalog_meta (key, value) VALUES ('faceLayoutFingerprint', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -56,7 +60,7 @@ extension Catalog {
                 SELECT COUNT(*) AS c, COALESCE(MAX(id),0) AS m, COALESCE(SUM(id),0) AS s
                 FROM faces WHERE dim = \(FaceEmbedder.dimension)
                 """)!
-            return "\(row["c"] as Int64)-\(row["m"] as Int64)-\(row["s"] as Int64)"
+            return "a\(Self.faceLayoutAlgoVersion)-\(row["c"] as Int64)-\(row["m"] as Int64)-\(row["s"] as Int64)"
         }
     }
 
