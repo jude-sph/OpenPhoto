@@ -78,21 +78,25 @@ struct FaceMapView: View {
                 // Similarity lens: each dot's brightness/size tracks cosine similarity to the hovered
                 // face — similar faces blaze (in their person colour, white-hot at the very top), the
                 // rest recede to near-black. Two passes so the bright ones land on top.
-                let lo: Float = 0.10, hi: Float = 0.55
+                let lo: Float = 0.12, hi: Float = 0.55
                 func tval(_ i: Int) -> Double { Double(max(0, min(1, (sims[i] - lo) / (hi - lo)))) }
-                for i in pts.indices where tval(i) < 0.4 {        // dim background
+                // Pass 1 — non-matches recede to a faint haze so the matches pop by contrast.
+                for i in pts.indices where tval(i) < 0.4 {
                     let s = camera.worldToScreen(pts[i].pos, viewSize: size, fit: fit)
                     if !onScreen(s) { continue }
                     let base = pts[i].personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
-                    dot(s, rFaint, base.opacity(0.05 + 0.35 * tval(i)))
+                    dot(s, rFaint, base.opacity(0.04 + 0.16 * tval(i)))
                 }
-                for i in pts.indices where tval(i) >= 0.4 {       // similar faces, bright + larger
+                // Pass 2 — matches blaze: bigger, full colour, a soft glow halo, and a white-hot core.
+                for i in pts.indices where tval(i) >= 0.4 {
                     let s = camera.worldToScreen(pts[i].pos, viewSize: size, fit: fit)
                     if !onScreen(s) { continue }
                     let t = tval(i)
                     let base = pts[i].personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
-                    dot(s, rFaint + (rNamed - rFaint + 2) * CGFloat(t), base.opacity(0.25 + 0.75 * t))
-                    if t > 0.85 { dot(s, rNamed * 0.6, .white.opacity((t - 0.85) / 0.15)) }
+                    let r = rNamed + CGFloat(t) * 5.5
+                    dot(s, r + 4, base.opacity(0.18 * t))            // glow halo
+                    dot(s, r, base.opacity(0.7 + 0.3 * t))           // bright core
+                    if t > 0.75 { dot(s, r * 0.5, .white.opacity((t - 0.75) / 0.25)) }   // white-hot center
                 }
             } else {
                 // Pass 1 — unassigned faces: a faint background haze (still hover-detected; hit-testing
