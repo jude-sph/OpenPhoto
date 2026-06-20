@@ -27,9 +27,20 @@ struct FaceMapView: View {
                             case .ended: hovered = nil
                             }
                         }
+                        .onTapGesture(coordinateSpace: .local) { pt in
+                            let p = nearestPoint(to: pt, viewSize: geo.size, fit: fit)
+                            selectedPerson = p?.personID
+                        }
+                    overlayCanvas(viewSize: geo.size, fit: fit)
                     legend
                 }
-                if let h = hovered { popover(for: h) }
+                if let h = hovered {
+                    if isReassignableOutlier(h) {
+                        popoverInteractive(for: h)
+                    } else {
+                        popover(for: h)
+                    }
+                }
             }
             .focusable().focusEffectDisabled()
             .onKeyPress(.init("=")) { zoom(by: 1.25); return .handled }
@@ -57,6 +68,38 @@ struct FaceMapView: View {
         .drawingGroup() // GPU-composite the dot layer
     }
 
+    /// Lookalike lines + typicality markers for the selected person, drawn above the dots.
+    /// No-ops when nothing is selected.
+    private func overlayCanvas(viewSize: CGSize, fit: Float) -> some View {
+        Canvas { ctx, size in
+            guard let pid = selectedPerson, let from = state.faceMap.personCentersByID[pid] else { return }
+            let a = camera.worldToScreen(from, viewSize: size, fit: fit)
+            // Lookalike lines: solid bold for mutual, dashed thin otherwise.
+            for la in state.faceMap.lookalikes[pid] ?? [] {
+                guard let cb = state.faceMap.personCentersByID[la.personID] else { continue }
+                let b = camera.worldToScreen(cb, viewSize: size, fit: fit)
+                var path = Path(); path.move(to: a); path.addLine(to: b)
+                ctx.stroke(path, with: .color(Theme.accent.opacity(la.mutual ? 0.9 : 0.5)),
+                           style: StrokeStyle(lineWidth: la.mutual ? 2.5 : 1.5, dash: la.mutual ? [] : [4, 3]))
+            }
+            // Typicality: ring the medoid (green), mark outliers (amber).
+            if let typ = state.faceMap.typicalityByID[pid] {
+                if let m = typ.medoid, let mp = state.faceMap.points.first(where: { $0.id == m }) {
+                    let s = camera.worldToScreen(mp.pos, viewSize: size, fit: fit)
+                    ctx.stroke(Path(ellipseIn: CGRect(x: s.x - 9, y: s.y - 9, width: 18, height: 18)),
+                               with: .color(Theme.green), lineWidth: 2.5)
+                }
+                for oid in typ.outliers {
+                    guard let op = state.faceMap.points.first(where: { $0.id == oid }) else { continue }
+                    let s = camera.worldToScreen(op.pos, viewSize: size, fit: fit)
+                    ctx.stroke(Path(ellipseIn: CGRect(x: s.x - 7, y: s.y - 7, width: 14, height: 14)),
+                               with: .color(Theme.amber), lineWidth: 2)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
     private var legend: some View {
         let top = state.people.sorted { $0.faceCount > $1.faceCount }.prefix(10)
         return VStack(alignment: .leading, spacing: 3) {
@@ -70,16 +113,55 @@ struct FaceMapView: View {
         }.padding(8).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(10)
     }
 
-    private func popover(for p: FaceMapPoint) -> some View {
+    /// True when `p` belongs to the currently selected person AND is one of that person's outliers,
+    /// i.e. the popover should expose the "Not [name]?" reassign menu (and be interactive).
+    private func isReassignableOutlier(_ p: FaceMapPoint) -> Bool {
+        guard let pid = p.personID, pid == selectedPerson else { return false }
+        return state.faceMap.typicalityByID[pid]?.outliers.contains(p.id) == true
+    }
+
+    /// Shared popover body (thumbnail + name). The reassign control is appended only for the
+    /// interactive variant so the non-interactive popover stays a pure overlay.
+    @ViewBuilder private func popoverBody(for p: FaceMapPoint, interactive: Bool) -> some View {
         VStack(spacing: 4) {
             FaceCropView(state: state, faceID: p.id, hash: nil, size: 72, fill: false)
                 .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 6))
             Text(p.personID.flatMap { state.personName($0) } ?? "Unassigned")
                 .font(.caption).foregroundStyle(Theme.text)
+            if interactive { reassignControl(for: p) }
         }
         .padding(6).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .fixedSize().position(x: hoverScreen.x, y: max(48, hoverScreen.y - 60))
-        .allowsHitTesting(false)
+    }
+
+    /// Plain, non-interactive popover (pointer events pass straight through to the canvas).
+    private func popover(for p: FaceMapPoint) -> some View {
+        popoverBody(for: p, interactive: false).allowsHitTesting(false)
+    }
+
+    /// Interactive popover used for reassignable outliers — NO `.allowsHitTesting(false)`, so the
+    /// "Not [name]?" menu is clickable.
+    private func popoverInteractive(for p: FaceMapPoint) -> some View {
+        popoverBody(for: p, interactive: true)
+    }
+
+    /// "Not [name]?" menu: remove from this person, or move to any other person. Each action
+    /// reassigns via the existing `reassignFace` and reloads so the dot recolors immediately.
+    @ViewBuilder private func reassignControl(for p: FaceMapPoint) -> some View {
+        if let pid = p.personID {
+            Menu("Not \(state.personName(pid) ?? "this person")?") {
+                Button("Remove from this person") {
+                    state.reassignFace(p.id, to: nil, fromPerson: pid); state.loadFaceMap()
+                }
+                Divider()
+                ForEach(state.people.filter { $0.id != pid }, id: \.id) { other in
+                    Button("Move to \(other.name)") {
+                        state.reassignFace(p.id, to: other.id, fromPerson: pid); state.loadFaceMap()
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton).font(.caption2).foregroundStyle(Theme.accent)
+        }
     }
 
     // MARK: interaction
