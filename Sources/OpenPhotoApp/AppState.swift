@@ -421,7 +421,7 @@ final class AppState {
                 vectors.reserveCapacity(faces.count * 512)
                 for f in faces {
                     guard let p = posByID[f.id] else { continue }
-                    points.append(FaceMapPoint(id: f.id, personID: f.personID, pos: p))
+                    points.append(FaceMapPoint(id: f.id, personID: f.personID, pos: p, hash: f.hash, rect: f.rect))
                     vectors.append(contentsOf: f.vector)
                 }
 

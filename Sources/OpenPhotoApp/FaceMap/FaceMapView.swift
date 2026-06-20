@@ -200,7 +200,7 @@ struct FaceMapView: View {
             .toggleStyle(.switch).controlSize(.mini).tint(Theme.accent)
             .onChange(of: lensOn) { _, on in if !on { lensSims = nil } }
             if lensOn {
-                Text("hover a face — the galaxy glows by resemblance")
+                Text("hover a face to glow its matches")
                     .font(.system(size: 9)).foregroundStyle(Theme.textDim)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -220,7 +220,7 @@ struct FaceMapView: View {
     /// Hover preview: thumbnail + name, follows the pointer, never interactive (events pass through).
     private func popover(for p: FaceMapPoint) -> some View {
         VStack(spacing: 4) {
-            FaceCropView(state: state, faceID: p.id, hash: nil, size: 72, fill: false)
+            FaceCropView(state: state, faceID: p.id, hash: p.hash, rect: p.rect, size: 72, fill: false)
                 .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 6))
             Text(p.personID.flatMap { state.personName($0) } ?? "Unassigned")
                 .font(.caption).foregroundStyle(Theme.text)
@@ -242,9 +242,9 @@ struct FaceMapView: View {
                     .buttonStyle(.plain).foregroundStyle(Theme.textDim)
             }
             // Face vs whole-photo — mirrors the People screen's Faces/Photos toggle.
-            FaceCropView(state: state, faceID: p.id, hash: nil, size: 150, fill: false,
+            FaceCropView(state: state, faceID: p.id, hash: p.hash, rect: p.rect, size: 112, fill: false,
                          cropToFace: inspectorShowFaces)
-                .frame(width: 150, height: 150).clipShape(RoundedRectangle(cornerRadius: 8))
+                .frame(width: 112, height: 112).clipShape(RoundedRectangle(cornerRadius: 8))
             Picker("", selection: $inspectorShowFaces) {
                 Text("Face").tag(true)
                 Text("Photo").tag(false)
@@ -255,7 +255,7 @@ struct FaceMapView: View {
             }
             if p.personID != nil { reassignControl(for: p) } else { assignControl(for: p) }
         }
-        .padding(10).frame(width: 170)
+        .padding(10).frame(width: 132)
         .alert("New person", isPresented: $showNewPersonAlert) {
             TextField("Name", text: $newPersonName)
             Button("Create") {

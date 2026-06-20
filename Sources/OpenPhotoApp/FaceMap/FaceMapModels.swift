@@ -7,6 +7,8 @@ struct FaceMapPoint: Identifiable, Sendable {
     let id: Int64            // faceID
     let personID: Int64?     // nil = unassigned
     let pos: SIMD2<Float>
+    let hash: String         // asset hash — passed straight to FaceCropView (no per-hover catalog lookup)
+    let rect: CGRect         // Vision face rect
 }
 
 /// Everything the map view needs, computed once per (re)load.

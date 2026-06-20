@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import GRDB
 
 extension Catalog {
@@ -10,15 +11,18 @@ extension Catalog {
     /// All current-model faces (assigned + unassigned) that have a real embedding — the projection input.
     /// Excludes faces in locked/hidden folders (unless the session is Touch-ID-revealed), exactly like
     /// every other browse query, so locked-folder people never appear on the map.
-    public func facesForLayout() throws -> [(id: Int64, personID: Int64?, vector: [Float])] {
+    public func facesForLayout() throws -> [(id: Int64, personID: Int64?, hash: String, rect: CGRect, vector: [Float])] {
         let lvc = lockedVisibilityClause(hashColumn: "faces.hash")
         return try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT id, personID, dim, embedding FROM faces
+                SELECT id, personID, hash, rectX, rectY, rectW, rectH, dim, embedding FROM faces
                 WHERE dim = \(FaceEmbedder.dimension) \(lvc)
                 """).map { row in
                     let blob: Data = row["embedding"]
-                    return (id: row["id"], personID: row["personID"],
+                    let rx: Double = row["rectX"], ry: Double = row["rectY"]
+                    let rw: Double = row["rectW"], rh: Double = row["rectH"]
+                    let rect = CGRect(x: rx, y: ry, width: rw, height: rh)
+                    return (id: row["id"], personID: row["personID"], hash: row["hash"], rect: rect,
                             vector: Float16Codec.unpack(blob, dim: row["dim"]))
                 }
         }
