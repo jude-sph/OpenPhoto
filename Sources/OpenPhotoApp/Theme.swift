@@ -26,6 +26,19 @@ enum Theme {
     static let gridGap: CGFloat = 3
     static let cellRadius: CGFloat = 3
     static let cardRadius: CGFloat = 13
+
+    /// Stable, well-spread hues for coloring people on the Face Map (light/dark pairs).
+    static let personColors: [(light: UInt32, dark: UInt32)] = [
+        (0xCF5C57, 0xE07B76), (0x3F7FBF, 0x6AA3D8), (0x3F9D5F, 0x5FB47A), (0xB9852A, 0xD8A23E),
+        (0x8E5BC4, 0xA985D8), (0x2FA39A, 0x4FC4BA), (0xC0463E, 0xD86A62), (0x5F7E2A, 0x86A84E),
+        (0xB5547F, 0xD07AA0), (0x4A6FA5, 0x7196C4), (0xA86A33, 0xC78E55), (0x5B8C5A, 0x82B081),
+    ]
+    /// Deterministic color for a person id; unassigned faces use `personColorUnassigned`.
+    static func colorForPerson(_ id: Int64) -> Color {
+        let (l, d) = personColors[Int(UInt64(bitPattern: id) % UInt64(personColors.count))]
+        return Color(light: l, dark: d)
+    }
+    static var personColorUnassigned: Color { Color(light: 0xBFB9B0, dark: 0x4A4641) }
 }
 
 extension Color {
