@@ -38,7 +38,7 @@ enum Theme {
         let (l, d) = personColors[Int(UInt64(bitPattern: id) % UInt64(personColors.count))]
         return Color(light: l, dark: d)
     }
-    static var personColorUnassigned: Color { Color(light: 0xBFB9B0, dark: 0x4A4641) }
+    static var personColorUnassigned: Color { Color(light: 0xB0AAA1, dark: 0x6E6862) }
 }
 
 extension Color {

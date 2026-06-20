@@ -50,3 +50,27 @@ private func seededVec(dim: Int, center: Int, jitter: Float, salt: Int) -> [Floa
     #expect(FaceProjection.project([[1,0,0]], seed: 1).count == 1)
     #expect(FaceProjection.project([[1,0],[0,1]], seed: 1).count == 2)
 }
+
+@Test func projectionDoesNotCollapse() {
+    // Regression: clusters must SPREAD into visible blobs, not implode onto a single coincident
+    // point. The first implementation's bounded spring collapsed every cluster to one dot
+    // (7,376 faces → 215 distinct positions on the real library).
+    let dim = 48
+    var vecs: [[Float]] = []
+    for c in 0..<3 { for j in 0..<50 { vecs.append(seededVec(dim: dim, center: c*13, jitter: 0.18, salt: j)) } }
+    let pts = FaceProjection.project(vecs, seed: 3)
+    // A collapsed layout piles everyone onto a handful of grid cells; a spread one does not.
+    // Thresholds sit firmly between collapsed (~0.03 distinct, ~0.0002 NN) and the shipped
+    // algorithm (~0.3 distinct, ~0.004 NN on this fixture).
+    let cells = Set(pts.map { SIMD2<Int>(Int(($0.x / 0.02).rounded()), Int(($0.y / 0.02).rounded())) })
+    #expect(Double(cells.count) / Double(pts.count) > 0.15)
+    // And the median nearest-neighbour gap is a real distance, not ~0 (collapsed ≈ 0.0002).
+    var nn: [Float] = []
+    for i in 0..<pts.count {
+        var best = Float.greatestFiniteMagnitude
+        for j in 0..<pts.count where j != i { best = min(best, simd_distance(pts[i], pts[j])) }
+        nn.append(best)
+    }
+    nn.sort()
+    #expect(nn[nn.count / 2] > 0.0015)
+}

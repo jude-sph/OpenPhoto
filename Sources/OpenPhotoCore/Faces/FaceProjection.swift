@@ -7,7 +7,7 @@ import simd
 public enum FaceProjection {
     public struct Params: Sendable {
         public var k: Int = 15            // neighbours per point
-        public var epochs: Int = 300
+        public var epochs: Int = 400
         public var negSamples: Int = 5    // random repulsions per point per epoch
         public var learningRate: Float = 1.0
         public init() {}
@@ -65,34 +65,49 @@ public enum FaceProjection {
         var Y = [SIMD2<Float>](repeating: .zero, count: n)
         for i in 0..<n { Y[i] = SIMD2(s.nextUnit() * 0.2, s.nextUnit() * 0.2) }
 
-        // --- force-directed SGD: attract neighbours, repel random negative samples ---
-        let eps: Float = 1e-3
+        // --- UMAP-style SGD: attract kNN neighbours, repel random negative samples ---
+        // a/b shape the smooth attraction curve (≈ min_dist 0.1, spread 1). Crucially the repulsion
+        // blows up at short range (the `0.001 + dist2` denominator), so neighbours settle a small
+        // distance APART rather than collapsing onto one point. The previous bounded spring had no
+        // short-range repulsion, so every cluster imploded to a single coincident dot.
+        let a: Float = 1.5769, b: Float = 0.8951
+        @inline(__always) func clamp4(_ v: SIMD2<Float>) -> SIMD2<Float> {
+            SIMD2(max(-4, min(4, v.x)), max(-4, min(4, v.y)))
+        }
+        // Gradients are accumulated over the whole epoch and applied as one small step — stable across
+        // library sizes and validated to spread real data (a per-sample variant under-spread tight clusters).
+        let stepScale: Float = 0.04
+        var grad = [SIMD2<Float>](repeating: .zero, count: n)
         for epoch in 0..<params.epochs {
             let alpha = params.learningRate * (1 - Float(epoch) / Float(params.epochs))
+            for i in 0..<n { grad[i] = .zero }
             for i in 0..<n {
-                var yi = Y[i]
-                // attraction to neighbours
-                for jb in nbr[i] {
+                let yi = Y[i]
+                for jb in nbr[i] {                               // attraction (symmetric)
                     let j = Int(jb)
-                    let d = Y[j] - yi
-                    let dist2 = simd_length_squared(d) + eps
-                    let coeff = alpha * (1 / (1 + dist2))        // bounded spring
-                    let step = d * coeff
-                    yi += step
-                    Y[j] -= step * 0.5
+                    let d = yi - Y[j]
+                    let dist2 = simd_length_squared(d)
+                    guard dist2 > 0 else { continue }
+                    let co = (-2 * a * b * powf(dist2, b - 1)) / (1 + a * powf(dist2, b))
+                    let g = clamp4(d * co)
+                    grad[i] += g
+                    grad[j] -= g
                 }
-                // repulsion from random non-neighbours
-                for _ in 0..<params.negSamples {
+                for _ in 0..<params.negSamples {                 // repulsion
                     let k = Int(s.next() % UInt64(n))
                     if k == i { continue }
                     let d = yi - Y[k]
-                    let dist2 = simd_length_squared(d) + eps
-                    let coeff = alpha * (0.6 / dist2)            // inverse-distance push
-                    let push = d * min(coeff, 4.0)              // clamp to stay stable
-                    yi += push
+                    let dist2 = simd_length_squared(d)
+                    if dist2 > 0 {
+                        let co = (2 * b) / ((0.001 + dist2) * (1 + a * powf(dist2, b)))
+                        grad[i] += clamp4(d * co)
+                    } else {
+                        grad[i] += SIMD2(0.5, 0)                 // nudge exactly-coincident points apart
+                    }
                 }
-                Y[i] = yi
             }
+            let step = alpha * stepScale
+            for i in 0..<n { Y[i] += grad[i] * step }
         }
 
         // --- normalize: center, scale by 98th-percentile radius into ~[-1,1] ---

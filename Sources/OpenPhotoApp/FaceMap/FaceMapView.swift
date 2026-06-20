@@ -70,7 +70,7 @@ struct FaceMapView: View {
                 let s = camera.worldToScreen(p.pos, viewSize: size, fit: fit)
                 if s.x < -10 || s.y < -10 || s.x > size.width+10 || s.y > size.height+10 { continue } // cull
                 let color = p.personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
-                let dimmed = (p.personID == nil) ? color.opacity(0.5) : color
+                let dimmed = (p.personID == nil) ? color.opacity(0.7) : color
                 ctx.fill(Path(ellipseIn: CGRect(x: s.x-r, y: s.y-r, width: r*2, height: r*2)), with: .color(dimmed))
             }
         }
