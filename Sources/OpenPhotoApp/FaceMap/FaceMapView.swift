@@ -90,19 +90,29 @@ struct FaceMapView: View {
                     let base = pts[i].personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
                     dot(s, rFaint, base.opacity(0.04 + 0.16 * tval(i)))
                 }
-                // Pass 2 — matches as crisp, shiny beads (NO soft halo, so dense clusters stay sharp
-                // instead of smearing): a bright solid core + a top-left specular glint.
+                // Pass 2a — a soft bloom behind the matches (a REAL blurred layer, not stacked halos,
+                // so the cluster glows without smearing the cores).
+                ctx.drawLayer { layer in
+                    layer.addFilter(.blur(radius: 5))
+                    for i in pts.indices where tval(i) >= 0.4 {
+                        let s = camera.worldToScreen(pts[i].pos, viewSize: size, fit: fit)
+                        if !onScreen(s) { continue }
+                        let t = tval(i)
+                        let base = pts[i].personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
+                        let gr = rNamed + 2 + CGFloat(t) * 3
+                        layer.fill(Path(ellipseIn: CGRect(x: s.x - gr, y: s.y - gr, width: gr * 2, height: gr * 2)),
+                                   with: .color(base.opacity(0.22 * t)))
+                    }
+                }
+                // Pass 2b — crisp shiny cores with a CENTERED glint, sitting on top of the bloom.
                 for i in pts.indices where tval(i) >= 0.4 {
                     let s = camera.worldToScreen(pts[i].pos, viewSize: size, fit: fit)
                     if !onScreen(s) { continue }
                     let t = tval(i)
                     let base = pts[i].personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
-                    let r = rNamed + CGFloat(t) * 2.0
-                    dot(s, r, base.opacity(0.92))                    // crisp bright core, no fuzz
-                    let hr = r * 0.42                                 // glossy specular highlight
-                    ctx.fill(Path(ellipseIn: CGRect(x: s.x - r * 0.3 - hr, y: s.y - r * 0.3 - hr,
-                                                    width: hr * 2, height: hr * 2)),
-                             with: .color(.white.opacity(0.45 + 0.5 * t)))
+                    let r = rNamed + CGFloat(t) * 1.8
+                    dot(s, r, base.opacity(0.92))                       // crisp bright core
+                    dot(s, r * 0.34, .white.opacity(0.4 + 0.5 * t))     // centered glint
                 }
             } else {
                 // Pass 1 — unassigned faces: a faint background haze (still hover-detected; hit-testing
