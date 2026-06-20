@@ -245,6 +245,17 @@ A snapshot reader MAY ignore this table entirely — it is Mac-local Finder-tag 
 
 Both tables are a **rebuildable mirror** of the sovereign album files (`vault-format-v1.md §15`), which are the authoritative record. A snapshot reader MAY use them to browse album contents in order, but MUST treat them as a droppable cache: read the album JSON files directly when present, and do not rely on these tables in snapshots from schema versions below 13.
 
+### `face_layout` (added migration v19, Mac-local cache — **not** part of the snapshot)
+
+Rebuildable **local cache** of 2D coordinates for the Face Map. NOT part of the sovereign drive snapshot — `Catalog.schemaVersion` is intentionally **not** bumped for it. Recomputed by `AppState.loadFaceMap()` whenever `Catalog.faceSetFingerprint()` differs from the stored `catalog_meta` key `faceLayoutFingerprint`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `faceID` | INTEGER **PK** | References `faces.id`. |
+| `x` | REAL | Normalized projection coordinate (~`[-1, 1]`). |
+| `y` | REAL | Normalized projection coordinate (~`[-1, 1]`). |
+| `layoutVersion` | INTEGER | Projection algorithm/params version. |
+
 `Catalog.schemaVersion` is **13** (written into `snapshot.json`'s `catalog_schema_version` field).
 
 ---
