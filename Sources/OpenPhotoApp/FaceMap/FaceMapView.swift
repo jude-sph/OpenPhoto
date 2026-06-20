@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenPhotoCore
 
 struct FaceMapView: View {
     @Bindable var state: AppState
@@ -8,6 +9,9 @@ struct FaceMapView: View {
     @State private var hoverScreen: CGPoint = .zero
     @State private var selectedPerson: Int64?
     @State private var morphPath: [Int64]?        // conditional (Task 8)
+    @State private var morphFrom: Int64?          // pending first shift-click endpoint
+    @State private var morphPhase: CGFloat = 0    // animated dash offset for the lit path
+    @State private var morphMiss = false          // brief "no clear resemblance path" hint
     @State private var lastScale: Float = 1        // magnify-gesture anchor
 
     var body: some View {
@@ -19,6 +23,9 @@ struct FaceMapView: View {
                     ProgressView("Building face map…").frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     canvas(geo: geo, fit: fit)
+                        // Shift-click drives the resemblance-path morph; it must take priority over
+                        // the plain tap (which would otherwise consume the click and just select).
+                        .gesture(shiftTapGesture(viewSize: geo.size, fit: fit))
                         .gesture(panGesture(viewSize: geo.size, fit: fit))
                         .gesture(magnifyGesture())
                         .onContinuousHover { phase in
@@ -32,7 +39,9 @@ struct FaceMapView: View {
                             selectedPerson = p?.personID
                         }
                     overlayCanvas(viewSize: geo.size, fit: fit)
+                    morphCanvas(viewSize: geo.size, fit: fit)
                     legend
+                    morphCaption
                 }
                 if let h = hovered {
                     if isReassignableOutlier(h) {
@@ -98,6 +107,87 @@ struct FaceMapView: View {
             }
         }
         .allowsHitTesting(false)
+    }
+
+    /// The conditional resemblance-path morph: a glowing underlay + an animated dashed stroke that
+    /// "flows" between the two picked people through the island centers, with a per-hop name label.
+    /// Draws nothing unless a good `morphPath` exists.
+    private func morphCanvas(viewSize: CGSize, fit: Float) -> some View {
+        Canvas { ctx, size in
+            guard let path = morphPath, path.count > 1 else { return }
+            let pts = path.compactMap { state.faceMap.personCentersByID[$0] }
+                          .map { camera.worldToScreen($0, viewSize: size, fit: fit) }
+            guard pts.count == path.count else { return }
+
+            var line = Path(); line.move(to: pts[0]); for p in pts.dropFirst() { line.addLine(to: p) }
+            // Soft glow underlay (two widths) → the line reads as "lit", not just drawn.
+            ctx.stroke(line, with: .color(Theme.accent.opacity(0.18)),
+                       style: StrokeStyle(lineWidth: 16, lineCap: .round, lineJoin: .round))
+            ctx.stroke(line, with: .color(Theme.accent.opacity(0.30)),
+                       style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round))
+            // Animated travelling dashes on a bright core.
+            ctx.stroke(line, with: .color(Theme.accentHi),
+                       style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round,
+                                          dash: [10, 8], dashPhase: morphPhase))
+
+            // Hop markers + name labels, sitting just above each island center.
+            for (i, pid) in path.enumerated() {
+                let c = pts[i]
+                let isEnd = (i == 0 || i == path.count - 1)
+                let dotR: CGFloat = isEnd ? 6 : 4
+                ctx.fill(Path(ellipseIn: CGRect(x: c.x - dotR, y: c.y - dotR, width: dotR * 2, height: dotR * 2)),
+                         with: .color(Theme.accentHi))
+                ctx.stroke(Path(ellipseIn: CGRect(x: c.x - dotR - 2, y: c.y - dotR - 2,
+                                                  width: (dotR + 2) * 2, height: (dotR + 2) * 2)),
+                           with: .color(Theme.accent.opacity(0.5)), lineWidth: 1.5)
+
+                let label = state.personName(pid) ?? "?"
+                let text = Text(label)
+                    .font(isEnd ? .caption.bold() : .caption2.bold())
+                    .foregroundColor(Theme.text)
+                // Faint pill behind the label so it stays readable over dense dots.
+                let resolved = ctx.resolve(text)
+                let tsize = resolved.measure(in: size)
+                let labelY = c.y - dotR - 12
+                let pill = CGRect(x: c.x - tsize.width / 2 - 5, y: labelY - tsize.height / 2 - 2,
+                                  width: tsize.width + 10, height: tsize.height + 4)
+                ctx.fill(Path(roundedRect: pill, cornerRadius: 5), with: .color(Theme.windowBG.opacity(0.78)))
+                ctx.draw(resolved, at: CGPoint(x: c.x, y: labelY))
+            }
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) { morphPhase = -18 }
+        }
+    }
+
+    /// Bottom caption strip: the resemblance chain ("Jude › Bo › Sky › Nina › Gran Gran") when a path
+    /// is lit, or a brief hint when a shift-pair produced no good path.
+    @ViewBuilder private var morphCaption: some View {
+        if let path = morphPath, path.count > 1 {
+            let chain = path.map { state.personName($0) ?? "?" }.joined(separator: "  ›  ")
+            HStack(spacing: 6) {
+                Image(systemName: "wand.and.stars").font(.caption2).foregroundStyle(Theme.accentHi)
+                Text(chain).font(.callout.weight(.medium)).foregroundStyle(Theme.text)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(Theme.accent.opacity(0.35), lineWidth: 1))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, 18)
+            .allowsHitTesting(false)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if morphMiss {
+            Text("No clear resemblance path")
+                .font(.caption).foregroundStyle(Theme.textDim)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, 18)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
     }
 
     private var legend: some View {
@@ -174,6 +264,45 @@ struct FaceMapView: View {
         MagnifyGesture()
             .onChanged { v in camera.scale = max(0.2, min(40, Float(v.magnification) * lastScale)) }
             .onEnded { _ in lastScale = camera.scale }
+    }
+
+    // MARK: resemblance-path morph (Task 8)
+    /// Fires only while Shift is held (so plain clicks keep selecting). Maps the tapped location to
+    /// the nearest dot's person and drives `handleShiftTap`.
+    private func shiftTapGesture(viewSize: CGSize, fit: Float) -> some Gesture {
+        SpatialTapGesture()
+            .modifiers(.shift)
+            .onEnded { value in
+                let p = nearestPoint(to: value.location, viewSize: viewSize, fit: fit)
+                handleShiftTap(personID: p?.personID)
+            }
+    }
+
+    /// First shift-click on a person arms the path's start; the second computes a "good" resemblance
+    /// path to it. A click on empty space (or repeating the same person) clears the pending state.
+    private func handleShiftTap(personID: Int64?) {
+        morphMiss = false
+        guard let pid = personID else { morphFrom = nil; morphPath = nil; return }
+        if let a = morphFrom, a != pid {
+            let path = FaceResemblance.resemblancePath(
+                centroids: state.faceMap.centroidsByID, from: a, to: pid,
+                k: 5, minEdgeSim: 0.18, minNodes: 3, maxNodes: 6)
+            morphPath = path
+            morphFrom = nil
+            if path == nil { flashMorphMiss() }
+        } else {
+            morphFrom = pid
+            morphPath = nil
+        }
+    }
+
+    /// Briefly surface the "no clear resemblance path" hint, then auto-dismiss.
+    private func flashMorphMiss() {
+        morphMiss = true
+        Task {
+            try? await Task.sleep(for: .seconds(2.2))
+            if morphPath == nil { morphMiss = false }
+        }
     }
 
     private func panGesture(viewSize: CGSize, fit: Float) -> some Gesture {
