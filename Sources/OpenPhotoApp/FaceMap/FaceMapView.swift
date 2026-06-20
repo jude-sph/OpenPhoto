@@ -236,17 +236,18 @@ struct FaceMapView: View {
     }
 
     /// "Not [name]?" menu: remove from this person, or move to any other person. Each action
-    /// reassigns via the existing `reassignFace` and reloads so the dot recolors immediately.
+    /// reassigns via the existing `reassignFace`, which reloads the map after the write commits so the
+    /// dot recolors (no explicit reload here — that would race the write).
     @ViewBuilder private func reassignControl(for p: FaceMapPoint) -> some View {
         if let pid = p.personID {
             Menu("Not \(state.personName(pid) ?? "this person")?") {
                 Button("Remove from this person") {
-                    state.reassignFace(p.id, to: nil, fromPerson: pid); state.loadFaceMap()
+                    state.reassignFace(p.id, to: nil, fromPerson: pid)
                 }
                 Divider()
                 ForEach(state.people.filter { $0.id != pid }, id: \.id) { other in
                     Button("Move to \(other.name)") {
-                        state.reassignFace(p.id, to: other.id, fromPerson: pid); state.loadFaceMap()
+                        state.reassignFace(p.id, to: other.id, fromPerson: pid)
                     }
                 }
             }

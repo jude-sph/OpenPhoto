@@ -847,6 +847,10 @@ final class AppState {
                 self?.facesDirty = true
                 self?.refreshSuggestions()   // fast re-match; surfaces the next batch without a rescan
                 self?.refreshToken &+= 1      // reflect the change in the Inspector's "In this image"
+                // Recolor the Face Map dot now that the catalog write has committed. Done here (not at
+                // the call site) so the reload reads the post-write state instead of racing it. Guarded
+                // so unrelated reassigns don't recompute the map before the user has opened it.
+                if let self, !self.faceMap.points.isEmpty { self.loadFaceMap() }
             }
         }
     }

@@ -16,7 +16,7 @@ extension Catalog {
         }
     }
 
-    /// Replace the entire layout table with these coordinates and stamp the fingerprint.
+    /// Replace the entire layout table with these coordinates and stamp the fingerprint — atomically.
     public func writeFaceLayout(_ points: [(faceID: Int64, x: Double, y: Double)], version: Int) throws {
         try dbQueue.write { db in
             try db.execute(sql: "DELETE FROM face_layout")
@@ -24,8 +24,19 @@ extension Catalog {
                 try db.execute(sql: "INSERT INTO face_layout (faceID, x, y, layoutVersion) VALUES (?,?,?,?)",
                                arguments: [p.faceID, p.x, p.y, version])
             }
+            // Stamp the fingerprint of the SAME transactional snapshot. Computing it in a separate
+            // read afterwards would let a concurrent face derivation insert/delete a face between the
+            // two transactions, certifying these coordinates as current for a face set they don't cover.
+            let row = try Row.fetchOne(db, sql: """
+                SELECT COUNT(*) AS c, COALESCE(MAX(id),0) AS m, COALESCE(SUM(id),0) AS s
+                FROM faces WHERE dim = \(FaceEmbedder.dimension)
+                """)!
+            let fp = "\(row["c"] as Int64)-\(row["m"] as Int64)-\(row["s"] as Int64)"
+            try db.execute(sql: """
+                INSERT INTO catalog_meta (key, value) VALUES ('faceLayoutFingerprint', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """, arguments: [fp])
         }
-        try setMeta("faceLayoutFingerprint", try faceSetFingerprint())
     }
 
     public func readFaceLayout() throws -> [(faceID: Int64, x: Double, y: Double)] {
@@ -36,8 +47,9 @@ extension Catalog {
         }
     }
 
-    /// Cheap signature of the contributing face set: count + max id + sum of ids.
-    /// Changes on any insert/delete/reassign that adds or removes an embedded face.
+    /// Cheap signature of the embedded-face *id set*: count + max id + sum of ids. Changes when an
+    /// embedded face is added or removed. NOT sensitive to personID reassignment — dot colors are read
+    /// fresh on every load, while coordinates intentionally persist across reassigns (no reflow).
     public func faceSetFingerprint() throws -> String {
         try dbQueue.read { db in
             let row = try Row.fetchOne(db, sql: """
