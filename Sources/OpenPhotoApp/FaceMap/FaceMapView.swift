@@ -9,6 +9,7 @@ struct FaceMapView: View {
     @State private var hoverScreen: CGPoint = .zero
     @State private var selectedPerson: Int64?
     @State private var selectedFace: FaceMapPoint?  // clicked dot → pinned inspector (reassign lives here)
+    @State private var inspectorShowFaces = true     // Face/Photo toggle in the inspector (mirrors People)
     @State private var morphPath: [Int64]?        // conditional (Task 8)
     @State private var morphFrom: Int64?          // pending first shift-click endpoint
     @State private var morphPhase: CGFloat = 0    // animated dash offset for the lit path
@@ -258,23 +259,28 @@ struct FaceMapView: View {
     /// — the hover popover followed the pointer, which made the menu impossible to click.
     private func faceInspector(for p: FaceMapPoint) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                FaceCropView(state: state, faceID: p.id, hash: nil, size: 56, fill: false)
-                    .frame(width: 56, height: 56).clipShape(RoundedRectangle(cornerRadius: 6))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(p.personID.flatMap { state.personName($0) } ?? "Unassigned")
-                        .font(.callout.weight(.semibold)).foregroundStyle(Theme.text)
-                    if isReassignableOutlier(p) {
-                        Text("looks unlike this person").font(.caption2).foregroundStyle(Theme.amber)
-                    }
-                }
-                Spacer(minLength: 0)
+            HStack {
+                Text(p.personID.flatMap { state.personName($0) } ?? "Unassigned")
+                    .font(.callout.weight(.semibold)).foregroundStyle(Theme.text)
+                Spacer(minLength: 8)
                 Button { selectedFace = nil } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(Theme.textDim)
             }
+            // Face vs whole-photo — mirrors the People screen's Faces/Photos toggle.
+            FaceCropView(state: state, faceID: p.id, hash: nil, size: 150, fill: false,
+                         cropToFace: inspectorShowFaces)
+                .frame(width: 150, height: 150).clipShape(RoundedRectangle(cornerRadius: 8))
+            Picker("", selection: $inspectorShowFaces) {
+                Text("Face").tag(true)
+                Text("Photo").tag(false)
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            if isReassignableOutlier(p) {
+                Text("looks unlike this person").font(.caption2).foregroundStyle(Theme.amber)
+            }
             if p.personID != nil { reassignControl(for: p) }
         }
-        .padding(10).frame(width: 230)
+        .padding(10).frame(width: 170)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline))
         .padding(12)
