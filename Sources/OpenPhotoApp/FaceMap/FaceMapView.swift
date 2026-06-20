@@ -87,16 +87,19 @@ struct FaceMapView: View {
                     let base = pts[i].personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
                     dot(s, rFaint, base.opacity(0.04 + 0.16 * tval(i)))
                 }
-                // Pass 2 — matches blaze: bigger, full colour, a soft glow halo, and a white-hot core.
+                // Pass 2 — matches as crisp, shiny beads (NO soft halo, so dense clusters stay sharp
+                // instead of smearing): a bright solid core + a top-left specular glint.
                 for i in pts.indices where tval(i) >= 0.4 {
                     let s = camera.worldToScreen(pts[i].pos, viewSize: size, fit: fit)
                     if !onScreen(s) { continue }
                     let t = tval(i)
                     let base = pts[i].personID.map { Theme.colorForPerson($0) } ?? Theme.personColorUnassigned
-                    let r = rNamed + CGFloat(t) * 5.5
-                    dot(s, r + 4, base.opacity(0.18 * t))            // glow halo
-                    dot(s, r, base.opacity(0.7 + 0.3 * t))           // bright core
-                    if t > 0.75 { dot(s, r * 0.5, .white.opacity((t - 0.75) / 0.25)) }   // white-hot center
+                    let r = rNamed + CGFloat(t) * 2.0
+                    dot(s, r, base.opacity(0.92))                    // crisp bright core, no fuzz
+                    let hr = r * 0.42                                 // glossy specular highlight
+                    ctx.fill(Path(ellipseIn: CGRect(x: s.x - r * 0.3 - hr, y: s.y - r * 0.3 - hr,
+                                                    width: hr * 2, height: hr * 2)),
+                             with: .color(.white.opacity(0.45 + 0.5 * t)))
                 }
             } else {
                 // Pass 1 — unassigned faces: a faint background haze (still hover-detected; hit-testing
