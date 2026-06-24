@@ -27,6 +27,7 @@ struct PeekView: View {
 
                 if context.items.isEmpty {
                     ContentUnavailableView("No photos here", systemImage: "photo.on.rectangle")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: Theme.gridGap) {
@@ -50,6 +51,7 @@ struct PeekView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)   // pin header to the top
             if let opened = openedPeek {
                 PeekViewer(items: context.items, initial: opened) { openedPeek = nil }
             }
