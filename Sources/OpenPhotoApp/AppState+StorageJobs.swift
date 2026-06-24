@@ -1,6 +1,46 @@
 import SwiftUI
 import OpenPhotoCore
 
+enum DriveAvailability { case ready([Vault]); case needsDrive(name: String); case nothingToDo }
+
+extension AppState {
+    /// Decide whether a storage op can run now. If any durable drive is connected, proceed (the core
+    /// op processes what those drives can serve and reports the rest). If none is connected, name the
+    /// registered drive that holds the most of these hashes so we can prompt the user to plug it in.
+    func resolveDrive(forHashes hashes: Set<String>) -> DriveAvailability {
+        if hashes.isEmpty { return .nothingToDo }
+        let connected = connectedDrivesCanonicalFirst()
+        if !connected.isEmpty { return .ready(connected) }
+        var best: (name: String, n: Int)?
+        for vr in durableVaults {
+            guard let hs = try? library?.catalog.vaultPresenceHashes(forVault: vr.id) else { continue }
+            let n = hashes.intersection(hs).count
+            if n > (best?.n ?? 0) { best = ((vr.rootPath as NSString).lastPathComponent, n) }
+        }
+        return .needsDrive(name: best?.name ?? "your drive")
+    }
+
+    func allEvictableItems() -> [TimelineItem] {
+        (try? library?.allEvictableLocal(canonicalPresence: canonicalPresence)) ?? []
+    }
+    func allDriveOnlyItems() -> [TimelineItem] {
+        (try? library?.allDriveOnly()) ?? []
+    }
+    /// Local, backed-up subset of a given set (folder evict).
+    func evictableItems(_ items: [TimelineItem]) -> [TimelineItem] {
+        items.filter { $0.driveRelPath == nil && canonicalPresence.contains($0.hash) }
+    }
+    /// Items under a folder (recursive), split for the two operations.
+    func folderEvictable(dirPath: String) -> [TimelineItem] {
+        let items = (try? library?.items(inDir: dirPath, recursive: true)) ?? []
+        return evictableItems(items)
+    }
+    func folderRehydratable(dirPath: String) -> [TimelineItem] {
+        let items = (try? library?.items(inDir: dirPath, recursive: true)) ?? []
+        return rehydratableItems(items)
+    }
+}
+
 extension AppState {
     /// Download a selection's originals back to this Mac as a background job on the unified job slot.
     /// Streams progress into `activeJob` via the shared ticker; finishes through `finishStorageJob`.
