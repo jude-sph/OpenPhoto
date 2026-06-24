@@ -129,6 +129,7 @@ private struct FolderRow: View {
     @State private var renameText = ""
     @State private var confirmEvictFolder: (name: String, items: [TimelineItem])?
     @State private var plugInPrompt: String?
+    @State private var folderNote: String?        // "nothing to do" feedback for folder evict/download
 
     private var expanded: Bool { state.expandedFolders.contains(node.path) }
 
@@ -237,14 +238,10 @@ private struct FolderRow: View {
                     showDeleteConfirm = true
                 }
                 Divider()
-                let evictable = state.folderEvictable(dirPath: node.path)
-                if !evictable.isEmpty {
-                    Button("Evict This Folder\u{2026}") { prepareEvictFolder(node, evictable) }
-                }
-                let rehydratable = state.folderRehydratable(dirPath: node.path)
-                if !rehydratable.isEmpty {
-                    Button("Download This Folder to Mac\u{2026}") { prepareRehydrateFolder(node, rehydratable) }
-                }
+                // Always offered (discoverable, like the Drives-screen buttons); each no-ops with a
+                // "nothing to do" note when the folder has nothing to evict / download.
+                Button("Evict This Folder\u{2026}") { prepareEvictFolder(node) }
+                Button("Download This Folder to Mac\u{2026}") { prepareRehydrateFolder(node) }
             }
             if expanded {
                 ForEach(node.children) { child in
@@ -323,9 +320,19 @@ private struct FolderRow: View {
         } message: { name in
             Text("Plug in \u{201c}\(name)\u{201d} so OpenPhoto can move these photos. Then try again.")
         }
+        .alert("Nothing to do", isPresented: Binding(
+            get: { folderNote != nil }, set: { if !$0 { folderNote = nil } }),
+            presenting: folderNote) { _ in
+            Button("OK", role: .cancel) { folderNote = nil }
+        } message: { note in Text(note) }
     }
 
-    private func prepareEvictFolder(_ node: FolderNode, _ items: [TimelineItem]) {
+    private func prepareEvictFolder(_ node: FolderNode) {
+        let items = state.folderEvictable(dirPath: node.path)
+        guard !items.isEmpty else {
+            folderNote = "Nothing to free up in \u{201C}\(node.name)\u{201D} — its photos aren\u{2019}t backed up yet, or are already evicted."
+            return
+        }
         switch state.resolveDrive(forHashes: Set(items.map(\.hash))) {
         case .ready: confirmEvictFolder = (node.name, items)
         case .needsDrive(let name): plugInPrompt = name
@@ -333,7 +340,12 @@ private struct FolderRow: View {
         }
     }
 
-    private func prepareRehydrateFolder(_ node: FolderNode, _ items: [TimelineItem]) {
+    private func prepareRehydrateFolder(_ node: FolderNode) {
+        let items = state.folderRehydratable(dirPath: node.path)
+        guard !items.isEmpty else {
+            folderNote = "Nothing to download in \u{201C}\(node.name)\u{201D} — its photos are already on this Mac."
+            return
+        }
         switch state.resolveDrive(forHashes: Set(items.map(\.hash))) {
         case .ready(let drives):
             state.startRehydrateJob(items: items, scopeLabel: node.name,
