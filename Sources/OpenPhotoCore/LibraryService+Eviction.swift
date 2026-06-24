@@ -97,7 +97,7 @@ extension LibraryService {
                 // otherwise copy it back hash-verified.
                 let restored = FileManager.default.fileExists(atPath: dest.path)
                     || VerifiedCopy.copy(from: drive.absoluteURL(forRelativePath: h.driveRelPath),
-                                         to: dest, expectedHash: h.hash)
+                                         to: dest, expectedHash: h.hash) == .copied
                 if restored, h.hash == item.hash { stillVaultID = local.descriptor.vaultID }
             }
             if let vid = stillVaultID {

@@ -92,7 +92,7 @@ public struct DriftReconciler: Sendable {
     /// Copy a verified-good copy back into a missing slot, then record it. Never overwrites.
     public func restore(relPath: String, expectedHash: String, from source: URL, on drive: Vault) throws {
         let dest = drive.absoluteURL(forRelativePath: relPath)
-        guard VerifiedCopy.copy(from: source, to: dest, expectedHash: expectedHash) else {
+        guard VerifiedCopy.copy(from: source, to: dest, expectedHash: expectedHash) == .copied else {
             throw DriftError.restoreFailed
         }
         try writeManifestEntry(hash: expectedHash, relPath: relPath, fileURL: dest, on: drive)
@@ -110,7 +110,7 @@ public struct DriftReconciler: Sendable {
         let tmp = drive.stateDirURL.appendingPathComponent("repair-" + UUID().uuidString)
         defer { try? fm.removeItem(at: tmp) }
         // 1. Stage + verify a good copy. A rotten/short source fails here — nothing is binned.
-        guard VerifiedCopy.copy(from: source, to: tmp, expectedHash: expectedHash) else {
+        guard VerifiedCopy.copy(from: source, to: tmp, expectedHash: expectedHash) == .copied else {
             throw DriftError.restoreFailed
         }
         // 2. Quarantine the rotten original (recoverable; keep its sidecar at the live location).

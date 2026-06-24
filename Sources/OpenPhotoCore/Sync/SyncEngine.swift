@@ -156,7 +156,7 @@ public struct SyncEngine: Sendable {
                         result.failed.append(item); result.conflicts += 1; continue // never overwrite
                     }
                 }
-                guard VerifiedCopy.copy(from: item.sourceURL, to: destURL, expectedHash: item.hash) else {
+                guard VerifiedCopy.copy(from: item.sourceURL, to: destURL, expectedHash: item.hash) == .copied else {
                     result.failed.append(item); continue
                 }
                 verified[item.destRelPath] = try Self.manifestEntry(for: item, at: destURL)
