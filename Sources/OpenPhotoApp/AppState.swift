@@ -2278,6 +2278,27 @@ final class AppState {
         presenceService()?.locations(forHash: item.hash) ?? []
     }
 
+    /// One entry per FOLDER this image lives in (a duplicate spans several), each tagged with whether
+    /// that copy is on the Mac (a local instance) or drive-only (on the drive, evicted from the Mac).
+    /// Lets the Inspector show every location and mark an evicted copy honestly instead of a blanket
+    /// "This Mac".
+    struct FolderPresence: Identifiable, Equatable {
+        var id: String { folder }
+        let folder: String      // dirPath ("" = library root)
+        let onMac: Bool         // a local copy exists in this folder
+    }
+    func folderPresences(for item: TimelineItem) -> [FolderPresence] {
+        guard let cat = library?.catalog else { return [] }
+        let local = Set((try? cat.instances(forHash: item.hash))?.map(\.dirPath) ?? [])
+        var drive = Set<String>()
+        for vr in durableVaults {
+            for r in (try? cat.vaultPresenceRows(forVault: vr.id)) ?? [] where r.hash == item.hash {
+                drive.insert(r.dirPath)
+            }
+        }
+        return local.union(drive).sorted().map { FolderPresence(folder: $0, onMac: local.contains($0)) }
+    }
+
     /// How many of `items` appear to exist only on this Mac (no confirmed/believed
     /// copy elsewhere). No presence info yet → treat all as only-copies.
     func onlyCopyCount(_ items: [TimelineItem]) -> Int {

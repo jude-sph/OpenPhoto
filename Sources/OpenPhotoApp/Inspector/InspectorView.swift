@@ -195,14 +195,19 @@ struct InspectorView: View {
                 Divider().overlay(Theme.hairline)
 
                 section("Locations") {
-                    let locations = state.locations(for: item)
-                    if locations.isEmpty {
+                    // Every folder this image lives in (a duplicate spans several), each tagged Mac vs
+                    // drive-only — so an evicted copy reads honestly instead of a blanket "This Mac".
+                    let folders = state.folderPresences(for: item)
+                    ForEach(folders) { folderPresenceRow($0) }
+                    // Drives it's backed up on / devices it was sent to. The per-hash "This Mac" row is
+                    // replaced by the per-folder rows above, so drop it here.
+                    let devices = state.locations(for: item).filter {
+                        if case .thisMac = $0.place { return false }; return true
+                    }
+                    ForEach(devices) { locationRow($0) }
+                    if folders.isEmpty && devices.isEmpty {
                         Text("Only on this Mac")
                             .font(.system(size: 12)).foregroundStyle(Theme.textFaint)
-                    } else {
-                        ForEach(locations) { loc in
-                            locationRow(loc)
-                        }
                     }
                     // At-a-glance "not backed up": flag absence from the canonical drive.
                     if !state.durableVaults.isEmpty && !state.isBackedUpOnCanonical(item) {
@@ -434,6 +439,22 @@ struct InspectorView: View {
                 GridRow { gLabel("Duration"); gValue(String(format: "%.1fs", d)) }
             }
             GridRow { gLabel("Kind"); gValue(item.livePairHash != nil ? "Live Photo" : item.kind) }
+        }
+    }
+
+    @ViewBuilder private func folderPresenceRow(_ fp: AppState.FolderPresence) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: fp.onMac ? "laptopcomputer" : "sdcard")
+                .foregroundStyle(Theme.textDim).frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(fp.folder.isEmpty ? "(root)" : fp.folder)
+                    .font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
+                Text(fp.onMac ? "On this Mac" : "On the drive only")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(fp.onMac ? Theme.textFaint : Theme.amber)
+            }
+            Spacer()
+            if fp.onMac { Image(systemName: "checkmark").foregroundStyle(Theme.green) }
         }
     }
 
