@@ -82,6 +82,15 @@ extension AppState {
         // If the library was closed mid-sync, skip the post-sync bookkeeping (it would run against a
         // torn-down AppState); teardown already cleared syncActivity.
         guard library != nil else { syncTask = nil; syncCancelFlag = nil; syncRaw = nil; return }
+        // Show a "finishing" state during the post-copy bookkeeping (writing the drive's catalog
+        // snapshot + albums can take a while on a big library) so the UI doesn't sit frozen on the last
+        // copied file. The copy itself is already done + safe at this point.
+        if !r.cancelled, var a = syncActivity, a.phase == .running {
+            a.stage = .finishing; a.bytesDone = a.bytesTotal; a.filesDone = a.filesTotal
+            a.currentName = ""; a.speedBytesPerSec = 0; a.etaSeconds = nil
+            syncActivity = a
+        }
+        await Task.yield()   // let SwiftUI paint the "finishing" state before the slow bookkeeping
         // (Moved verbatim from the old SyncPlanSheet.runApply post-apply block.)
         try? refreshCanonicalPresence(driveVault: drive)
         refreshPendingDeletions()

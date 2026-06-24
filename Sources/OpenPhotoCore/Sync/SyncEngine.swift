@@ -149,7 +149,7 @@ public struct SyncEngine: Sendable {
             if shouldCancel?() == true { result.cancelled = true; break }
             let name = (item.destRelPath as NSString).lastPathComponent
             let base = bytesDone
-            progress?(SyncProgress(stage: .copying, done: i, total: total,
+            progress?(SyncProgress(stage: .copying, done: i + 1, total: total,
                                    bytesDone: base, bytesTotal: bytesTotal, currentName: name))
             let destURL = drive.rootURL.appendingPathComponent(item.destRelPath)
             do {
@@ -166,7 +166,7 @@ public struct SyncEngine: Sendable {
                 let outcome = VerifiedCopy.copy(
                     from: item.sourceURL, to: destURL, expectedHash: item.hash,
                     onBytes: { fileBytes in
-                        progress?(SyncProgress(stage: .copying, done: i, total: total,
+                        progress?(SyncProgress(stage: .copying, done: i + 1, total: total,
                                                bytesDone: base + fileBytes, bytesTotal: bytesTotal,
                                                currentName: name))
                     },

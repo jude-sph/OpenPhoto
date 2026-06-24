@@ -28,6 +28,10 @@ struct DrivesView: View {
     // Cross-drive integrity
     @State private var consensusRepair = false
 
+    /// A backup sync (including its slow "finishing" snapshot write) is in flight. While it runs,
+    /// other drive operations are disabled — they'd contend with the same files/manifest.
+    private var syncing: Bool { state.syncActivity?.phase == .running }
+
     var body: some View {
         mainContent
             .sheet(item: $drift) { d in DriftReviewSheet(state: state, drive: d.drive, verify: d.verify) }
@@ -97,6 +101,7 @@ struct DrivesView: View {
                 Button("Add Drive\u{2026}") { state.addDriveViaPanel() }.controlSize(.small)
                 Button("Quick View Folder\u{2026}") { state.quickViewFolderViaPanel() }.controlSize(.small)
                 Button("Verify All Drives") { consensusRepair = true }.controlSize(.small)
+                    .disabled(syncing)
             }
             .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
             Divider().overlay(Theme.hairline)
@@ -140,7 +145,7 @@ struct DrivesView: View {
                     }
                 }
                 .controlSize(.small)
-                .disabled(!present)
+                .disabled(!present || syncing)
             }
             if vr.id != state.canonicalVault?.id,
                let canon = state.canonicalVault, state.driveIsPresent(canon),
@@ -156,16 +161,16 @@ struct DrivesView: View {
                     }
                 }
                 .controlSize(.small)
-                .disabled((vr.role == "backup" && behind == 0) || cloning || !present)
+                .disabled((vr.role == "backup" && behind == 0) || cloning || !present || syncing)
             }
             Button("Sync\u{2026}") { state.syncSheetDrive = state.openVault(for: vr) }
-                .controlSize(.small).disabled(!present)
+                .controlSize(.small).disabled(!present || syncing)
             Button("Check") {
                 if let v = state.openVault(for: vr) { drift = DriftPresentation(drive: v, verify: false) }
-            }.controlSize(.small).disabled(!present)
+            }.controlSize(.small).disabled(!present || syncing)
             Button("Verify Integrity") {
                 if let v = state.openVault(for: vr) { drift = DriftPresentation(drive: v, verify: true) }
-            }.controlSize(.small).disabled(!present)
+            }.controlSize(.small).disabled(!present || syncing)
             Button("Quick View") {
                 Task { await state.startQuickView(root: URL(fileURLWithPath: vr.rootPath)) }
             }.controlSize(.small).disabled(!present)

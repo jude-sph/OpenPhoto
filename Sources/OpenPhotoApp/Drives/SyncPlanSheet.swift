@@ -101,16 +101,26 @@ struct SyncPlanSheet: View {
 
     @ViewBuilder private func runningView(_ a: SyncActivity) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            ProgressView(value: Double(a.bytesDone), total: Double(max(a.bytesTotal, 1))).tint(Theme.accent)
-            Text("\(byteString(a.bytesDone)) / \(byteString(a.bytesTotal)) · \(speedString(a.speedBytesPerSec))"
-                 + (a.etaSeconds.map { " · ~\(etaString($0)) left" } ?? ""))
-                .font(.system(size: 13).monospacedDigit())
-                .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-            Text("\(a.stage.rawValue.capitalized) \(a.currentName) · \(a.filesDone)/\(a.filesTotal) files")
-                .font(.system(size: 11)).foregroundStyle(Theme.textDim).lineLimit(1).truncationMode(.middle)
+            if a.stage == .finishing {
+                // Copy is done + safe; this is the (potentially slow) catalog-snapshot/album write.
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Finishing — saving the catalog to the drive…").font(.system(size: 13))
+                }
+                Text("\(byteString(a.bytesTotal)) copied · \(a.filesTotal) files · keep the drive connected")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textDim)
+            } else {
+                ProgressView(value: Double(a.bytesDone), total: Double(max(a.bytesTotal, 1))).tint(Theme.accent)
+                Text("\(byteString(a.bytesDone)) / \(byteString(a.bytesTotal)) · \(speedString(a.speedBytesPerSec))"
+                     + (a.etaSeconds.map { " · ~\(etaString($0)) left" } ?? ""))
+                    .font(.system(size: 13).monospacedDigit())
+                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                Text("Copying \(a.currentName) · \(a.filesDone)/\(a.filesTotal) files")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textDim).lineLimit(1).truncationMode(.middle)
+            }
             Spacer()
             HStack {
-                Button("Cancel", role: .destructive) { state.cancelSync() }
+                if a.stage != .finishing { Button("Cancel", role: .destructive) { state.cancelSync() } }
                 Spacer()
                 Button("Minimize") { dismiss() }.keyboardShortcut(.defaultAction)
             }
