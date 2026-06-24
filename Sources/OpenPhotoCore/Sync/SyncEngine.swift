@@ -119,79 +119,85 @@ public struct SyncEngine: Sendable {
 
     public func apply(_ plan: SyncPlan, destinationVault drive: Vault, volume: DriveVolume,
                       event: String = "sync", counterpartyVaultID: String? = nil,
+                      shouldCancel: (@Sendable () -> Bool)? = nil,
                       progress: (@Sendable (SyncProgress) -> Void)? = nil) async -> SyncResult {
         let fm = FileManager.default
         var result = SyncResult()
-        result.conflicts = plan.conflicts.count
+        for item in plan.conflicts { result.failed.append(FailedItem(item: item, reason: .conflict)) }
 
-        // Free-space guard — never start a copy that will ENOSPC.
         if let free = try? volume.freeSpaceBytes(), free < plan.totalCopyBytes {
-            result.failed = plan.copies
+            result.failed.append(contentsOf: plan.copies.map { FailedItem(item: $0, reason: .copyFailed) })
             return result
         }
 
-        // Verified entries for the manifest (path -> ManifestEntry); seed with prior entries
-        // whose files still exist (additive).
         var verified: [String: ManifestEntry] = [:]
         if let prior = try? Manifest.read(from: drive.manifestURL) {
-            for e in prior where fm.fileExists(
-                atPath: drive.rootURL.appendingPathComponent(e.path).path) {
+            for e in prior where fm.fileExists(atPath: drive.rootURL.appendingPathComponent(e.path).path) {
                 verified[e.path] = e
             }
         }
 
         let total = plan.copies.count
+        let bytesTotal = plan.totalCopyBytes
+        var bytesDone: Int64 = 0
         for (i, item) in plan.copies.enumerated() {
+            if shouldCancel?() == true { result.cancelled = true; break }
+            let name = (item.destRelPath as NSString).lastPathComponent
+            let base = bytesDone
             progress?(SyncProgress(stage: .copying, done: i, total: total,
-                                   currentName: (item.destRelPath as NSString).lastPathComponent))
+                                   bytesDone: base, bytesTotal: bytesTotal, currentName: name))
             let destURL = drive.rootURL.appendingPathComponent(item.destRelPath)
             do {
-                // Resume pre-check: a file already at dest?
                 if fm.fileExists(atPath: destURL.path) {
                     let onDisk = try ContentHash.ofFile(at: destURL).stringValue
                     if onDisk == item.hash {
                         verified[item.destRelPath] = try Self.manifestEntry(for: item, at: destURL)
-                        result.skipped += 1; continue
+                        result.skipped += 1; bytesDone += item.size; continue
                     } else {
-                        result.failed.append(item); result.conflicts += 1; continue // never overwrite
+                        result.failed.append(FailedItem(item: item, reason: .conflict)); continue
                     }
                 }
-                guard VerifiedCopy.copy(from: item.sourceURL, to: destURL, expectedHash: item.hash) == .copied else {
-                    result.failed.append(item); continue
+                let outcome = VerifiedCopy.copy(
+                    from: item.sourceURL, to: destURL, expectedHash: item.hash,
+                    onBytes: { fileBytes in
+                        progress?(SyncProgress(stage: .copying, done: i, total: total,
+                                               bytesDone: base + fileBytes, bytesTotal: bytesTotal,
+                                               currentName: name))
+                    },
+                    shouldCancel: { shouldCancel?() == true })
+                switch outcome {
+                case .copied:
+                    verified[item.destRelPath] = try Self.manifestEntry(for: item, at: destURL)
+                    result.copied += 1; bytesDone += item.size
+                case .cancelled:
+                    result.cancelled = true
+                case .failed(let reason):
+                    result.failed.append(FailedItem(item: item, reason: reason))
                 }
-                verified[item.destRelPath] = try Self.manifestEntry(for: item, at: destURL)
-                result.copied += 1
+                if result.cancelled { break }
             } catch {
-                // Do NOT delete destURL here. copyItem only ever writes to `tmp` (cleaned by the
-                // defer) and moveItem is atomic, so destURL is never a partial we own — it is either
-                // absent, a pre-existing file, or an already-verified file. Deleting it would erase
-                // good data (violating the never-hard-delete invariant). Just record the failure;
-                // the next reconcile heals any file that landed but missed the manifest.
-                result.failed.append(item)
+                result.failed.append(FailedItem(item: item, reason: .copyFailed))
             }
         }
 
-        // Sidecars (no hash gate; not listed in the manifest).
-        for item in plan.sidecarUpdates {
-            let destURL = drive.rootURL.appendingPathComponent(item.destRelPath)
-            do {
-                try fm.createDirectory(at: destURL.deletingLastPathComponent(),
-                                       withIntermediateDirectories: true)
-                try AtomicFile.write(try Data(contentsOf: item.sourceURL), to: destURL)
-                result.sidecarsWritten += 1
-            } catch { result.failed.append(item) }
+        if !result.cancelled {
+            for item in plan.sidecarUpdates {
+                let destURL = drive.rootURL.appendingPathComponent(item.destRelPath)
+                do {
+                    try fm.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try AtomicFile.write(try Data(contentsOf: item.sourceURL), to: destURL)
+                    result.sidecarsWritten += 1
+                } catch { result.failed.append(FailedItem(item: item, reason: .copyFailed)) }
+            }
         }
 
-        // Atomic manifest rewrite.
-        progress?(SyncProgress(stage: .finishing, done: total, total: total, currentName: ""))
+        progress?(SyncProgress(stage: .finishing, done: total, total: total,
+                               bytesDone: bytesDone, bytesTotal: bytesTotal, currentName: ""))
         try? Manifest.write(verified.values.sorted { $0.path < $1.path }, to: drive.manifestURL)
 
-        // Sync-log on both ends.
         let summary = "\(result.copied) copied, \(result.skipped) skipped, " +
                       "\(result.sidecarsWritten) sidecars, \(result.conflicts) conflicts, " +
-                      "\(result.failed.count) failed"
-        // Sync-log. Mac→drive sync logs both ends; a drive→drive op (clone) logs only the
-        // destination drive with the supplied counterparty.
+                      "\(result.retryableFailures.count) failed" + (result.cancelled ? ", cancelled" : "")
         if event == "sync" {
             library.appendSyncLog(vault: drive, event: "sync", summary: summary,
                                   counterpartyKey: library.vaults.first?.descriptor.vaultID ?? "")

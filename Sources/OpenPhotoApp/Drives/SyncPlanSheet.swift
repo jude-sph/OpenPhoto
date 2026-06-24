@@ -104,9 +104,9 @@ struct SyncPlanSheet: View {
         guard !running, let plan, let lib = state.library else { return }
         running = true
         let engine = SyncEngine(library: lib)
-        let r = await engine.apply(plan, destinationVault: drive, volume: volume) { p in
+        let r = await engine.apply(plan, destinationVault: drive, volume: volume, progress: { p in
             Task { @MainActor in progress = p }
-        }
+        })
         try? state.refreshCanonicalPresence(driveVault: drive)
         state.refreshPendingDeletions()   // a sync can newly satisfy on-drive eligibility
         let pending = state.drivePendingDeletions[drive.descriptor.vaultID] ?? []
