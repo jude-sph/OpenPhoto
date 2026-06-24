@@ -116,9 +116,15 @@ extension AppState {
     /// paths run: a drift-scan of every present durable drive re-derives canonical presence from disk,
     /// then `refreshQueries` rebuilds the timeline/folder/bin queries off that fresh state.
     @MainActor func reloadLibraryAfterStorageChange() async {
+        // Evict/rehydrate change only LOCAL instances (already rescanned by the core op); the drive's
+        // contents are untouched. Rebuild each present drive's vault_presence from its MANIFEST (full,
+        // Mac-aligned) — NOT via driftScan, which limits presence to size+mtime matches and can wrongly
+        // drop rows (e.g. exFAT mtime granularity classes fresh files "changed"), making evicted /
+        // drive-only photos vanish from the folders and "Download All to Mac" find nothing.
         for vr in durableVaults where driveIsPresent(vr) {
-            if let v = openVault(for: vr) { _ = driftScan(v) }
+            if let v = openVault(for: vr) { try? refreshCanonicalPresence(driveVault: v) }
         }
+        reloadCanonicalPresence()
         try? refreshQueries()
     }
 }

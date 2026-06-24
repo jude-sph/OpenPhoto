@@ -2291,7 +2291,10 @@ final class AppState {
         let outcome = await Task.detached(priority: .userInitiated) {
             (try? await lib.rehydrate(items, connectedCanonical: drives)) ?? RehydrateOutcome()
         }.value
-        for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
+        // Rebuild presence from each drive's MANIFEST (full), not a drift scan — a scan's size+mtime
+        // gate can wrongly drop drive-only rows (exFAT mtime granularity), vanishing the photos.
+        for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { try? refreshCanonicalPresence(driveVault: v) } }
+        reloadCanonicalPresence()
         try? refreshQueries()
         return outcome
     }
@@ -2315,8 +2318,10 @@ final class AppState {
                 try? await lib.rescan(vaultID: vid)
             }
         }
-        // driftScan re-derives canonical presence first; refreshQueries then reads the fresh state.
-        for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { _ = driftScan(v) } }
+        // Rebuild presence from each drive's MANIFEST (full), not a drift scan — a scan's size+mtime
+        // gate can wrongly drop drive-only rows (exFAT mtime granularity), making evicted photos vanish.
+        for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { try? refreshCanonicalPresence(driveVault: v) } }
+        reloadCanonicalPresence()
         try? refreshQueries()
         return outcome
     }

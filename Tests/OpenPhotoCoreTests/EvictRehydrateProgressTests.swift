@@ -167,3 +167,15 @@ struct StorageTestHarness {
         progress: nil, shouldCancel: { true })       // cancel immediately
     #expect(outcome.evicted == 0)                    // nothing trashed
 }
+
+// After evict, the item must remain visible as DRIVE-ONLY: its local instance is gone but the drive's
+// vault_presence row is untouched, so `allDriveOnly()` surfaces it. (Regression guard: the catalog
+// side of "evicted photos must not vanish" — the drive presence must survive a local evict.)
+@Test func evictLeavesItemsAsDriveOnly() async throws {
+    let h = try StorageTestHarness.make()
+    let items = try h.makeLocalBackedUp(count: 2, sizeEach: 1000)
+    #expect(try h.lib.allDriveOnly().isEmpty)        // present locally → not drive-only yet
+    _ = try await h.lib.evict(items, mode: .verified,
+        connectedCanonical: [h.drive], canonicalPresence: [], progress: nil, shouldCancel: nil)
+    #expect(Set(try h.lib.allDriveOnly().map(\.hash)) == Set(items.map(\.hash)))   // now drive-only
+}

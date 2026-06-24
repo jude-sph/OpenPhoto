@@ -31,6 +31,7 @@ struct DrivesView: View {
     @State private var confirmEvictAll = false
     @State private var evictAllItems: [TimelineItem] = []
     @State private var plugInPrompt: String?      // drive name to prompt the user to connect
+    @State private var storageNote: String?       // "nothing to do" feedback for the global buttons
 
     /// A backup sync (including its slow "finishing" snapshot write) is in flight. While it runs,
     /// other drive operations are disabled — they'd contend with the same files/manifest.
@@ -109,6 +110,11 @@ struct DrivesView: View {
             } message: { name in
                 Text("Plug in \u{201c}\(name)\u{201d} so OpenPhoto can move these photos. Then try again.")
             }
+            .alert("Nothing to do", isPresented: Binding(
+                get: { storageNote != nil }, set: { if !$0 { storageNote = nil } }),
+                presenting: storageNote) { _ in
+                Button("OK", role: .cancel) { storageNote = nil }
+            } message: { note in Text(note) }
             .onChange(of: state.conflictingCanonical?.id) { _, _ in
                 if let vr = state.conflictingCanonical, !conflictDismissed.contains(vr.id) { canonicalConflict = vr }
             }
@@ -151,7 +157,10 @@ struct DrivesView: View {
 
     private func prepareEvictAll() {
         let items = state.allEvictableItems()
-        guard !items.isEmpty else { return }
+        guard !items.isEmpty else {
+            storageNote = "Nothing to free up — every photo on this Mac is either not yet backed up or already evicted."
+            return
+        }
         switch state.resolveDrive(forHashes: Set(items.map(\.hash))) {
         case .ready: evictAllItems = items; confirmEvictAll = true
         case .needsDrive(let name): plugInPrompt = name
@@ -161,7 +170,10 @@ struct DrivesView: View {
 
     private func prepareRehydrateAll() {
         let items = state.allDriveOnlyItems()
-        guard !items.isEmpty else { return }
+        guard !items.isEmpty else {
+            storageNote = "Nothing to download — every photo on your drive is already on this Mac."
+            return
+        }
         switch state.resolveDrive(forHashes: Set(items.map(\.hash))) {
         case .ready(let drives):
             state.startRehydrateJob(items: items, scopeLabel: "all photos",
