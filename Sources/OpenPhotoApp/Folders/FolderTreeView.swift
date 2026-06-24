@@ -127,6 +127,8 @@ private struct FolderRow: View {
     @State private var untagName = ""
     @State private var showRename = false
     @State private var renameText = ""
+    @State private var confirmEvictFolder: (name: String, items: [TimelineItem])?
+    @State private var plugInPrompt: String?
 
     private var expanded: Bool { state.expandedFolders.contains(node.path) }
 
@@ -234,6 +236,15 @@ private struct FolderRow: View {
                 Button("Delete Folder\u{2026}", role: .destructive) {
                     showDeleteConfirm = true
                 }
+                Divider()
+                let evictable = state.folderEvictable(dirPath: node.path)
+                if !evictable.isEmpty {
+                    Button("Evict This Folder\u{2026}") { prepareEvictFolder(node, evictable) }
+                }
+                let rehydratable = state.folderRehydratable(dirPath: node.path)
+                if !rehydratable.isEmpty {
+                    Button("Download This Folder to Mac\u{2026}") { prepareRehydrateFolder(node, rehydratable) }
+                }
             }
             if expanded {
                 ForEach(node.children) { child in
@@ -289,6 +300,47 @@ private struct FolderRow: View {
             }
         } message: {
             Text("Photos inside this folder move to the Bin and can be restored from there. The folder is removed from all connected drives.")
+        }
+        // Evict-folder confirmation
+        .alert("Evict \u{201C}\(confirmEvictFolder?.name ?? "")\u{201D}?", isPresented: Binding(
+            get: { confirmEvictFolder != nil }, set: { if !$0 { confirmEvictFolder = nil } }),
+            presenting: confirmEvictFolder) { ctx in
+            Button("Cancel", role: .cancel) { confirmEvictFolder = nil }
+            Button("Free Up Space", role: .destructive) {
+                state.startEvictJob(items: ctx.items, scopeLabel: ctx.name,
+                                    driveName: state.connectedDrivesCanonicalFirst().first?.rootURL.lastPathComponent ?? "")
+                state.jobSheetDrive = state.jobDrive; confirmEvictFolder = nil
+            }
+        } message: { ctx in
+            let bytes = ctx.items.reduce(Int64(0)) { $0 + $1.size }
+            Text("Move \(ctx.items.count) original\(ctx.items.count == 1 ? "" : "s") (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))) in this folder to the Trash. They stay on your drive — download them back anytime.")
+        }
+        // Plug-in-your-drive prompt
+        .confirmationDialog("Plug in your drive", isPresented: Binding(
+            get: { plugInPrompt != nil }, set: { if !$0 { plugInPrompt = nil } }),
+            titleVisibility: .visible, presenting: plugInPrompt) { _ in
+            Button("OK", role: .cancel) { plugInPrompt = nil }
+        } message: { name in
+            Text("Plug in \u{201c}\(name)\u{201d} so OpenPhoto can move these photos. Then try again.")
+        }
+    }
+
+    private func prepareEvictFolder(_ node: FolderNode, _ items: [TimelineItem]) {
+        switch state.resolveDrive(forHashes: Set(items.map(\.hash))) {
+        case .ready: confirmEvictFolder = (node.name, items)
+        case .needsDrive(let name): plugInPrompt = name
+        case .nothingToDo: break
+        }
+    }
+
+    private func prepareRehydrateFolder(_ node: FolderNode, _ items: [TimelineItem]) {
+        switch state.resolveDrive(forHashes: Set(items.map(\.hash))) {
+        case .ready(let drives):
+            state.startRehydrateJob(items: items, scopeLabel: node.name,
+                                    driveName: drives.first?.rootURL.lastPathComponent ?? "")
+            state.jobSheetDrive = state.jobDrive
+        case .needsDrive(let name): plugInPrompt = name
+        case .nothingToDo: break
         }
     }
 }
