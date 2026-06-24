@@ -1,7 +1,7 @@
 import SwiftUI
 import OpenPhotoCore
 
-struct SyncPlanSheet: View {
+struct DriveJobSheet: View {
     @Bindable var state: AppState
     let drive: Vault
     @Environment(\.dismiss) private var dismiss
@@ -18,7 +18,7 @@ struct SyncPlanSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Sync to \(drive.rootURL.lastPathComponent)")
+                Text(state.activeJob.map(title) ?? "Sync to \(drive.rootURL.lastPathComponent)")
                     .font(.system(size: 15, weight: .semibold))
                 Spacer()
                 Button("Close") { dismiss() }.disabled(isRunning)
@@ -28,8 +28,8 @@ struct SyncPlanSheet: View {
                 if let a = state.activeJob {
                     if a.phase == .running {
                         runningView(a)
-                    } else if case .sync(let r) = a.result, !r.failed.isEmpty {
-                        failureView(r)
+                    } else if !failures(a).isEmpty {
+                        failureView(a)
                     } else {
                         finishedView(a)
                     }
@@ -42,6 +42,19 @@ struct SyncPlanSheet: View {
         }
         .frame(width: 540, height: 360)
         .task { await computePlan() }
+    }
+
+    // MARK: Kind-aware labels
+
+    private func verb(_ a: DriveJob) -> String {
+        switch a.kind { case .sync: "Copying"; case .evict: "Verifying"; case .rehydrate: "Downloading" }
+    }
+    private func title(_ a: DriveJob) -> String {
+        switch a.kind {
+        case .sync: "Sync to \(a.driveName)"
+        case .evict: "Free up Mac space" + (a.scopeLabel.isEmpty ? "" : " · \(a.scopeLabel)")
+        case .rehydrate: "Download to Mac" + (a.scopeLabel.isEmpty ? "" : " · \(a.scopeLabel)")
+        }
     }
 
     private func computePlan() async {
@@ -102,10 +115,11 @@ struct SyncPlanSheet: View {
     @ViewBuilder private func runningView(_ a: DriveJob) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if a.stage == .finishing {
-                // Copy is done + safe; this is the (potentially slow) catalog-snapshot/album write.
+                // Copy is done + safe; for sync this is the (potentially slow) catalog-snapshot/album write.
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Finishing — saving the catalog to the drive…").font(.system(size: 13))
+                    Text(a.kind == .sync ? "Finishing — saving the catalog to the drive…" : "Finishing…")
+                        .font(.system(size: 13))
                 }
                 Text("\(byteString(a.bytesTotal)) copied · \(a.filesTotal) files · keep the drive connected")
                     .font(.system(size: 11)).foregroundStyle(Theme.textDim)
@@ -115,7 +129,7 @@ struct SyncPlanSheet: View {
                      + (a.etaSeconds.map { " · ~\(etaString($0)) left" } ?? ""))
                     .font(.system(size: 13).monospacedDigit())
                     .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                Text("Copying \(a.currentName) · \(a.filesDone)/\(a.filesTotal) files")
+                Text("\(verb(a)) \(a.currentName) · \(a.filesDone)/\(a.filesTotal) files")
                     .font(.system(size: 11)).foregroundStyle(Theme.textDim).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
@@ -129,18 +143,31 @@ struct SyncPlanSheet: View {
 
     // MARK: Finished — success
 
+    private func finishedHeadline(_ a: DriveJob) -> String {
+        switch a.result {
+        case .sync: "Sync complete"; case .evict: "Freed up space"
+        case .rehydrate: "Download complete"; case .none: "Done"
+        }
+    }
+    private func finishedDetail(_ a: DriveJob) -> String {
+        switch a.result {
+        case let .sync(r): "\(r.copied) copied · \(r.skipped) already there · \(r.sidecarsWritten) sidecars"
+        case let .evict(o): "\(o.evicted) photos moved to Trash" + (o.refused > 0 ? " · \(o.refused) kept (couldn’t verify on the drive)" : "")
+        case let .rehydrate(done, failed): "\(done) photos downloaded" + (failed.isEmpty ? "" : " · \(failed.count) failed")
+        case .none: ""
+        }
+    }
+
     @ViewBuilder private func finishedView(_ a: DriveJob) -> some View {
-        let r: SyncResult? = { if case .sync(let r) = a.result { return r }; return nil }()
+        let syncConflicts: Int = { if case let .sync(r) = a.result { return r.conflicts }; return 0 }()
         VStack(alignment: .leading, spacing: 8) {
-            Text(a.phase == .cancelled ? "Sync cancelled" : "Sync complete")
+            Text(a.phase == .cancelled ? "\(title(a)) — cancelled" : finishedHeadline(a))
                 .font(.system(size: 14, weight: .semibold))
-            if let r {
-                Text("\(r.copied) copied · \(r.skipped) already there · \(r.sidecarsWritten) sidecars")
-                    .font(.system(size: 12)).foregroundStyle(Theme.textDim)
-                if r.conflicts > 0 {
-                    Text("\(r.conflicts) conflicts skipped")
-                        .font(.system(size: 12)).foregroundStyle(.orange)
-                }
+            Text(finishedDetail(a))
+                .font(.system(size: 12)).foregroundStyle(Theme.textDim)
+            if syncConflicts > 0 {
+                Text("\(syncConflicts) conflicts skipped")
+                    .font(.system(size: 12)).foregroundStyle(.orange)
             }
             Spacer()
             HStack {
@@ -153,15 +180,23 @@ struct SyncPlanSheet: View {
 
     // MARK: Finished — failure report
 
-    @ViewBuilder private func failureView(_ r: SyncResult) -> some View {
+    /// The retryable failure list, drawn from whichever result carries `FailedItem`s. Sync + rehydrate
+    /// both fail with `FailedItem`s (each wraps a `PlanItem`); evict has no per-file failure list.
+    private func failures(_ a: DriveJob) -> [FailedItem] {
+        switch a.result { case let .sync(r): r.failed; case let .rehydrate(_, f): f; default: [] }
+    }
+
+    @ViewBuilder private func failureView(_ a: DriveJob) -> some View {
+        let failed = failures(a)
+        let retryable = failed.filter { $0.reason.isRetryable }
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("\(r.failed.count) of \(r.copied + r.failed.count) files didn’t sync",
+                Label("\(failed.count) of \(succeededCount(a) + failed.count) files didn’t \(a.kind == .rehydrate ? "download" : "sync")",
                       systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 Spacer()
                 Toggle("Thumbnails", isOn: $showThumbs).toggleStyle(.switch).controlSize(.mini)
             }
-            List(r.failed, id: \.item.destRelPath) { f in
+            List(failed, id: \.item.destRelPath) { f in
                 HStack(spacing: 8) {
                     if f.reason.isRetryable {
                         Toggle("", isOn: Binding(
@@ -185,15 +220,31 @@ struct SyncPlanSheet: View {
                 }
             }.frame(maxHeight: .infinity)
             HStack {
-                Button("Retry \(retrySelection.count) selected") {
-                    let items = r.failed.filter { retrySelection.contains($0.item.destRelPath) }.map(\.item)
-                    state.retrySyncFailures(items, drive: drive)
-                }.disabled(retrySelection.isEmpty)
+                if a.kind != .evict {
+                    Button("Retry \(retrySelection.count) selected") {
+                        let selected = failed.filter { retrySelection.contains($0.item.destRelPath) }
+                        switch a.kind {
+                        case .rehydrate:
+                            state.retryRehydrateFailures(selected, scopeLabel: a.scopeLabel, driveName: a.driveName)
+                        default:   // .sync (.evict is excluded above)
+                            state.retrySyncFailures(selected.map(\.item), drive: drive)
+                        }
+                    }.disabled(retrySelection.isEmpty)
+                }
                 Spacer()
                 Button("Done") { state.dismissSyncResult(); dismiss() }.keyboardShortcut(.defaultAction)
             }
         }.padding(20)
-        .onAppear { retrySelection = Set(r.retryableFailures.map { $0.item.destRelPath }) }   // default-on retryable
+        .onAppear { retrySelection = Set(retryable.map { $0.item.destRelPath }) }   // default-on retryable
+    }
+
+    /// Count of files that succeeded, for the "N of M didn’t …" header.
+    private func succeededCount(_ a: DriveJob) -> Int {
+        switch a.result {
+        case let .sync(r): r.copied
+        case let .rehydrate(done, _): done
+        default: 0
+        }
     }
 
     private func restore(_ e: PendingDeletion) {

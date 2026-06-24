@@ -89,6 +89,15 @@ extension AppState {
         }
     }
 
+    /// Re-run a rehydrate for a chosen subset of prior failures. We re-resolve the live drive-only
+    /// items by hash (presence may have changed) and start a fresh job for whatever still applies.
+    func retryRehydrateFailures(_ failed: [FailedItem], scopeLabel: String, driveName: String) {
+        let hashes = Set(failed.map { $0.item.hash })
+        let items = allDriveOnlyItems().filter { hashes.contains($0.hash) }
+        guard !items.isEmpty else { return }
+        startRehydrateJob(items: items, scopeLabel: scopeLabel, driveName: driveName)
+    }
+
     @MainActor private func finishStorageJob(result: DriveJobResult, cancelled: Bool) async {
         jobTickerTask?.cancel(); jobTickerTask = nil
         guard library != nil else { jobTask = nil; jobCancelFlag = nil; jobRaw = nil; return }
