@@ -8,12 +8,12 @@ struct SyncPlanSheet: View {
 
     @State private var plan: SyncPlan?
     @State private var freeBytes: Int64 = 0
-    @State private var progress: SyncProgress?
-    @State private var result: SyncResult?
-    @State private var running = false
     @State private var deletionSelection: Set<String> = []
+    @State private var showThumbs = false
+    @State private var retrySelection: Set<String> = []   // by item.destRelPath
 
     private var volume: FileSystemVolume { FileSystemVolume(rootURL: drive.rootURL) }
+    private var isRunning: Bool { state.syncActivity?.phase == .running }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,14 +21,23 @@ struct SyncPlanSheet: View {
                 Text("Sync to \(drive.rootURL.lastPathComponent)")
                     .font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Button("Close") { dismiss() }.disabled(running)
+                Button("Close") { dismiss() }.disabled(isRunning)
             }.padding(16)
             Divider().overlay(Theme.hairline)
             Group {
-                if let result { resultView(result) }
-                else if let p = progress { progressView(p) }
-                else if let plan { planView(plan) }
-                else { ProgressView().padding(24) }
+                if let a = state.syncActivity {
+                    if a.phase == .running {
+                        runningView(a)
+                    } else if let r = a.result, !r.failed.isEmpty {
+                        failureView(r)
+                    } else {
+                        finishedView(a)
+                    }
+                } else if let plan {
+                    planView(plan)
+                } else {
+                    ProgressView().padding(24)
+                }
             }.frame(maxHeight: .infinity)
         }
         .frame(width: 540, height: 360)
@@ -36,11 +45,13 @@ struct SyncPlanSheet: View {
     }
 
     private func computePlan() async {
-        guard let lib = state.library else { return }
+        guard state.syncActivity == nil, let lib = state.library else { return }
         let engine = SyncEngine(library: lib)
         plan = (try? engine.plan(sources: lib.vaults, destinationVault: drive)) ?? SyncPlan()
         freeBytes = (try? volume.freeSpaceBytes()) ?? 0
     }
+
+    // MARK: Confirm
 
     @ViewBuilder private func planView(_ plan: SyncPlan) -> some View {
         let enough = freeBytes >= plan.totalCopyBytes
@@ -70,7 +81,7 @@ struct SyncPlanSheet: View {
             Spacer()
             HStack {
                 Spacer()
-                Button("Sync") { Task { await runApply() } }
+                Button("Sync") { startSync(plan) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!enough || (plan.copies.isEmpty && plan.sidecarUpdates.isEmpty
                                           && deletionSelection.isEmpty))
@@ -78,55 +89,125 @@ struct SyncPlanSheet: View {
         }.padding(24)
     }
 
-    @ViewBuilder private func progressView(_ p: SyncProgress) -> some View {
-        VStack(spacing: 10) {
-            ProgressView(value: Double(p.done), total: Double(max(p.total, 1))).tint(Theme.accent)
-            Text("\(p.stage.rawValue.capitalized)… \(p.done)/\(p.total) · \(p.currentName)")
-                .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)
-        }.padding(24)
-    }
-
-    @ViewBuilder private func resultView(_ r: SyncResult) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Sync complete").font(.system(size: 14, weight: .semibold))
-            Text("\(r.copied) copied · \(r.skipped) already there · \(r.sidecarsWritten) sidecars")
-                .font(.system(size: 12)).foregroundStyle(Theme.textDim)
-            if r.conflicts > 0 || !r.failed.isEmpty {
-                Text("\(r.conflicts) conflicts · \(r.failed.count) failed")
-                    .font(.system(size: 12)).foregroundStyle(.orange)
-            }
-            Spacer()
-            HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
-        }.padding(24)
-    }
-
-    private func runApply() async {
-        guard !running, let plan, let lib = state.library else { return }
-        running = true
-        let engine = SyncEngine(library: lib)
-        let r = await engine.apply(plan, destinationVault: drive, volume: volume, progress: { p in
-            Task { @MainActor in progress = p }
-        })
-        try? state.refreshCanonicalPresence(driveVault: drive)
-        state.refreshPendingDeletions()   // a sync can newly satisfy on-drive eligibility
+    private func startSync(_ plan: SyncPlan) {
         let pending = state.drivePendingDeletions[drive.descriptor.vaultID] ?? []
         let chosen = pending.filter { deletionSelection.contains($0.hash) }
-        if !chosen.isEmpty { _ = await state.propagateDeletions(drive: drive, selected: chosen) }
-        let cat = lib.catalog, thumbs = lib.thumbnails, syncedDrive = drive
-        let macRoot = lib.vaults.first?.rootURL
-        await Task.detached(priority: .utility) {
-            try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: syncedDrive)
-            if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: syncedDrive.stateDirURL) }
-        }.value
-        result = r
-        running = false
+        state.startSync(plan: plan, drive: drive, chosenDeletions: chosen)
+        // No dismiss(): syncActivity becomes non-nil, so the sheet flips to the running phase.
+    }
+
+    // MARK: Running
+
+    @ViewBuilder private func runningView(_ a: SyncActivity) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ProgressView(value: Double(a.bytesDone), total: Double(max(a.bytesTotal, 1))).tint(Theme.accent)
+            Text("\(byteString(a.bytesDone)) / \(byteString(a.bytesTotal)) · \(speedString(a.speedBytesPerSec))"
+                 + (a.etaSeconds.map { " · ~\(etaString($0)) left" } ?? ""))
+                .font(.system(size: 13).monospacedDigit())
+            Text("\(a.stage.rawValue.capitalized) \(a.currentName) · \(a.filesDone)/\(a.filesTotal) files")
+                .font(.system(size: 11)).foregroundStyle(Theme.textDim).lineLimit(1).truncationMode(.middle)
+            Spacer()
+            HStack {
+                Button("Cancel", role: .destructive) { state.cancelSync() }
+                Spacer()
+                Button("Minimize") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }.padding(24)
+    }
+
+    // MARK: Finished — success
+
+    @ViewBuilder private func finishedView(_ a: SyncActivity) -> some View {
+        let r = a.result
+        VStack(alignment: .leading, spacing: 8) {
+            Text(a.phase == .cancelled ? "Sync cancelled" : "Sync complete")
+                .font(.system(size: 14, weight: .semibold))
+            if let r {
+                Text("\(r.copied) copied · \(r.skipped) already there · \(r.sidecarsWritten) sidecars")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textDim)
+                if r.conflicts > 0 {
+                    Text("\(r.conflicts) conflicts skipped")
+                        .font(.system(size: 12)).foregroundStyle(.orange)
+                }
+            }
+            Spacer()
+            HStack {
+                Spacer()
+                Button("Done") { state.dismissSyncResult(); dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }.padding(24)
+    }
+
+    // MARK: Finished — failure report
+
+    @ViewBuilder private func failureView(_ r: SyncResult) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("\(r.failed.count) of \(r.copied + r.failed.count) files didn’t sync",
+                      systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Spacer()
+                Toggle("Thumbnails", isOn: $showThumbs).toggleStyle(.switch).controlSize(.mini)
+            }
+            List(r.failed, id: \.item.destRelPath) { f in
+                HStack(spacing: 8) {
+                    if f.reason.isRetryable {
+                        Toggle("", isOn: Binding(
+                            get: { retrySelection.contains(f.item.destRelPath) },
+                            set: { on in
+                                if on { retrySelection.insert(f.item.destRelPath) }
+                                else { retrySelection.remove(f.item.destRelPath) }
+                            }))
+                            .labelsHidden()
+                    } else {
+                        Image(systemName: "slash.circle").foregroundStyle(Theme.textFaint)
+                    }
+                    if showThumbs {
+                        FailureThumb(state: state, hash: f.item.hash)
+                            .frame(width: 28, height: 28).clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    Text((f.item.destRelPath as NSString).lastPathComponent)
+                        .font(.system(size: 12)).lineLimit(1)
+                    Spacer()
+                    Text(f.reason.userText).font(.system(size: 11)).foregroundStyle(Theme.textDim)
+                }
+            }.frame(maxHeight: .infinity)
+            HStack {
+                Button("Retry \(retrySelection.count) selected") {
+                    let items = r.failed.filter { retrySelection.contains($0.item.destRelPath) }.map(\.item)
+                    state.retrySyncFailures(items, drive: drive)
+                }.disabled(retrySelection.isEmpty)
+                Spacer()
+                Button("Done") { state.dismissSyncResult(); dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }.padding(20)
+        .onAppear { retrySelection = Set(r.retryableFailures.map { $0.item.destRelPath }) }   // default-on retryable
     }
 
     private func restore(_ e: PendingDeletion) {
         Task { await state.restorePending(e) }
     }
+}
 
-    private func byteString(_ n: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
+/// Optional 28px thumbnail by asset hash for the failure report (only rendered when the toggle is on).
+/// Reads the library's cached thumbnail; falls back to a glyph when nothing is cached.
+private struct FailureThumb: View {
+    @Bindable var state: AppState
+    let hash: String
+    @State private var image: CGImage?
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(Theme.hairline)
+            if let image {
+                Image(decorative: image, scale: 1).resizable().scaledToFill()
+            } else {
+                Image(systemName: "photo").font(.system(size: 11)).foregroundStyle(Theme.textFaint)
+            }
+        }
+        .task(id: hash) {
+            image = await state.library?.thumbnails.cachedDisplayImage(
+                for: ContentHash(stringValue: hash), maxPixel: 64)
+        }
     }
 }
