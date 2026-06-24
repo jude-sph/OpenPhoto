@@ -141,22 +141,22 @@ struct SidebarView: View {
             }
             if let a = state.activeJob {
                 let syncResult: SyncResult? = { if case .sync(let r) = a.result { return r }; return nil }()
+                let hasFailures = jobHasFailures(a)
                 Button {
                     if let d = state.jobDrive { state.jobSheetDrive = d }
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
-                            Image(systemName: a.phase == .running ? "arrow.triangle.2.circlepath" : "externaldrive.fill")
-                            Text(a.phase == .running ? "Syncing"
-                                 : (syncResult?.failed.isEmpty == false ? "Sync finished" : "Synced"))
+                            Image(systemName: jobSymbol(a))
+                            Text(jobLabel(a, syncResult: syncResult))
                                 .font(.system(size: 11, weight: .medium))
-                        }.foregroundStyle(syncResult?.retryableFailures.isEmpty == false ? Theme.amber : Theme.textDim)
+                        }.foregroundStyle(hasFailures ? Theme.amber : Theme.textDim)
                         if a.phase == .running {
                             ProgressView(value: Double(a.bytesDone), total: Double(max(a.bytesTotal, 1))).tint(Theme.accent)
                             Text("\(byteString(a.bytesDone)) / \(byteString(a.bytesTotal)) · \(speedString(a.speedBytesPerSec))")
                                 .font(.system(size: 10).monospacedDigit()).foregroundStyle(Theme.textFaint)
-                        } else if let r = syncResult, !r.retryableFailures.isEmpty {
-                            Text("\(r.retryableFailures.count) failed — tap to review")
+                        } else if hasFailures {
+                            Text("\(jobFailureCount(a)) failed — tap to review")
                                 .font(.system(size: 10)).foregroundStyle(Theme.amber)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
@@ -171,6 +171,53 @@ struct SidebarView: View {
         // Pull the sidebar content up under the traffic lights (no empty band above LIBRARY): the
         // collapse button lands in line with the lights, LIBRARY just below them.
         .ignoresSafeArea(.container, edges: .top)
+    }
+
+    // MARK: - Active-job chip helpers (label/icon/badge vary by job kind)
+
+    /// SF Symbol for the chip. Running jobs keep the spinning-arrows glyph; finished jobs vary by kind
+    /// (sync settles on the drive glyph, evict/rehydrate show their direction).
+    private func jobSymbol(_ a: DriveJob) -> String {
+        if a.phase == .running { return "arrow.triangle.2.circlepath" }
+        switch a.kind {
+        case .sync: return "externaldrive.fill"
+        case .evict: return "arrow.down.circle"
+        case .rehydrate: return "arrow.down.circle.dotted"
+        }
+    }
+
+    /// Chip title varies by kind (and, for sync, by whether it finished clean).
+    private func jobLabel(_ a: DriveJob, syncResult: SyncResult?) -> String {
+        if a.phase == .running {
+            switch a.kind {
+            case .sync: return "Syncing"
+            case .evict: return "Freeing space"
+            case .rehydrate: return "Downloading"
+            }
+        }
+        switch a.kind {
+        case .sync: return syncResult?.failed.isEmpty == false ? "Sync finished" : "Synced"
+        case .evict: return "Freed space"
+        case .rehydrate: return "Downloaded"
+        }
+    }
+
+    /// Whether the (finished) job carries failures worth an amber alarm badge. Evict refusals are
+    /// kept-safe by design, so they don't count.
+    private func jobHasFailures(_ a: DriveJob) -> Bool {
+        switch a.result {
+        case .sync(let r): return !r.failed.isEmpty
+        case .rehydrate(_, let failed): return !failed.isEmpty
+        case .evict, .none: return false
+        }
+    }
+
+    private func jobFailureCount(_ a: DriveJob) -> Int {
+        switch a.result {
+        case .sync(let r): return r.failed.count
+        case .rehydrate(_, let failed): return failed.count
+        case .evict, .none: return 0
+        }
     }
 }
 
