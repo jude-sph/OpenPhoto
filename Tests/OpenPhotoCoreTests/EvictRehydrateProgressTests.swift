@@ -35,13 +35,25 @@ struct StorageTestHarness {
         var items: [TimelineItem] = []
         var presence = (try? lib.catalog.vaultPresenceRows(forVault: drive.descriptor.vaultID)) ?? []
         for i in 0..<count {
-            let relPath = "op_\(i).jpg"
+            // Distinct path + seed range from makeLocalBackedUp so a test that builds BOTH sets gets
+            // genuinely disjoint content (no hash collision that would make a "drive-only" file alias a
+            // locally-backed-up one and be filtered out of the drive-only branch by NOT EXISTS).
+            let relPath = "do_\(i).jpg"
             let driveRel = "Pictures/\(relPath)"
             let url = drive.rootURL.appendingPathComponent(driveRel)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
-            try uniqueBytes(seed: UInt8(i &+ 1), count: sizeEach).write(to: url)
+            try uniqueBytes(seed: UInt8(100 &+ i), count: sizeEach).write(to: url)
             let hash = try ContentHash.ofFile(at: url).stringValue
+            // A drive-only asset still has a catalog `assets` row in production (sync's CatalogIngest
+            // upserts assets alongside vault_presence). Seed one so catalog browse queries that join
+            // `assets` (the Folders tree, the drive-only gather) can surface it.
+            try lib.catalog.upsert(assets: [AssetRecord(
+                hash: hash, kind: MediaKind.photo.rawValue, takenAtMs: Int64(i),
+                pixelWidth: nil, pixelHeight: nil, latitude: nil, longitude: nil,
+                cameraModel: nil, lensModel: nil, durationSeconds: nil,
+                livePairHash: nil, isLivePairedVideo: false,
+                favorite: false, rating: 0, caption: nil, tagsJSON: "[]")])
             presence.append(VaultPresenceEntry(hash: hash, relPath: relPath, dirPath: "",
                                                size: Int64(sizeEach), driveRelPath: driveRel))
             items.append(timelineItem(hash: hash, vaultID: localVaultID, relPath: relPath,

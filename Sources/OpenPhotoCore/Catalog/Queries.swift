@@ -191,6 +191,24 @@ extension Catalog {
         }
     }
 
+    /// Every local original (one row per `instances` row), built as a `TimelineItem` with
+    /// `driveRelPath == nil`. This is the local branch of the browse union, undeduped — the same
+    /// content in two folders yields two rows. Storage's evict-all gather filters this set.
+    public func allLocalInstances() throws -> [TimelineItem] {
+        try dbQueue.read { db in
+            try TimelineItem.fetchAll(db, sql: Self.localSelect)
+        }
+    }
+
+    /// Every asset present on a drive but absent from the Mac (no local `instances` row), one row per
+    /// asset (deduped via MIN(rowid) when on multiple drives), built with `driveRelPath` set. The exact
+    /// drive-only branch the Folders view surfaces. Storage's rehydrate-all gather uses this set.
+    public func allDriveOnlyItems() throws -> [TimelineItem] {
+        try dbQueue.read { db in
+            try TimelineItem.fetchAll(db, sql: Self.driveSelect)
+        }
+    }
+
     public func item(hash: String) throws -> TimelineItem? {
         try dbQueue.read { db in
             let lf = lockedFilter
