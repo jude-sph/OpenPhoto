@@ -38,7 +38,7 @@ public enum VerifiedCopy {
             written += Int64(chunk.count)
             onBytes?(written)
         }
-        do { try outFH.synchronize() } catch { return .failed(.copyFailed) }
+        do { try outFH.synchronize(); try outFH.close() } catch { return .failed(.copyFailed) }
         let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
         guard "sha256:" + hex == expectedHash else { return .failed(.hashMismatch) }
         do { try fm.moveItem(at: tmp, to: dest) } catch { return .failed(.copyFailed) }

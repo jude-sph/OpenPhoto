@@ -125,7 +125,12 @@ public struct SyncEngine: Sendable {
         var result = SyncResult()
         for item in plan.conflicts { result.failed.append(FailedItem(item: item, reason: .conflict)) }
 
-        if let free = try? volume.freeSpaceBytes(), free < plan.totalCopyBytes {
+        // Only the bytes for files genuinely ABSENT from the drive count against free space — a
+        // re-sync skips ones already present, so a mostly-synced library must not false-fail "no space".
+        let needBytes = plan.copies.filter {
+            !fm.fileExists(atPath: drive.rootURL.appendingPathComponent($0.destRelPath).path)
+        }.reduce(Int64(0)) { $0 + $1.size }
+        if let free = try? volume.freeSpaceBytes(), free < needBytes {
             result.failed.append(contentsOf: plan.copies.map { FailedItem(item: $0, reason: .copyFailed) })
             return result
         }
@@ -154,7 +159,8 @@ public struct SyncEngine: Sendable {
                         verified[item.destRelPath] = try Self.manifestEntry(for: item, at: destURL)
                         result.skipped += 1; bytesDone += item.size; continue
                     } else {
-                        result.failed.append(FailedItem(item: item, reason: .conflict)); continue
+                        result.failed.append(FailedItem(item: item, reason: .conflict))
+                        bytesDone += item.size; continue            // advance the bar past a processed file
                     }
                 }
                 let outcome = VerifiedCopy.copy(
@@ -172,7 +178,7 @@ public struct SyncEngine: Sendable {
                 case .cancelled:
                     result.cancelled = true
                 case .failed(let reason):
-                    result.failed.append(FailedItem(item: item, reason: reason))
+                    result.failed.append(FailedItem(item: item, reason: reason)); bytesDone += item.size
                 }
                 if result.cancelled { break }
             } catch {

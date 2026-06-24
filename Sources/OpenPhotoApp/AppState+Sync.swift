@@ -50,7 +50,9 @@ extension AppState {
                 shouldCancel: { cancelFlag.isCancelled },
                 progress: { p in
                     Task { @MainActor in
-                        guard let self = weakSelf, var a = self.syncActivity else { return }
+                        // Phase guard: a late progress Task must not clobber an already-.finished result
+                        // (which would wipe the failure report and flash the chip back to "Syncing").
+                        guard let self = weakSelf, var a = self.syncActivity, a.phase == .running else { return }
                         let (speed, eta) = self.syncRateMeter.update(
                             bytesDone: p.bytesDone, bytesTotal: p.bytesTotal,
                             now: Date().timeIntervalSince(start))
@@ -66,6 +68,9 @@ extension AppState {
 
     @MainActor private func finishSync(result r: SyncResult, drive: Vault,
                                        chosenDeletions: [PendingDeletion]) async {
+        // If the library was closed mid-sync, skip the post-sync bookkeeping (it would run against a
+        // torn-down AppState); teardown already cleared syncActivity.
+        guard library != nil else { syncTask = nil; syncCancelFlag = nil; return }
         // (Moved verbatim from the old SyncPlanSheet.runApply post-apply block.)
         try? refreshCanonicalPresence(driveVault: drive)
         refreshPendingDeletions()
