@@ -13,8 +13,11 @@ public struct EvictOutcome: Sendable, Equatable {
 
 public struct RehydrateOutcome: Sendable, Equatable {
     public var rehydrated: Int
-    public var failed: Int
-    public init(rehydrated: Int = 0, failed: Int = 0) { self.rehydrated = rehydrated; self.failed = failed }
+    public var failedItems: [FailedItem]
+    public var failed: Int { failedItems.count }
+    public init(rehydrated: Int = 0, failedItems: [FailedItem] = []) {
+        self.rehydrated = rehydrated; self.failedItems = failedItems
+    }
 }
 
 extension LibraryService {
@@ -72,15 +75,28 @@ extension LibraryService {
     /// Maps each drive path back to the right local vault (the inverse of the basename-strip).
     /// Live pairs rehydrate together (best-effort). One rescan per touched local vault.
     @discardableResult
-    public func rehydrate(_ items: [TimelineItem], connectedCanonical: [Vault]) async throws -> RehydrateOutcome {
+    public func rehydrate(_ items: [TimelineItem], connectedCanonical: [Vault],
+                          progress: (@Sendable (DriveProgress) -> Void)? = nil,
+                          shouldCancel: (@Sendable () -> Bool)? = nil) async throws -> RehydrateOutcome {
         var outcome = RehydrateOutcome()
-        var restoredPerVault: [String: Int] = [:]   // vaultID → count restored (sync-log + rescan)
-        for item in items where item.driveRelPath != nil {
-            // Source from ANY connected drive that holds the still (passed canonical-first), not only
-            // the pinned vault — so a backup serves when the canonical is unplugged. The chosen drive's
-            // presence row carries the path (correct even if a non-mirror backup uses a different one).
+        var restoredPerVault: [String: Int] = [:]
+        let targets = items.filter { $0.driveRelPath != nil }
+        let bytesTotal = targets.reduce(Int64(0)) { $0 + $1.size }
+        var bytesDone: Int64 = 0
+        for (i, item) in targets.enumerated() {
+            if shouldCancel?() == true { break }
+            let name = (item.relPath as NSString).lastPathComponent
+            let base = bytesDone
+            progress?(DriveProgress(stage: .copying, filesDone: i, filesTotal: targets.count,
+                                    bytesDone: base, bytesTotal: bytesTotal, currentName: name))
+            func fail(_ reason: SyncFailureReason) {
+                outcome.failedItems.append(FailedItem(
+                    item: PlanItem(hash: item.hash, sourceURL: URL(fileURLWithPath: item.relPath),
+                                   destRelPath: item.relPath, size: item.size), reason: reason))
+                bytesDone += item.size
+            }
             guard let (drive, stillRow) = driveSource(forHash: item.hash, among: connectedCanonical)
-            else { outcome.failed += 1; continue }
+            else { fail(.sourceMissing); continue }
             var halves: [(hash: String, driveRelPath: String, relPath: String)] =
                 [(item.hash, stillRow.driveRelPath, item.relPath)]
             if let pairHash = item.livePairHash,
@@ -89,21 +105,37 @@ extension LibraryService {
                 halves.append((pairHash, row.driveRelPath, row.relPath))
             }
             var stillVaultID: String?
-            for h in halves {
-                guard let (local, localRel) = localTarget(forDriveRelPath: h.driveRelPath, macRelPath: h.relPath)
+            var hadError = false
+            for half in halves {
+                guard let (local, localRel) = localTarget(forDriveRelPath: half.driveRelPath, macRelPath: half.relPath)
                 else { continue }
                 let dest = local.absoluteURL(forRelativePath: localRel)
-                // Already local (a prior rehydrate / restored another way) → that half is done;
-                // otherwise copy it back hash-verified.
-                let restored = FileManager.default.fileExists(atPath: dest.path)
-                    || VerifiedCopy.copy(from: drive.absoluteURL(forRelativePath: h.driveRelPath),
-                                         to: dest, expectedHash: h.hash) == .copied
-                if restored, h.hash == item.hash { stillVaultID = local.descriptor.vaultID }
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    if half.hash == item.hash { stillVaultID = local.descriptor.vaultID }
+                    continue
+                }
+                let outcome2 = VerifiedCopy.copy(
+                    from: drive.absoluteURL(forRelativePath: half.driveRelPath), to: dest,
+                    expectedHash: half.hash,
+                    onBytes: { fileBytes in
+                        progress?(DriveProgress(stage: .copying, filesDone: i, filesTotal: targets.count,
+                                                bytesDone: base + fileBytes, bytesTotal: bytesTotal,
+                                                currentName: name))
+                    },
+                    shouldCancel: { shouldCancel?() == true })
+                switch outcome2 {
+                case .copied: if half.hash == item.hash { stillVaultID = local.descriptor.vaultID }
+                case .cancelled: hadError = true
+                case .failed: hadError = true
+                }
             }
-            if let vid = stillVaultID {
+            bytesDone += item.size
+            if let vid = stillVaultID, !hadError {
                 outcome.rehydrated += 1; restoredPerVault[vid, default: 0] += 1
-            } else {
-                outcome.failed += 1
+            } else if !(shouldCancel?() == true) {
+                outcome.failedItems.append(FailedItem(
+                    item: PlanItem(hash: item.hash, sourceURL: drive.absoluteURL(forRelativePath: stillRow.driveRelPath),
+                                   destRelPath: item.relPath, size: item.size), reason: .copyFailed))
             }
         }
         for (vid, n) in restoredPerVault {

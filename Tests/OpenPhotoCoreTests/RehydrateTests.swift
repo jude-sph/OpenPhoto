@@ -26,7 +26,7 @@ import Foundation
 
     let outcome = try await lib.rehydrate([driveOnly], connectedCanonical: [drive])
 
-    #expect(outcome == RehydrateOutcome(rehydrated: 1, failed: 0))
+    #expect(outcome == RehydrateOutcome(rehydrated: 1))
     let restored = pics.appendingPathComponent("rome/IMG_1.jpg")
     #expect(FileManager.default.fileExists(atPath: restored.path))
     #expect(try Data(contentsOf: restored) == originalBytes)
@@ -62,7 +62,8 @@ private func driveOnlyFixture(_ t: TestDirs) async throws
     let (lib, _, driveOnly, _) = try await driveOnlyFixture(t)
     // Drive not in connectedCanonical → can't reach the bytes → failed, stays drive-only.
     let outcome = try await lib.rehydrate([driveOnly], connectedCanonical: [])
-    #expect(outcome == RehydrateOutcome(rehydrated: 0, failed: 1))
+    #expect(outcome.rehydrated == 0)
+    #expect(outcome.failed == 1)
     #expect(try lib.catalog.timelineItems().first?.driveRelPath != nil)   // still drive-only
 }
 
@@ -73,6 +74,6 @@ private func driveOnlyFixture(_ t: TestDirs) async throws
     // Calling again with the (now stale) drive-only handle: the file is already local → no-op
     // success, not a failure, and the bytes are intact.
     let again = try await lib.rehydrate([driveOnly], connectedCanonical: [drive])
-    #expect(again == RehydrateOutcome(rehydrated: 1, failed: 0))
+    #expect(again == RehydrateOutcome(rehydrated: 1))
     #expect(try Data(contentsOf: lib.vaults[0].rootURL.appendingPathComponent("rome/IMG_1.jpg")) == bytes)
 }

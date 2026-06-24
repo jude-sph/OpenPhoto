@@ -57,6 +57,6 @@ private func seed(_ drive: Vault, _ cat: Catalog, role: String, hash: String, re
 
     // Canonical UNPLUGGED — only the backup is connected. Rehydrate must still restore from the backup.
     let outcome = try await lib.rehydrate([driveOnly], connectedCanonical: [backup])
-    #expect(outcome == RehydrateOutcome(rehydrated: 1, failed: 0))
+    #expect(outcome == RehydrateOutcome(rehydrated: 1))
     #expect(try Data(contentsOf: pics.appendingPathComponent("rome/IMG_1.jpg")) == bytes)
 }
