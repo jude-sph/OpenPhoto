@@ -11,7 +11,6 @@ private struct DriftPresentation: Identifiable {
 
 struct DrivesView: View {
     @Bindable var state: AppState
-    @State private var syncDrive: Vault?
     @State private var drift: DriftPresentation?
     @State private var forgetTarget: VaultRecord?
     @State private var deletionDrive: Vault?
@@ -31,7 +30,6 @@ struct DrivesView: View {
 
     var body: some View {
         mainContent
-            .sheet(item: $syncDrive) { drive in SyncPlanSheet(state: state, drive: drive) }
             .sheet(item: $drift) { d in DriftReviewSheet(state: state, drive: d.drive, verify: d.verify) }
             .sheet(item: $deletionDrive) { d in DeletionReviewSheet(state: state, drive: d) }
             .sheet(isPresented: $consensusRepair) { ConsensusRepairSheet(state: state) }
@@ -160,7 +158,7 @@ struct DrivesView: View {
                 .controlSize(.small)
                 .disabled((vr.role == "backup" && behind == 0) || cloning || !present)
             }
-            Button("Sync\u{2026}") { syncDrive = state.openVault(for: vr) }
+            Button("Sync\u{2026}") { state.syncSheetDrive = state.openVault(for: vr) }
                 .controlSize(.small).disabled(!present)
             Button("Check") {
                 if let v = state.openVault(for: vr) { drift = DriftPresentation(drive: v, verify: false) }
@@ -225,7 +223,7 @@ struct DrivesView: View {
             let n = r.unknown.count + r.missing.count + r.changed.count + r.corrupt.count
             if n == 0 {
                 if (state.drivePendingSync[vr.id] ?? 0) > 0 {
-                    Button { syncDrive = state.openVault(for: vr) } label: {
+                    Button { state.syncSheetDrive = state.openVault(for: vr) } label: {
                         Label("Updates to sync \u{00b7} Sync", systemImage: "arrow.triangle.2.circlepath")
                             .font(.system(size: 11)).foregroundStyle(Theme.amber)
                     }.buttonStyle(.plain)

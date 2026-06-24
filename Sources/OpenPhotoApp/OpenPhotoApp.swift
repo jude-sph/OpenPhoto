@@ -113,6 +113,10 @@ struct RootView: View {
             // AppState+Undo.swift). The Bool task id re-fires when nil-ness flips, which is
             // the only transition that matters (the manager instance is stable per window).
             .task(id: undoManager == nil) { state.windowUndoManager = undoManager }
+            // Present the sync sheet at the app root so it's reopenable from anywhere (the sidebar
+            // sync chip lives outside DrivesView). Driven by AppState so background sync survives
+            // navigating away from Drives.
+            .sheet(item: $state.syncSheetDrive) { drive in SyncPlanSheet(state: state, drive: drive) }
         }
     }
 
