@@ -87,6 +87,26 @@ final class AppState {
     /// Human-readable name of the analysis stage currently running ("faces", "text", …) — the
     /// sidebar shows it so the user knows what the on-device analysis is doing right now.
     var derivationStageName: String?
+
+    // MARK: — Sync activity (one active sync at a time; survives the sheet closing)
+    /// Observable snapshot the sync sheet + sidebar chip read. nil → no sync in flight / dismissed.
+    var syncActivity: SyncActivity?
+    /// Non-nil → present the sync sheet (root-level, so it's reopenable from anywhere).
+    var syncSheetDrive: Vault?
+    /// The in-flight sync's cancellable Task (nil when idle). See AppState+Sync.swift.
+    var syncTask: Task<Void, Never>?
+    /// Cooperative cancel flag (MainActor-facing). `cancelSync()` flips it; `startSync` mirrors it
+    /// into the per-sync `syncCancelFlag` that the off-actor engine closure actually reads.
+    var syncCancelRequested = false
+    /// Thread-safe cancel flag the engine's @Sendable `shouldCancel` reads from off the MainActor
+    /// (a fresh one per sync, captured by the closure — never `self`, so no actor-isolation hazard).
+    var syncCancelFlag: SyncCancelFlag?
+    /// The drive being synced — lets the sidebar chip reopen the sheet for it.
+    var syncDrive: Vault?
+    /// Smoothed speed/ETA meter. The engine's progress callback hops to @MainActor before touching
+    /// it, so it's only ever mutated on the MainActor (never across the @Sendable boundary).
+    var syncRateMeter = SyncRateMeter()
+
     var scanning = false
     /// Set when `rescan()` is asked to run while a scan is already in flight (e.g. a watcher event
     /// from the tail of a large Finder copy or import). The in-flight scan re-runs once it finishes,
@@ -1951,6 +1971,8 @@ final class AppState {
         semanticIndex = nil
         semanticIndexDirty = true
         derivationTask?.cancel(); derivationTask = nil
+        syncCancelFlag?.cancel(); syncTask?.cancel(); syncTask = nil
+        syncActivity = nil; syncCancelFlag = nil
 
         // Defense-in-depth: clear per-library state so a subsequent open starts clean.
         reverified = [:]
