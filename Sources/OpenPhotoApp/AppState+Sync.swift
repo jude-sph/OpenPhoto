@@ -44,6 +44,28 @@ private extension SyncProgress.Stage {
 }
 
 extension AppState {
+    /// Start the shared 2 Hz progress ticker for whatever job is currently in `activeJob`. It samples
+    /// the raw progress buffer (`jobRaw`) and computes a windowed-average speed + whole-job ETA, so the
+    /// UI refreshes calmly instead of jittering at the engine's per-chunk callback rate. Used by sync,
+    /// evict, and rehydrate. Caller must have already set `activeJob`/`jobRateMeter`.
+    @MainActor func startJobTicker(start: Date, bytesTotal: Int64) {
+        weak var weakSelf = self
+        jobTickerTask = Task { @MainActor in
+            while !Task.isCancelled {
+                if let self = weakSelf, let raw = self.jobRaw,
+                   var a = self.activeJob, a.phase == .running {
+                    let (speed, eta) = self.jobRateMeter.update(
+                        bytesDone: raw.bytesDone, bytesTotal: bytesTotal, now: Date().timeIntervalSince(start))
+                    a.bytesDone = raw.bytesDone; a.filesDone = raw.filesDone
+                    a.currentName = raw.currentName; a.stage = raw.stage
+                    a.speedBytesPerSec = speed; a.etaSeconds = eta
+                    self.activeJob = a
+                }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
     /// Start a background sync to `drive`. Stores a cancellable Task; streams progress into
     /// `activeJob` (speed/ETA via SyncRateMeter). Post-sync bookkeeping (presence, deletions,
     /// snapshot, albums) runs here so it survives the sheet being minimized.
@@ -69,21 +91,7 @@ extension AppState {
         // buffer and computes a windowed-average speed + whole-job ETA, so the UI refreshes calmly at
         // 2 Hz instead of jittering at the engine's per-chunk callback rate (which made it flicker and
         // the speed/ETA nonsense).
-        jobTickerTask = Task { @MainActor in
-            while !Task.isCancelled {
-                if let self = weakSelf, let raw = self.jobRaw,
-                   var a = self.activeJob, a.phase == .running {
-                    let (speed, eta) = self.jobRateMeter.update(
-                        bytesDone: raw.bytesDone, bytesTotal: bytesTotal,
-                        now: Date().timeIntervalSince(start))
-                    a.bytesDone = raw.bytesDone
-                    a.filesDone = raw.filesDone; a.currentName = raw.currentName; a.stage = raw.stage
-                    a.speedBytesPerSec = speed; a.etaSeconds = eta
-                    self.activeJob = a
-                }
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
+        startJobTicker(start: start, bytesTotal: bytesTotal)
 
         jobTask = Task {
             let r = await engine.apply(plan, destinationVault: drive, volume: volume,
