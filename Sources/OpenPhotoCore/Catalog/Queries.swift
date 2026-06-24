@@ -13,32 +13,41 @@ extension Catalog {
         WHERE a.isLivePairedVideo = 0
         """
 
-    // Drive-only branch: one row per asset that has NO local instance.
-    // Deduped to one drive row per asset via MIN(rowid) when the asset is present on multiple drives.
-    private static let driveSelect = """
+    // Drive-only branch. Two flavours that differ ONLY in the "drive-only" test + the dedupe:
+    //  - byLocation: one row per FOLDER LOCATION — surfaces when THIS path has no local instance,
+    //    deduped across drives by relPath. The Folders views use it, so a photo in several folders
+    //    shows in EVERY folder once its local copies are evicted (vault_presence is keyed per file).
+    //  - byAsset: one row per HASH — surfaces when the photo has no local instance ANYWHERE, deduped
+    //    to one. The Timeline/Search browse use it, so a photo appears once.
+    private static func driveSelect(notExists: String, dedup: String) -> String { """
         SELECT a.hash, a.kind, a.takenAtMs, a.pixelWidth, a.pixelHeight, a.latitude, a.longitude,
                a.cameraModel, a.lensModel, a.durationSeconds, a.livePairHash, a.favorite, a.rating,
                a.caption, a.tagsJSON, a.rotation, vp.vaultID, vp.relPath, vp.dirPath, vp.size, 0 AS locked, vp.driveRelPath
         FROM assets a JOIN vault_presence vp ON vp.hash = a.hash
         WHERE a.isLivePairedVideo = 0
-          AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.hash = a.hash)
-          AND vp.rowid = (SELECT MIN(rowid) FROM vault_presence v2 WHERE v2.hash = a.hash)
-        """
+          AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.hash = a.hash\(notExists))
+          AND vp.rowid = (SELECT MIN(rowid) FROM vault_presence v2 WHERE \(dedup))
+        """ }
+    static var driveSelectByLocation: String {
+        driveSelect(notExists: " AND i.relPath = vp.relPath", dedup: "v2.relPath = vp.relPath")
+    }
+    private static var driveSelectByAsset: String {
+        driveSelect(notExists: "", dedup: "v2.hash = vp.hash")
+    }
 
     // Full union: local rows (with NULL driveRelPath) UNION ALL drive-only rows.
     // Internal so that Catalog+Search.swift can reuse the union for filter/fetch queries.
 
-    /// Per-INSTANCE rows (one per file) — the same photo in two folders appears twice. Used by the
-    /// Folders views and instance resolution, where each physical file is its own row.
-    static var instanceSQL: String { "\(localSelect) UNION ALL \(driveSelect)" }
+    /// Per-INSTANCE rows (one per file/location) — the same photo in two folders appears twice. Used
+    /// by the Folders views and instance resolution, where each physical location is its own row.
+    static var instanceSQL: String { "\(localSelect) UNION ALL \(driveSelectByLocation)" }
 
     /// Deduped by CONTENT (one row per asset hash). The local branch keeps a single representative
-    /// instance (lowest rowid); the drive-only branch already dedupes via MIN(rowid). Timeline + Search
-    /// use this so a photo present in multiple folders shows once (its other locations live in the
-    /// Inspector). `instanceSQL` and `browseSQL` differ ONLY in the local-branch dedupe clause.
+    /// instance (lowest rowid); the drive-only branch dedupes by hash. Timeline + Search use this so a
+    /// photo present in multiple folders shows once (its other locations live in the Inspector).
     static var browseSQL: String {
         "\(localSelect) AND i.rowid = (SELECT MIN(rowid) FROM instances i2 WHERE i2.hash = a.hash)"
-            + " UNION ALL \(driveSelect)"
+            + " UNION ALL \(driveSelectByAsset)"
     }
 
     // MARK: Locked-folder visibility gate
@@ -179,8 +188,8 @@ extension Catalog {
                     SELECT vp.dirPath AS d, COUNT(*) AS n FROM vault_presence vp
                     JOIN assets a ON a.hash = vp.hash
                     WHERE a.isLivePairedVideo = 0\(vf)
-                      AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.hash = vp.hash)
-                      AND vp.rowid = (SELECT MIN(rowid) FROM vault_presence v2 WHERE v2.hash = vp.hash)
+                      AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.hash = vp.hash AND i.relPath = vp.relPath)
+                      AND vp.rowid = (SELECT MIN(rowid) FROM vault_presence v2 WHERE v2.relPath = vp.relPath)
                     GROUP BY vp.dirPath
                     """
                 for r in try Row.fetchAll(db, sql: dsql) {
@@ -205,7 +214,7 @@ extension Catalog {
     /// drive-only branch the Folders view surfaces. Storage's rehydrate-all gather uses this set.
     public func allDriveOnlyItems() throws -> [TimelineItem] {
         try dbQueue.read { db in
-            try TimelineItem.fetchAll(db, sql: Self.driveSelect)
+            try TimelineItem.fetchAll(db, sql: Self.driveSelectByLocation)
         }
     }
 

@@ -282,6 +282,24 @@ public final class Catalog: Sendable {
                 t.column("layoutVersion", .integer).notNull()
             }
         }
+        migrator.registerMigration("v20") { db in
+            // Re-key vault_presence per DRIVE FILE (vaultID, driveRelPath) instead of per
+            // (vaultID, hash). A photo that lives in several folders on the drive has several
+            // manifest entries; the old per-hash key collapsed them to one, so an evicted
+            // multi-folder photo reappeared in only one folder. Per-file keeps every location.
+            // vault_presence is a rebuildable cache — drop + repopulate from each drive's manifest
+            // on the next presence refresh (launch/connect/sync).
+            try db.execute(sql: "DROP TABLE IF EXISTS vault_presence")
+            try db.create(table: "vault_presence") { t in
+                t.column("vaultID", .text).notNull()
+                t.column("hash", .text).notNull().indexed()
+                t.column("relPath", .text).notNull().indexed()
+                t.column("dirPath", .text).notNull().indexed()
+                t.column("size", .integer).notNull()
+                t.column("driveRelPath", .text).notNull()
+                t.primaryKey(["vaultID", "driveRelPath"])
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 

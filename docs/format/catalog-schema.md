@@ -67,18 +67,18 @@ External readers MUST ignore the `instances` table entirely. Its paths are local
 
 ### `vault_presence`
 
-One row per (vault, asset) pair the Mac knows about across all vaults it has ever synced — including drives and backups. This is the table external readers use to learn which hashes are present on a given drive.
+One row per (vault, **file**) the Mac knows about across all vaults it has ever synced — including drives and backups. This is the table external readers use to learn which hashes are present on a given drive. A photo that lives in several folders on a drive (a duplicate) has **one row per folder location**, so the same `hash` may appear on several rows for the same `vaultID` (each with a distinct `driveRelPath`/`relPath`). This per-file keying lets the Mac keep an evicted multi-folder photo visible as drive-only in *every* folder it lived in.
 
 | Column | Type | Notes |
 |---|---|---|
 | `vaultID` | TEXT | References `vaults.id`. |
-| `hash` | TEXT | References `assets.hash`. |
-| `relPath` | TEXT | Vault-root-relative path within that vault. |
+| `hash` | TEXT | References `assets.hash`. May recur across rows (duplicate file in multiple folders). |
+| `relPath` | TEXT | Vault-root-relative path within that vault (Mac-aligned). |
 | `dirPath` | TEXT | Parent directory of `relPath` (denormalized). |
 | `size` | INTEGER | File size in bytes at last sync. |
 | `driveRelPath` | TEXT | Path within the drive's top-level directory structure (used for canonical drives). |
 
-**Primary key:** (`vaultID`, `hash`).
+**Primary key:** (`vaultID`, `driveRelPath`). (Was (`vaultID`, `hash`) before catalog migration v20 — that older key collapsed a multi-folder photo to a single location.)
 
 A snapshot reader uses only rows whose `vaultID` equals the drive's own vault id (from `vault.json`). Rows for other `vaultID`s represent assets on the source Mac's other drives or backups; external readers MUST ignore them.
 

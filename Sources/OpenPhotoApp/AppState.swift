@@ -1928,6 +1928,15 @@ final class AppState {
             // auto-scan connected drives so badges + status reflect reality without a
             // manual Check. Re-scan on any volume mount/unmount too.
             reloadCanonicalPresence()
+            // After the per-file vault_presence migration (or a first connect), a present drive's
+            // presence cache can be empty — rebuild it from the manifest so drive-only folders +
+            // eviction work without a manual sync. Cheap empty-check no-op once populated.
+            for vr in durableVaults where driveIsPresent(vr) {
+                if (try? library?.catalog.vaultPresenceHashes(forVault: vr.id))?.isEmpty ?? false,
+                   let v = openVault(for: vr) {
+                    try? refreshCanonicalPresence(driveVault: v)
+                }
+            }
             // Load locked-folder state: persist set, apply to catalog, start locked (always re-lock on open).
             if let root = library?.vaults.first?.rootURL {
                 lockedFolders = LockedFolderStore.load(libraryRoot: root)

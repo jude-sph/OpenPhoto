@@ -35,6 +35,39 @@ private func asset(_ h: String) -> AssetRecord {
     #expect(try c.folderCounts(videoOnly: true)["f"] == 1)
 }
 
+// A photo that lives in several folders (a duplicate) must reappear in EVERY one of them once
+// evicted — not just one. Regression guard for the per-file vault_presence key (v20): the old
+// per-(vaultID,hash) key collapsed the drive presence to a single folder, so an evicted multi-folder
+// photo vanished from all-but-one folder while still showing in the timeline.
+@Test func evictedMultiFolderPhotoStaysInEveryFolder() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let c = try makeCatalog(t)
+    let h = "sha256:" + String(repeating: "c", count: 64)
+    try c.upsert(assets: [asset(h)])
+    try c.registerVault(id: "mac", role: "local", rootPath: "/tmp/pics")
+    try c.registerVault(id: "drv", role: "canonical", rootPath: "/Volumes/Drive")
+    // Same photo in TWO folders, locally and on the drive (one drive row PER FILE).
+    try c.replaceInstances(inVault: "mac", with: [
+        InstanceRecord(hash: h, vaultID: "mac", relPath: "A/p.jpg", dirPath: "A", size: 1, mtimeMs: 1),
+        InstanceRecord(hash: h, vaultID: "mac", relPath: "B/p.jpg", dirPath: "B", size: 1, mtimeMs: 1),
+    ])
+    try c.replaceVaultPresence(vaultID: "drv", entries: [
+        VaultPresenceEntry(hash: h, relPath: "A/p.jpg", dirPath: "A", size: 1, driveRelPath: "Pictures/A/p.jpg"),
+        VaultPresenceEntry(hash: h, relPath: "B/p.jpg", dirPath: "B", size: 1, driveRelPath: "Pictures/B/p.jpg"),
+    ])
+    // Before eviction: each folder shows the LOCAL copy; the drive rows are hidden.
+    #expect(try c.items(inDir: "A").map(\.driveRelPath) == [nil])
+    #expect(try c.items(inDir: "B").map(\.driveRelPath) == [nil])
+    // Evict: drop the local instances in both folders.
+    try c.replaceInstances(inVault: "mac", with: [])
+    // After eviction: the photo stays visible as DRIVE-ONLY in BOTH folders.
+    let a = try c.items(inDir: "A"); let b = try c.items(inDir: "B")
+    #expect(a.count == 1 && a.first?.driveRelPath != nil)
+    #expect(b.count == 1 && b.first?.driveRelPath != nil)
+    #expect(try c.folderCounts()["A"] == 1)
+    #expect(try c.folderCounts()["B"] == 1)
+}
+
 @Test func purgeLocalVaultRemovesItsInstancesRegistrationAndOrphanAssets() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let c = try makeCatalog(t)
