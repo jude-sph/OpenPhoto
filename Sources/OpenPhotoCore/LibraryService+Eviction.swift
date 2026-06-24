@@ -121,7 +121,6 @@ extension LibraryService {
                 halves.append((pairHash, row.driveRelPath, row.relPath))
             }
             var stillVaultID: String?
-            var hadError = false
             for half in halves {
                 guard let (local, localRel) = localTarget(forDriveRelPath: half.driveRelPath, macRelPath: half.relPath)
                 else { continue }
@@ -141,12 +140,14 @@ extension LibraryService {
                     shouldCancel: { shouldCancel?() == true })
                 switch outcome2 {
                 case .copied: if half.hash == item.hash { stillVaultID = local.descriptor.vaultID }
-                case .cancelled: hadError = true
-                case .failed: hadError = true
+                // The paired video is best-effort: item success hinges on the still (stillVaultID).
+                // A failed/cancelled video doesn't fail the item — the still is back and a later pass
+                // (or the post-job driftScan) reconciles the video. Mirrors the original semantics.
+                case .cancelled, .failed: break
                 }
             }
             bytesDone += item.size
-            if let vid = stillVaultID, !hadError {
+            if let vid = stillVaultID {
                 outcome.rehydrated += 1; restoredPerVault[vid, default: 0] += 1
             } else if !(shouldCancel?() == true) {
                 outcome.failedItems.append(FailedItem(
