@@ -139,6 +139,31 @@ struct SidebarView: View {
                     .padding(.horizontal, 18).padding(.bottom, 4)
                     .help("\(d.done) of \(d.total) on-device analysis tasks (several per photo)")
             }
+            if let a = state.syncActivity {
+                Button {
+                    if let d = state.syncDrive { state.syncSheetDrive = d }
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Image(systemName: a.phase == .running ? "arrow.triangle.2.circlepath" : "externaldrive.fill")
+                            Text(a.phase == .running ? "Syncing"
+                                 : (a.result?.failed.isEmpty == false ? "Sync finished" : "Synced"))
+                                .font(.system(size: 11, weight: .medium))
+                        }.foregroundStyle(a.result?.retryableFailures.isEmpty == false ? Theme.amber : Theme.textDim)
+                        if a.phase == .running {
+                            ProgressView(value: Double(a.bytesDone), total: Double(max(a.bytesTotal, 1))).tint(Theme.accent)
+                            Text("\(byteString(a.bytesDone)) / \(byteString(a.bytesTotal)) · \(speedString(a.speedBytesPerSec))")
+                                .font(.system(size: 10).monospacedDigit()).foregroundStyle(Theme.textFaint)
+                        } else if let r = a.result, !r.retryableFailures.isEmpty {
+                            Text("\(r.retryableFailures.count) failed — tap to review")
+                                .font(.system(size: 10)).foregroundStyle(Theme.amber)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .background(Theme.bg2, in: RoundedRectangle(cornerRadius: 8)).padding(.horizontal, 10).padding(.bottom, 6)
+            }
         }
         .frame(width: Theme.sidebarWidth)
         .background(.ultraThinMaterial)
