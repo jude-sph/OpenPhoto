@@ -105,6 +105,7 @@ struct SyncPlanSheet: View {
             Text("\(byteString(a.bytesDone)) / \(byteString(a.bytesTotal)) · \(speedString(a.speedBytesPerSec))"
                  + (a.etaSeconds.map { " · ~\(etaString($0)) left" } ?? ""))
                 .font(.system(size: 13).monospacedDigit())
+                .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             Text("\(a.stage.rawValue.capitalized) \(a.currentName) · \(a.filesDone)/\(a.filesTotal) files")
                 .font(.system(size: 11)).foregroundStyle(Theme.textDim).lineLimit(1).truncationMode(.middle)
             Spacer()

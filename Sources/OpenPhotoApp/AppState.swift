@@ -103,9 +103,14 @@ final class AppState {
     var syncCancelFlag: SyncCancelFlag?
     /// The drive being synced — lets the sidebar chip reopen the sheet for it.
     var syncDrive: Vault?
-    /// Smoothed speed/ETA meter. The engine's progress callback hops to @MainActor before touching
-    /// it, so it's only ever mutated on the MainActor (never across the @Sendable boundary).
+    /// Running-average speed/ETA meter, sampled by the ticker on a steady cadence (not the firehose).
     var syncRateMeter = SyncRateMeter()
+    /// Latest raw progress from the engine's per-chunk callback. NOT observed — it's a buffer the
+    /// ticker samples, so the bursty callback never drives SwiftUI (that caused the flicker).
+    @ObservationIgnored var syncRaw: SyncProgress?
+    /// 0.5s ticker: copies `syncRaw` into the observed `syncActivity` with an averaged speed/ETA, so
+    /// the UI refreshes calmly at 2 Hz with stable numbers instead of jittering at the callback rate.
+    @ObservationIgnored var syncTickerTask: Task<Void, Never>?
 
     var scanning = false
     /// Set when `rescan()` is asked to run while a scan is already in flight (e.g. a watcher event
@@ -1972,7 +1977,8 @@ final class AppState {
         semanticIndexDirty = true
         derivationTask?.cancel(); derivationTask = nil
         syncCancelFlag?.cancel(); syncTask?.cancel(); syncTask = nil
-        syncActivity = nil; syncCancelFlag = nil
+        syncTickerTask?.cancel(); syncTickerTask = nil
+        syncActivity = nil; syncCancelFlag = nil; syncRaw = nil
 
         // Defense-in-depth: clear per-library state so a subsequent open starts clean.
         reverified = [:]

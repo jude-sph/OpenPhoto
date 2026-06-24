@@ -38,39 +38,50 @@ extension AppState {
         syncCancelFlag = cancelFlag
         syncDrive = drive
         syncRateMeter = SyncRateMeter()
+        syncRaw = nil
+        let bytesTotal = plan.totalCopyBytes
         syncActivity = SyncActivity(driveName: drive.rootURL.lastPathComponent, stage: .copying,
-                                    bytesTotal: plan.totalCopyBytes, filesTotal: plan.copies.count)
+                                    bytesTotal: bytesTotal, filesTotal: plan.copies.count)
         let engine = SyncEngine(library: lib)
         let start = Date()
-        // The @Sendable progress/cancel closures must not capture the outer Task's `self`; give the
-        // progress closure its own independent weak reference (it hops to @MainActor before use).
+        // The @Sendable progress/cancel closures must not capture the outer Task's `self`; give them an
+        // independent weak reference (they hop to @MainActor before use).
         weak var weakSelf = self
+
+        // The ticker is the ONLY thing that updates the visible numbers: every 0.5s it samples the raw
+        // buffer and computes a windowed-average speed + whole-job ETA, so the UI refreshes calmly at
+        // 2 Hz instead of jittering at the engine's per-chunk callback rate (which made it flicker and
+        // the speed/ETA nonsense).
+        syncTickerTask = Task { @MainActor in
+            while !Task.isCancelled {
+                if let self = weakSelf, let raw = self.syncRaw,
+                   var a = self.syncActivity, a.phase == .running {
+                    let (speed, eta) = self.syncRateMeter.update(
+                        bytesDone: raw.bytesDone, bytesTotal: bytesTotal,
+                        now: Date().timeIntervalSince(start))
+                    a.bytesDone = raw.bytesDone
+                    a.filesDone = raw.done; a.currentName = raw.currentName; a.stage = raw.stage
+                    a.speedBytesPerSec = speed; a.etaSeconds = eta
+                    self.syncActivity = a
+                }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+
         syncTask = Task {
             let r = await engine.apply(plan, destinationVault: drive, volume: volume,
                 shouldCancel: { cancelFlag.isCancelled },
-                progress: { p in
-                    Task { @MainActor in
-                        // Phase guard: a late progress Task must not clobber an already-.finished result
-                        // (which would wipe the failure report and flash the chip back to "Syncing").
-                        guard let self = weakSelf, var a = self.syncActivity, a.phase == .running else { return }
-                        let (speed, eta) = self.syncRateMeter.update(
-                            bytesDone: p.bytesDone, bytesTotal: p.bytesTotal,
-                            now: Date().timeIntervalSince(start))
-                        a.stage = p.stage; a.bytesDone = p.bytesDone; a.bytesTotal = p.bytesTotal
-                        a.filesDone = p.done; a.currentName = p.currentName
-                        a.speedBytesPerSec = speed; a.etaSeconds = eta
-                        self.syncActivity = a
-                    }
-                })
+                progress: { p in Task { @MainActor in weakSelf?.syncRaw = p } })  // buffer only; ticker renders
             await weakSelf?.finishSync(result: r, drive: drive, chosenDeletions: chosenDeletions)
         }
     }
 
     @MainActor private func finishSync(result r: SyncResult, drive: Vault,
                                        chosenDeletions: [PendingDeletion]) async {
+        syncTickerTask?.cancel(); syncTickerTask = nil           // stop the ticker; we settle the bar below
         // If the library was closed mid-sync, skip the post-sync bookkeeping (it would run against a
         // torn-down AppState); teardown already cleared syncActivity.
-        guard library != nil else { syncTask = nil; syncCancelFlag = nil; return }
+        guard library != nil else { syncTask = nil; syncCancelFlag = nil; syncRaw = nil; return }
         // (Moved verbatim from the old SyncPlanSheet.runApply post-apply block.)
         try? refreshCanonicalPresence(driveVault: drive)
         refreshPendingDeletions()
@@ -87,10 +98,10 @@ extension AppState {
         }
         var a = syncActivity ?? SyncActivity(driveName: drive.rootURL.lastPathComponent, stage: .finishing)
         a.phase = r.cancelled ? .cancelled : .finished
+        if !r.cancelled { a.bytesDone = a.bytesTotal; a.filesDone = a.filesTotal }   // settle the bar at 100%
         a.result = r
         syncActivity = a
-        syncTask = nil
-        syncCancelFlag = nil
+        syncTask = nil; syncCancelFlag = nil; syncRaw = nil
     }
 
     func cancelSync() { syncCancelRequested = true; syncCancelFlag?.cancel() }
