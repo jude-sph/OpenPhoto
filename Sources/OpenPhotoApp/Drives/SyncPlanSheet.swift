@@ -56,8 +56,9 @@ struct SyncPlanSheet: View {
     @ViewBuilder private func planView(_ plan: SyncPlan) -> some View {
         let enough = freeBytes >= plan.totalCopyBytes
         VStack(alignment: .leading, spacing: 10) {
-            Text("\(plan.copies.count) new photos · \(byteString(plan.totalCopyBytes))")
+            Text("\(plan.copies.count) new files · \(byteString(plan.totalCopyBytes))")
                 .font(.system(size: 14, weight: .medium))
+                .help("Every media file to back up — includes live-photo videos and any photo that lives in more than one folder, so it can exceed the deduplicated Timeline count.")
             Text("\(plan.sidecarUpdates.count) metadata sidecars")
                 .font(.system(size: 12)).foregroundStyle(Theme.textDim)
             if plan.conflicts.count > 0 {
