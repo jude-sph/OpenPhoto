@@ -132,3 +132,26 @@ struct StorageTestHarness {
         progress: nil, shouldCancel: { true })
     #expect(outcome.rehydrated == 0)
 }
+
+@Test func evictReportsSizeWeightedProgressAndCancels() async throws {
+    let h = try StorageTestHarness.make()
+    let items = try h.makeLocalBackedUp(count: 3, sizeEach: 1_000_000)   // local + verified on drive
+    final class Box: @unchecked Sendable { var maxBytes: Int64 = 0; var lastFiles = 0 }
+    let box = Box()
+    let outcome = try await h.lib.evict(items, mode: .verified,
+        connectedCanonical: [h.drive], canonicalPresence: [],
+        progress: { p in box.maxBytes = max(box.maxBytes, p.bytesDone); box.lastFiles = p.filesDone },
+        shouldCancel: nil)
+    #expect(outcome.evicted == 3)
+    #expect(outcome.refused == 0)
+    #expect(box.maxBytes == 3_000_000)              // size-weighted bar reached the total
+}
+
+@Test func evictCancelStopsAndKeepsRemaining() async throws {
+    let h = try StorageTestHarness.make()
+    let items = try h.makeLocalBackedUp(count: 3, sizeEach: 1_000_000)
+    let outcome = try await h.lib.evict(items, mode: .verified,
+        connectedCanonical: [h.drive], canonicalPresence: [],
+        progress: nil, shouldCancel: { true })       // cancel immediately
+    #expect(outcome.evicted == 0)                    // nothing trashed
+}

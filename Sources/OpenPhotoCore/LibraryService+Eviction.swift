@@ -28,43 +28,59 @@ extension LibraryService {
     /// sidecar is left in place (rehydrate restores the media beside it).
     @discardableResult
     public func evict(_ items: [TimelineItem], mode: EvictMode,
-                      connectedCanonical: [Vault], canonicalPresence: Set<String>) async throws -> EvictOutcome {
+                      connectedCanonical: [Vault], canonicalPresence: Set<String>,
+                      progress: (@Sendable (DriveProgress) -> Void)? = nil,
+                      shouldCancel: (@Sendable () -> Bool)? = nil) async throws -> EvictOutcome {
+        let local = items.filter { $0.driveRelPath == nil }
+        let bytesTotal = local.reduce(Int64(0)) { $0 + $1.size }
+        var bytesDone: Int64 = 0
+        var filesDone = 0
         var byVault: [String: [TimelineItem]] = [:]
-        for it in items where it.driveRelPath == nil { byVault[it.vaultID, default: []].append(it) }
+        for it in local { byVault[it.vaultID, default: []].append(it) }
         var outcome = EvictOutcome()
         for (vaultID, group) in byVault {
-            guard let local = vault(id: vaultID) else { continue }
+            guard let localVault = vault(id: vaultID) else { continue }
             var releasedHere = 0
             for item in group {
+                if shouldCancel?() == true {
+                    if releasedHere > 0 {
+                        appendSyncLog(vault: localVault, event: "evict", summary: "\(releasedHere) released", counterpartyKey: "")
+                        try await rescan(vaultID: vaultID)
+                    }
+                    return outcome
+                }
+                let name = (item.relPath as NSString).lastPathComponent
+                progress?(DriveProgress(stage: .verifying, filesDone: filesDone, filesTotal: local.count,
+                                        bytesDone: bytesDone, bytesTotal: bytesTotal, currentName: name))
                 var halves: [(hash: String, relPath: String)] = [(item.hash, item.relPath)]
                 if let pairHash = item.livePairHash,
                    let pairInstance = try? catalog.instanceItem(hash: pairHash, vaultID: vaultID) {
                     halves.append((pairHash, pairInstance.relPath))
                 }
+                defer { bytesDone += item.size; filesDone += 1 }
                 guard halves.allSatisfy({ verifyOnCanonical(hash: $0.hash, mode: mode,
                                                             connectedCanonical: connectedCanonical,
                                                             canonicalPresence: canonicalPresence) })
                 else { outcome.refused += 1; continue }
-                let stillURL = local.absoluteURL(forRelativePath: item.relPath)
+                let stillURL = localVault.absoluteURL(forRelativePath: item.relPath)
                 try? FileManager.default.trashItem(at: stillURL, resultingItemURL: nil)
-                // Success = the file is gone afterward. A trash that fails for a real reason
-                // leaves the file in place → refused (counted, kept). An already-absent local
-                // file passes here and is counted released: it's verified on the drive, and the
-                // rescan below correctly transitions the asset to drive-only.
                 guard !FileManager.default.fileExists(atPath: stillURL.path) else {
                     outcome.refused += 1; continue
                 }
                 outcome.evicted += 1; releasedHere += 1
-                // The paired video goes too. Best-effort (already verified above): a rare failure
-                // here leaves the local video to be released on a later pass — never lost, since
-                // it's confirmed on the drive — rather than un-counting the released still.
                 if halves.count > 1 {
                     try? FileManager.default.trashItem(
-                        at: local.absoluteURL(forRelativePath: halves[1].relPath), resultingItemURL: nil)
+                        at: localVault.absoluteURL(forRelativePath: halves[1].relPath), resultingItemURL: nil)
                 }
             }
+            // Terminal report once a vault's items are all processed: the size-weighted bar
+            // catches up to everything released/refused so far (each item's `defer` only advances
+            // the counter, the per-item `progress` above reports the pre-item value). The last
+            // vault's report reaches `bytesTotal`.
+            progress?(DriveProgress(stage: .finishing, filesDone: filesDone, filesTotal: local.count,
+                                    bytesDone: bytesDone, bytesTotal: bytesTotal, currentName: ""))
             if releasedHere > 0 {
-                appendSyncLog(vault: local, event: "evict", summary: "\(releasedHere) released", counterpartyKey: "")
+                appendSyncLog(vault: localVault, event: "evict", summary: "\(releasedHere) released", counterpartyKey: "")
                 try await rescan(vaultID: vaultID)
             }
         }
