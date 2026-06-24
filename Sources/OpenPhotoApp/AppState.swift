@@ -88,29 +88,31 @@ final class AppState {
     /// sidebar shows it so the user knows what the on-device analysis is doing right now.
     var derivationStageName: String?
 
-    // MARK: — Sync activity (one active sync at a time; survives the sheet closing)
-    /// Observable snapshot the sync sheet + sidebar chip read. nil → no sync in flight / dismissed.
-    var syncActivity: SyncActivity?
-    /// Non-nil → present the sync sheet (root-level, so it's reopenable from anywhere).
-    var syncSheetDrive: Vault?
-    /// The in-flight sync's cancellable Task (nil when idle). See AppState+Sync.swift.
-    var syncTask: Task<Void, Never>?
+    // MARK: — Drive job activity (one active job at a time; survives the sheet closing)
+    /// Observable snapshot the job sheet + sidebar chip read. nil → no job in flight / dismissed.
+    var activeJob: DriveJob?
+    /// True while a background drive job is actively running (vs. finished/cancelled or idle).
+    var jobRunning: Bool { activeJob?.phase == .running }
+    /// Non-nil → present the job sheet (root-level, so it's reopenable from anywhere).
+    var jobSheetDrive: Vault?
+    /// The in-flight job's cancellable Task (nil when idle). See AppState+Sync.swift.
+    var jobTask: Task<Void, Never>?
     /// Cooperative cancel flag (MainActor-facing). `cancelSync()` flips it; `startSync` mirrors it
-    /// into the per-sync `syncCancelFlag` that the off-actor engine closure actually reads.
-    var syncCancelRequested = false
+    /// into the per-job `jobCancelFlag` that the off-actor engine closure actually reads.
+    var jobCancelRequested = false
     /// Thread-safe cancel flag the engine's @Sendable `shouldCancel` reads from off the MainActor
-    /// (a fresh one per sync, captured by the closure — never `self`, so no actor-isolation hazard).
-    var syncCancelFlag: SyncCancelFlag?
-    /// The drive being synced — lets the sidebar chip reopen the sheet for it.
-    var syncDrive: Vault?
+    /// (a fresh one per job, captured by the closure — never `self`, so no actor-isolation hazard).
+    var jobCancelFlag: JobCancelFlag?
+    /// The drive the job targets — lets the sidebar chip reopen the sheet for it.
+    var jobDrive: Vault?
     /// Running-average speed/ETA meter, sampled by the ticker on a steady cadence (not the firehose).
-    var syncRateMeter = SyncRateMeter()
+    var jobRateMeter = SyncRateMeter()
     /// Latest raw progress from the engine's per-chunk callback. NOT observed — it's a buffer the
     /// ticker samples, so the bursty callback never drives SwiftUI (that caused the flicker).
-    @ObservationIgnored var syncRaw: SyncProgress?
-    /// 0.5s ticker: copies `syncRaw` into the observed `syncActivity` with an averaged speed/ETA, so
+    @ObservationIgnored var jobRaw: DriveProgress?
+    /// 0.5s ticker: copies `jobRaw` into the observed `activeJob` with an averaged speed/ETA, so
     /// the UI refreshes calmly at 2 Hz with stable numbers instead of jittering at the callback rate.
-    @ObservationIgnored var syncTickerTask: Task<Void, Never>?
+    @ObservationIgnored var jobTickerTask: Task<Void, Never>?
 
     var scanning = false
     /// Set when `rescan()` is asked to run while a scan is already in flight (e.g. a watcher event
@@ -1976,9 +1978,9 @@ final class AppState {
         semanticIndex = nil
         semanticIndexDirty = true
         derivationTask?.cancel(); derivationTask = nil
-        syncCancelFlag?.cancel(); syncTask?.cancel(); syncTask = nil
-        syncTickerTask?.cancel(); syncTickerTask = nil
-        syncActivity = nil; syncCancelFlag = nil; syncRaw = nil
+        jobCancelFlag?.cancel(); jobTask?.cancel(); jobTask = nil
+        jobTickerTask?.cancel(); jobTickerTask = nil
+        activeJob = nil; jobCancelFlag = nil; jobRaw = nil
 
         // Defense-in-depth: clear per-library state so a subsequent open starts clean.
         reverified = [:]

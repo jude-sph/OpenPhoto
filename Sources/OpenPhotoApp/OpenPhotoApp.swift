@@ -116,7 +116,7 @@ struct RootView: View {
             // Present the sync sheet at the app root so it's reopenable from anywhere (the sidebar
             // sync chip lives outside DrivesView). Driven by AppState so background sync survives
             // navigating away from Drives.
-            .sheet(item: $state.syncSheetDrive) { drive in SyncPlanSheet(state: state, drive: drive) }
+            .sheet(item: $state.jobSheetDrive) { drive in SyncPlanSheet(state: state, drive: drive) }
         }
     }
 

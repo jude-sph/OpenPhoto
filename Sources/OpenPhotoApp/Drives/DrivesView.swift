@@ -30,7 +30,7 @@ struct DrivesView: View {
 
     /// A backup sync (including its slow "finishing" snapshot write) is in flight. While it runs,
     /// other drive operations are disabled — they'd contend with the same files/manifest.
-    private var syncing: Bool { state.syncActivity?.phase == .running }
+    private var syncing: Bool { state.jobRunning }
 
     var body: some View {
         mainContent
@@ -163,7 +163,7 @@ struct DrivesView: View {
                 .controlSize(.small)
                 .disabled((vr.role == "backup" && behind == 0) || cloning || !present || syncing)
             }
-            Button("Sync\u{2026}") { state.syncSheetDrive = state.openVault(for: vr) }
+            Button("Sync\u{2026}") { state.jobSheetDrive = state.openVault(for: vr) }
                 .controlSize(.small).disabled(!present || syncing)
             Button("Check") {
                 if let v = state.openVault(for: vr) { drift = DriftPresentation(drive: v, verify: false) }
@@ -228,7 +228,7 @@ struct DrivesView: View {
             let n = r.unknown.count + r.missing.count + r.changed.count + r.corrupt.count
             if n == 0 {
                 if (state.drivePendingSync[vr.id] ?? 0) > 0 {
-                    Button { state.syncSheetDrive = state.openVault(for: vr) } label: {
+                    Button { state.jobSheetDrive = state.openVault(for: vr) } label: {
                         Label("Updates to sync \u{00b7} Sync", systemImage: "arrow.triangle.2.circlepath")
                             .font(.system(size: 11)).foregroundStyle(Theme.amber)
                     }.buttonStyle(.plain)

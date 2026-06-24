@@ -13,7 +13,7 @@ struct SyncPlanSheet: View {
     @State private var retrySelection: Set<String> = []   // by item.destRelPath
 
     private var volume: FileSystemVolume { FileSystemVolume(rootURL: drive.rootURL) }
-    private var isRunning: Bool { state.syncActivity?.phase == .running }
+    private var isRunning: Bool { state.activeJob?.phase == .running }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,10 +25,10 @@ struct SyncPlanSheet: View {
             }.padding(16)
             Divider().overlay(Theme.hairline)
             Group {
-                if let a = state.syncActivity {
+                if let a = state.activeJob {
                     if a.phase == .running {
                         runningView(a)
-                    } else if let r = a.result, !r.failed.isEmpty {
+                    } else if case .sync(let r) = a.result, !r.failed.isEmpty {
                         failureView(r)
                     } else {
                         finishedView(a)
@@ -45,7 +45,7 @@ struct SyncPlanSheet: View {
     }
 
     private func computePlan() async {
-        guard state.syncActivity == nil, let lib = state.library else { return }
+        guard state.activeJob == nil, let lib = state.library else { return }
         let engine = SyncEngine(library: lib)
         plan = (try? engine.plan(sources: lib.vaults, destinationVault: drive)) ?? SyncPlan()
         freeBytes = (try? volume.freeSpaceBytes()) ?? 0
@@ -94,12 +94,12 @@ struct SyncPlanSheet: View {
         let pending = state.drivePendingDeletions[drive.descriptor.vaultID] ?? []
         let chosen = pending.filter { deletionSelection.contains($0.hash) }
         state.startSync(plan: plan, drive: drive, chosenDeletions: chosen)
-        // No dismiss(): syncActivity becomes non-nil, so the sheet flips to the running phase.
+        // No dismiss(): activeJob becomes non-nil, so the sheet flips to the running phase.
     }
 
     // MARK: Running
 
-    @ViewBuilder private func runningView(_ a: SyncActivity) -> some View {
+    @ViewBuilder private func runningView(_ a: DriveJob) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if a.stage == .finishing {
                 // Copy is done + safe; this is the (potentially slow) catalog-snapshot/album write.
@@ -129,8 +129,8 @@ struct SyncPlanSheet: View {
 
     // MARK: Finished — success
 
-    @ViewBuilder private func finishedView(_ a: SyncActivity) -> some View {
-        let r = a.result
+    @ViewBuilder private func finishedView(_ a: DriveJob) -> some View {
+        let r: SyncResult? = { if case .sync(let r) = a.result { return r }; return nil }()
         VStack(alignment: .leading, spacing: 8) {
             Text(a.phase == .cancelled ? "Sync cancelled" : "Sync complete")
                 .font(.system(size: 14, weight: .semibold))

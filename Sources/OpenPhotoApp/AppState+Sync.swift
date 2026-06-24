@@ -1,47 +1,64 @@
 import SwiftUI
 import OpenPhotoCore
 
-/// Observable snapshot of an in-flight (or just-finished) background sync. The sheet + sidebar chip
-/// read this; `AppState.syncActivity` is the single source of truth, updated on the MainActor.
-struct SyncActivity: Sendable {
+/// Observable snapshot of an in-flight (or just-finished) background drive job — a sync, an evict,
+/// or a rehydrate. The sheet + sidebar chip read this; `AppState.activeJob` is the single source of
+/// truth (only ONE job runs at a time), updated on the MainActor.
+struct DriveJob: Sendable {
+    enum Kind: String, Sendable { case sync, evict, rehydrate }
     enum Phase: Sendable, Equatable { case running, finished, cancelled }
+    var kind: Kind
+    var scopeLabel: String                      // "all photos", a folder name — for display
     var driveName: String
-    var stage: SyncProgress.Stage
+    var stage: DriveProgress.Stage
     var bytesDone: Int64 = 0, bytesTotal: Int64 = 0
     var filesDone = 0, filesTotal = 0
     var currentName = ""
     var speedBytesPerSec = 0.0
     var etaSeconds: Double?
     var phase: Phase = .running
-    var result: SyncResult?                    // set when phase != .running
+    var result: DriveJobResult?                 // set when phase != .running
+}
+
+enum DriveJobResult: Sendable {
+    case sync(SyncResult)
+    case evict(EvictOutcome)
+    case rehydrate(done: Int, failed: [FailedItem])
 }
 
 /// A tiny thread-safe Bool the off-actor engine `shouldCancel` closure can poll directly. The engine
 /// runs its copy loop off the MainActor, so it can't safely read AppState's @MainActor cancel flag;
-/// instead `startSync` hands the closure one of these (captured by value, not `self`).
-final class SyncCancelFlag: @unchecked Sendable {
+/// instead `startSync` hands the closure one of these (captured by value, not `self`). Shared by all
+/// background jobs (sync/evict/rehydrate).
+final class JobCancelFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false
     func cancel() { lock.lock(); value = true; lock.unlock() }
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return value }
 }
 
+private extension SyncProgress.Stage {
+    var asDriveStage: DriveProgress.Stage {
+        switch self { case .copying: .copying; case .verifying: .verifying; case .finishing: .finishing }
+    }
+}
+
 extension AppState {
     /// Start a background sync to `drive`. Stores a cancellable Task; streams progress into
-    /// `syncActivity` (speed/ETA via SyncRateMeter). Post-sync bookkeeping (presence, deletions,
+    /// `activeJob` (speed/ETA via SyncRateMeter). Post-sync bookkeeping (presence, deletions,
     /// snapshot, albums) runs here so it survives the sheet being minimized.
     func startSync(plan: SyncPlan, drive: Vault, chosenDeletions: [PendingDeletion] = []) {
-        guard syncTask == nil, let lib = library else { return }
+        guard jobTask == nil, let lib = library else { return }
         let volume = FileSystemVolume(rootURL: drive.rootURL)
-        syncCancelRequested = false
-        let cancelFlag = SyncCancelFlag()
-        syncCancelFlag = cancelFlag
-        syncDrive = drive
-        syncRateMeter = SyncRateMeter()
-        syncRaw = nil
+        jobCancelRequested = false
+        let cancelFlag = JobCancelFlag()
+        jobCancelFlag = cancelFlag
+        jobDrive = drive
+        jobRateMeter = SyncRateMeter()
+        jobRaw = nil
         let bytesTotal = plan.totalCopyBytes
-        syncActivity = SyncActivity(driveName: drive.rootURL.lastPathComponent, stage: .copying,
-                                    bytesTotal: bytesTotal, filesTotal: plan.copies.count)
+        activeJob = DriveJob(kind: .sync, scopeLabel: "", driveName: drive.rootURL.lastPathComponent,
+                             stage: .copying, bytesTotal: bytesTotal, filesTotal: plan.copies.count)
         let engine = SyncEngine(library: lib)
         let start = Date()
         // The @Sendable progress/cancel closures must not capture the outer Task's `self`; give them an
@@ -52,43 +69,45 @@ extension AppState {
         // buffer and computes a windowed-average speed + whole-job ETA, so the UI refreshes calmly at
         // 2 Hz instead of jittering at the engine's per-chunk callback rate (which made it flicker and
         // the speed/ETA nonsense).
-        syncTickerTask = Task { @MainActor in
+        jobTickerTask = Task { @MainActor in
             while !Task.isCancelled {
-                if let self = weakSelf, let raw = self.syncRaw,
-                   var a = self.syncActivity, a.phase == .running {
-                    let (speed, eta) = self.syncRateMeter.update(
+                if let self = weakSelf, let raw = self.jobRaw,
+                   var a = self.activeJob, a.phase == .running {
+                    let (speed, eta) = self.jobRateMeter.update(
                         bytesDone: raw.bytesDone, bytesTotal: bytesTotal,
                         now: Date().timeIntervalSince(start))
                     a.bytesDone = raw.bytesDone
-                    a.filesDone = raw.done; a.currentName = raw.currentName; a.stage = raw.stage
+                    a.filesDone = raw.filesDone; a.currentName = raw.currentName; a.stage = raw.stage
                     a.speedBytesPerSec = speed; a.etaSeconds = eta
-                    self.syncActivity = a
+                    self.activeJob = a
                 }
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
 
-        syncTask = Task {
+        jobTask = Task {
             let r = await engine.apply(plan, destinationVault: drive, volume: volume,
                 shouldCancel: { cancelFlag.isCancelled },
-                progress: { p in Task { @MainActor in weakSelf?.syncRaw = p } })  // buffer only; ticker renders
+                progress: { p in Task { @MainActor in weakSelf?.jobRaw = DriveProgress(
+                    stage: p.stage.asDriveStage, filesDone: p.done, filesTotal: p.total,
+                    bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, currentName: p.currentName) } })  // buffer only; ticker renders
             await weakSelf?.finishSync(result: r, drive: drive, chosenDeletions: chosenDeletions)
         }
     }
 
     @MainActor private func finishSync(result r: SyncResult, drive: Vault,
                                        chosenDeletions: [PendingDeletion]) async {
-        syncTickerTask?.cancel(); syncTickerTask = nil           // stop the ticker; we settle the bar below
+        jobTickerTask?.cancel(); jobTickerTask = nil             // stop the ticker; we settle the bar below
         // If the library was closed mid-sync, skip the post-sync bookkeeping (it would run against a
-        // torn-down AppState); teardown already cleared syncActivity.
-        guard library != nil else { syncTask = nil; syncCancelFlag = nil; syncRaw = nil; return }
+        // torn-down AppState); teardown already cleared activeJob.
+        guard library != nil else { jobTask = nil; jobCancelFlag = nil; jobRaw = nil; return }
         // Show a "finishing" state during the post-copy bookkeeping (writing the drive's catalog
         // snapshot + albums can take a while on a big library) so the UI doesn't sit frozen on the last
         // copied file. The copy itself is already done + safe at this point.
-        if !r.cancelled, var a = syncActivity, a.phase == .running {
+        if !r.cancelled, var a = activeJob, a.phase == .running {
             a.stage = .finishing; a.bytesDone = a.bytesTotal; a.filesDone = a.filesTotal
             a.currentName = ""; a.speedBytesPerSec = 0; a.etaSeconds = nil
-            syncActivity = a
+            activeJob = a
         }
         await Task.yield()   // let SwiftUI paint the "finishing" state before the slow bookkeeping
         // (Moved verbatim from the old SyncPlanSheet.runApply post-apply block.)
@@ -105,19 +124,20 @@ extension AppState {
                 if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: syncedDrive.stateDirURL) }
             }.value
         }
-        var a = syncActivity ?? SyncActivity(driveName: drive.rootURL.lastPathComponent, stage: .finishing)
+        var a = activeJob ?? DriveJob(kind: .sync, scopeLabel: "",
+                                      driveName: drive.rootURL.lastPathComponent, stage: .finishing)
         a.phase = r.cancelled ? .cancelled : .finished
         if !r.cancelled { a.bytesDone = a.bytesTotal; a.filesDone = a.filesTotal }   // settle the bar at 100%
-        a.result = r
-        syncActivity = a
-        syncTask = nil; syncCancelFlag = nil; syncRaw = nil
+        a.result = .sync(r)
+        activeJob = a
+        jobTask = nil; jobCancelFlag = nil; jobRaw = nil
     }
 
-    func cancelSync() { syncCancelRequested = true; syncCancelFlag?.cancel() }
+    func cancelSync() { jobCancelRequested = true; jobCancelFlag?.cancel() }
 
     /// Re-run a sync for just the selected previously-failed items.
     func retrySyncFailures(_ items: [PlanItem], drive: Vault) {
-        guard syncTask == nil else { return }
+        guard jobTask == nil else { return }
         var plan = SyncPlan()
         plan.copies = items
         plan.totalCopyBytes = items.reduce(0) { $0 + $1.size }
@@ -125,7 +145,7 @@ extension AppState {
     }
 
     func dismissSyncResult() {
-        guard syncTask == nil else { return }   // don't clear a running sync
-        syncActivity = nil; syncDrive = nil; syncSheetDrive = nil
+        guard jobTask == nil else { return }   // don't clear a running job
+        activeJob = nil; jobDrive = nil; jobSheetDrive = nil
     }
 }
