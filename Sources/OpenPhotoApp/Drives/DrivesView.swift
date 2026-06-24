@@ -27,6 +27,10 @@ struct DrivesView: View {
     @State private var conflictDismissed: Set<String> = []
     // Cross-drive integrity
     @State private var consensusRepair = false
+    // Global storage ops
+    @State private var confirmEvictAll = false
+    @State private var evictAllItems: [TimelineItem] = []
+    @State private var plugInPrompt: String?      // drive name to prompt the user to connect
 
     /// A backup sync (including its slow "finishing" snapshot write) is in flight. While it runs,
     /// other drive operations are disabled — they'd contend with the same files/manifest.
@@ -86,6 +90,25 @@ struct DrivesView: View {
             .modifier(ConflictAlert(state: state,
                                     canonicalConflict: $canonicalConflict,
                                     conflictDismissed: $conflictDismissed))
+            .alert("Free up space on this Mac?", isPresented: $confirmEvictAll) {
+                Button("Cancel", role: .cancel) {}
+                Button("Free Up Space", role: .destructive) {
+                    state.startEvictJob(items: evictAllItems, scopeLabel: "all photos",
+                                        driveName: state.connectedDrivesCanonicalFirst().first?.rootURL.lastPathComponent ?? "")
+                    state.jobSheetDrive = state.jobDrive
+                }
+            } message: {
+                let n = evictAllItems.count
+                let bytes = evictAllItems.reduce(Int64(0)) { $0 + $1.size }
+                Text("Move \(n) original\(n == 1 ? "" : "s") (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))) to the Trash. They stay on your drive and you can download them back anytime.")
+            }
+            .confirmationDialog("Plug in your drive", isPresented: Binding(
+                get: { plugInPrompt != nil }, set: { if !$0 { plugInPrompt = nil } }),
+                titleVisibility: .visible, presenting: plugInPrompt) { _ in
+                Button("OK", role: .cancel) { plugInPrompt = nil }
+            } message: { name in
+                Text("Plug in \u{201c}\(name)\u{201d} so OpenPhoto can move these photos. Then try again.")
+            }
             .onChange(of: state.conflictingCanonical?.id) { _, _ in
                 if let vr = state.conflictingCanonical, !conflictDismissed.contains(vr.id) { canonicalConflict = vr }
             }
@@ -102,6 +125,10 @@ struct DrivesView: View {
                 Button("Quick View Folder\u{2026}") { state.quickViewFolderViaPanel() }.controlSize(.small)
                 Button("Verify All Drives") { consensusRepair = true }.controlSize(.small)
                     .disabled(syncing)
+                Button("Free Up Mac Space\u{2026}") { prepareEvictAll() }
+                    .controlSize(.small).disabled(syncing || state.durableVaults.isEmpty)
+                Button("Download All to Mac\u{2026}") { prepareRehydrateAll() }
+                    .controlSize(.small).disabled(syncing || state.durableVaults.isEmpty)
             }
             .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
             Divider().overlay(Theme.hairline)
@@ -117,6 +144,31 @@ struct DrivesView: View {
             } else {
                 List(state.durableVaults, id: \.id) { vr in row(vr) }.listStyle(.inset)
             }
+        }
+    }
+
+    // MARK: - Global storage ops
+
+    private func prepareEvictAll() {
+        let items = state.allEvictableItems()
+        guard !items.isEmpty else { return }
+        switch state.resolveDrive(forHashes: Set(items.map(\.hash))) {
+        case .ready: evictAllItems = items; confirmEvictAll = true
+        case .needsDrive(let name): plugInPrompt = name
+        case .nothingToDo: break
+        }
+    }
+
+    private func prepareRehydrateAll() {
+        let items = state.allDriveOnlyItems()
+        guard !items.isEmpty else { return }
+        switch state.resolveDrive(forHashes: Set(items.map(\.hash))) {
+        case .ready(let drives):
+            state.startRehydrateJob(items: items, scopeLabel: "all photos",
+                                    driveName: drives.first?.rootURL.lastPathComponent ?? "")
+            state.jobSheetDrive = state.jobDrive
+        case .needsDrive(let name): plugInPrompt = name
+        case .nothingToDo: break
         }
     }
 
