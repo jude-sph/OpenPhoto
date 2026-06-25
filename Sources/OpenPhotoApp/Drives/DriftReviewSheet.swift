@@ -145,6 +145,7 @@ struct DriftReviewSheet: View {
 
     private func load() async {
         guard report == nil else { return }
+        await state.reconcileFolderOps(driveVault: drive)   // apply offline moves before scanning
         if verify {
             report = await state.verifyIntegrity(drive) { p in Task { @MainActor in progress = p } }
         } else {

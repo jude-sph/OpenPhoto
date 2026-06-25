@@ -1451,7 +1451,10 @@ final class AppState {
     func reconnectDrive(_ vr: VaultRecord) {
         ejectedDrives.remove(vr.id); persistEjected()
         cacheDriveKind(vr)
-        if let drive = openVault(for: vr) { driftScan(drive) }   // re-scan just this drive
+        guard let drive = openVault(for: vr) else { return }
+        // Apply any offline moves to the drive BEFORE the drift scan, so reconnecting never surfaces
+        // moved files as "new / adopt".
+        Task { await reconcileFolderOps(driveVault: drive); driftScan(drive) }
     }
 
     /// Forget a drive entirely: unregister it + drop its presence. The files on the drive are NOT
@@ -1568,6 +1571,9 @@ final class AppState {
         guard let lib = library else { return nil }
         return durableVaults.first { vr in
             driveIsPresent(vr)
+            // Don't offer adoption while this drive has queued offline moves — they must be applied
+            // first, or files moved while it was unplugged masquerade as a fresh, unknown library.
+            && ((try? lib.catalog.pendingFolderOps(forVault: vr.id))?.isEmpty ?? true)
             && FileManager.default.fileExists(atPath:
                 URL(fileURLWithPath: vr.rootPath).appendingPathComponent(".openphoto/catalog-snapshot/catalog.sqlite").path)
             && ((try? lib.catalog.vaultPresenceHashes(forVault: vr.id))?.isEmpty ?? true)
@@ -1703,6 +1709,7 @@ final class AppState {
         for vr in durableVaults where driveIsPresent(vr) {
             cacheDriveKind(vr)
             guard let drive = openVault(for: vr) else { continue }
+            await reconcileFolderOps(driveVault: drive)   // apply offline moves before verifying
             let name = (vr.rootPath as NSString).lastPathComponent
             let report = await Task.detached(priority: .userInitiated) {
                 (try? DriftReconciler().verify(drive: drive) { p in progress(name, p) }) ?? DriftReport()
@@ -1773,6 +1780,18 @@ final class AppState {
         driveDrift[driveVault.descriptor.vaultID] = enriched
         refreshPendingDeletions()   // presence just changed → keep the deletions indicator honest after Verify
         return enriched
+    }
+
+    /// Apply a drive's queued offline folder-ops (moves made while it was unplugged), then reconcile
+    /// its presence from the now-updated manifest. Call BEFORE any drift / adopt / verify / sync
+    /// inspection reads a just-present drive, so files moved while it was offline are recognized as
+    /// moved — never surfaced as "unknown → adopt these new photos". Cheap no-op (one query) when the
+    /// drive has no pending ops.
+    @MainActor func reconcileFolderOps(driveVault drive: Vault) async {
+        let id = drive.descriptor.vaultID
+        guard let ops = try? library?.catalog.pendingFolderOps(forVault: id), !ops.isEmpty else { return }
+        await applyPendingFolderOps(forDriveID: id, driveVault: drive)
+        try? refreshCanonicalPresence(driveVault: drive)
     }
 
     /// Background fast-scan of every connected durable drive (canonical + backups) — keeps badges +

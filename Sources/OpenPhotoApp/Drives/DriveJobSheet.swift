@@ -59,6 +59,7 @@ struct DriveJobSheet: View {
 
     private func computePlan() async {
         guard state.activeJob == nil, let lib = state.library else { return }
+        await state.reconcileFolderOps(driveVault: drive)   // apply offline moves before planning the sync
         let engine = SyncEngine(library: lib)
         plan = (try? engine.plan(sources: lib.vaults, destinationVault: drive)) ?? SyncPlan()
         freeBytes = (try? volume.freeSpaceBytes()) ?? 0

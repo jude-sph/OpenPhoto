@@ -244,8 +244,14 @@ extension AppState {
         }
 
         reloadCanonicalPresence()
-        endReorg()                                           // release before the post-reorg scan
-        await rescan()
+        endReorg()
+        // Incremental: `movePhotos` already updated each moved file's catalog instance + manifest +
+        // sidecar in place (and the drive propagation above did the same on connected drives), so a
+        // full rescan is unnecessary — it was O(whole library) regardless of how few photos moved.
+        // Re-derive the locked flag (a photo may have moved into/out of a locked folder), then just
+        // rebuild the queries.
+        try? library.catalog.applyLockedFolders(lockedFolders)
+        try? refreshQueries()
         photoMoveToken += 1
         if !undoMoves.isEmpty { recordUndo(.movePhotos(moves: undoMoves)) }
 

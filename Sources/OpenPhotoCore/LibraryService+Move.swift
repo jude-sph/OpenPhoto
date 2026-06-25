@@ -10,11 +10,12 @@ public struct MoveResult: Sendable, Equatable {
 }
 
 extension LibraryService {
-    /// Move local instances into `dest` (vault-root-relative dir, "" = root), each within
-    /// its own vault. Carries each Live pair's hidden video half (and both sidecars),
-    /// mirroring `delete()`. Items already in `dest` and drive-only items are skipped.
-    /// Collects failures and keeps going. Does NOT rescan — the caller orchestrates
-    /// (drive propagation first, then one rescan).
+    /// Move local instances into `dest` (vault-root-relative dir, "" = root), each within its own
+    /// vault. Each move atomically: renames the file, carries its XMP sidecar, patches the manifest
+    /// entry (all in `VaultReorganizer.moveFile`), and updates the catalog `instances` row in place
+    /// (`rewriteInstancePath`). So the caller needs only `refreshQueries()` — no full rescan. Carries
+    /// each Live pair's hidden video half too. Items already in `dest` and drive-only items are
+    /// skipped. Collects failures and keeps going.
     public func movePhotos(_ items: [TimelineItem], toDir dest: String) -> MoveResult {
         var result = MoveResult()
         let destDir = dest.precomposedStringWithCanonicalMapping
@@ -26,8 +27,11 @@ extension LibraryService {
                 result.failures[item.relPath] = "vault not open"; continue
             }
             do {
-                result.moved[item.relPath] = try VaultReorganizer.moveFile(
-                    in: vault, relPath: item.relPath, intoDirRelPath: destDir)
+                let newRel = try VaultReorganizer.moveFile(in: vault, relPath: item.relPath,
+                                                           intoDirRelPath: destDir)
+                try catalog.rewriteInstancePath(vaultID: item.vaultID,
+                                                fromRelPath: item.relPath, toRelPath: newRel)
+                result.moved[item.relPath] = newRel
             } catch {
                 result.failures[item.relPath] = String(describing: error); continue
             }
@@ -37,6 +41,8 @@ extension LibraryService {
                pair.dirPath != destDir,
                let newRel = try? VaultReorganizer.moveFile(in: vault, relPath: pair.relPath,
                                                            intoDirRelPath: destDir) {
+                try? catalog.rewriteInstancePath(vaultID: item.vaultID,
+                                                 fromRelPath: pair.relPath, toRelPath: newRel)
                 result.moved[pair.relPath] = newRel
             }
         }

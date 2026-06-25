@@ -15,16 +15,28 @@ private func makeLibrary(_ t: TestDirs, files: [String]) async throws -> (Librar
     return (lib, lib.vaults[0])
 }
 
-@Test func movePhotosMovesFileAndCatalogFollowsAfterRescan() async throws {
+@Test func movePhotosUpdatesCatalogIncrementallyWithoutRescan() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let (lib, vault) = try await makeLibrary(t, files: ["a/x.jpg"])
     let items = try lib.items(inDir: "a")
     #expect(items.count == 1)
+    let hash = items[0].hash
 
     let result = lib.movePhotos(items, toDir: "b")
-
     #expect(result.moved == ["a/x.jpg": "b/x.jpg"])
     #expect(result.failures.isEmpty)
+
+    // Catalog follows IMMEDIATELY — no rescan needed (the move updated the instance in place).
+    #expect(try lib.items(inDir: "a").isEmpty)
+    #expect(try lib.items(inDir: "b").map(\.relPath) == ["b/x.jpg"])
+    // The file and the manifest entry moved too (same hash, new path).
+    #expect(FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: "b/x.jpg").path))
+    #expect(!FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: "a/x.jpg").path))
+    let manifest = try Manifest.read(from: vault.manifestURL)
+    #expect(manifest.map(\.path) == ["b/x.jpg"])
+    #expect(manifest.first?.hash.stringValue == hash)
+
+    // Air-tight: a full rescan is now a NO-OP — the incremental update already matches disk+manifest.
     try await lib.rescan(vaultID: vault.descriptor.vaultID)
     #expect(try lib.items(inDir: "a").isEmpty)
     #expect(try lib.items(inDir: "b").map(\.relPath) == ["b/x.jpg"])
@@ -76,4 +88,19 @@ private func makeLibrary(_ t: TestDirs, files: [String]) async throws -> (Librar
     #expect(result.moved == ["a/y.jpg": "b/y.jpg"])          // z already in dest → skipped
     #expect(result.failures.keys.contains("a/x.jpg"))         // vanished → failure, batch continued
     #expect(FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: "b/z.jpg").path))
+}
+
+// Part B guarantee: applying a move to a drive (rename + manifest patch, as the offline-op drain
+// does on reconnect) leaves a drift scan CLEAN — no "unknown/new" file, no "missing". So a moved
+// file is never surfaced as a fresh photo to adopt.
+@Test func appliedDriveMoveLeavesDriftClean() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (_, drive) = try await makeLibrary(t, files: ["old/x.jpg"])  // stand-in "drive": manifest + file
+    // The move the queue drain performs on the drive:
+    _ = try VaultReorganizer.moveFile(in: drive, relPath: "old/x.jpg", intoDirRelPath: "new")
+    let report = try DriftReconciler().scan(drive: drive)
+    #expect(report.unknown.isEmpty)        // the new-path file is NOT "unknown / adopt"
+    #expect(report.missing.isEmpty)        // the old path is NOT "missing"
+    #expect(report.changed.isEmpty)
+    #expect(report.presentHashes.count == 1)
 }

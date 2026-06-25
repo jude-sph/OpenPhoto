@@ -553,6 +553,20 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// Update a LOCAL instance's path in place after a move (its `relPath` + derived `dirPath`),
+    /// so a folder move needs only this targeted write — no full vault rescan. NFC-normalizes;
+    /// no-ops when `from == to` or either is empty. (Mirror of `rewriteVaultPresencePath` for the
+    /// local `instances` table.)
+    public func rewriteInstancePath(vaultID: String, fromRelPath: String, toRelPath: String) throws {
+        let from = fromRelPath.precomposedStringWithCanonicalMapping
+        let to = toRelPath.precomposedStringWithCanonicalMapping
+        guard !from.isEmpty, !to.isEmpty, from != to else { return }
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE instances SET relPath = ?, dirPath = ? WHERE vaultID = ? AND relPath = ?",
+                           arguments: [to, (to as NSString).deletingLastPathComponent, vaultID, from])
+        }
+    }
+
     public func upsert(assets: [AssetRecord]) throws {
         try dbQueue.write { db in for a in assets { try a.upsert(db) } }
     }
