@@ -41,6 +41,7 @@ struct DrivesView: View {
         mainContent
             .sheet(item: $drift) { d in DriftReviewSheet(state: state, drive: d.drive, verify: d.verify) }
             .sheet(item: $deletionDrive) { d in DeletionReviewSheet(state: state, drive: d) }
+            .sheet(item: $state.reviewDrive) { p in ReviewChangesSheet(state: state, drive: p.drive) }
             .sheet(isPresented: $consensusRepair) { ConsensusRepairSheet(state: state) }
             .alert("Forget \u{201c}\(forgetTarget.map { ($0.rootPath as NSString).lastPathComponent } ?? "")\u{201d}?",
                    isPresented: Binding(get: { forgetTarget != nil },
@@ -194,7 +195,6 @@ struct DrivesView: View {
                 Text((vr.rootPath as NSString).lastPathComponent).font(.system(size: 13.5, weight: .semibold))
                 statusText(vr)
                 statusLine(vr)
-                pendingDeletionsLine(vr)
             }
             Spacer()
             if vr.role == "backup", !ejected {
@@ -229,12 +229,11 @@ struct DrivesView: View {
             }
             Button("Sync\u{2026}") { state.jobSheetDrive = state.openVault(for: vr) }
                 .controlSize(.small).disabled(!present || syncing)
-            Button("Check") {
-                if let v = state.openVault(for: vr) { drift = DriftPresentation(drive: v, verify: false) }
-            }.controlSize(.small).disabled(!present || syncing)
+                .help("Copy new photos and edits from this Mac to the drive.")
             Button("Verify Integrity") {
                 if let v = state.openVault(for: vr) { drift = DriftPresentation(drive: v, verify: true) }
             }.controlSize(.small).disabled(!present || syncing)
+                .help("Re-hash every file on the drive to catch silent corruption. Slow — for periodic deep checks.")
             Button("Quick View") {
                 Task { await state.startQuickView(root: URL(fileURLWithPath: vr.rootPath)) }
             }.controlSize(.small).disabled(!present)
@@ -272,41 +271,31 @@ struct DrivesView: View {
         .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
     }
 
-    /// Pending-deletions indicator \u{2014} opens the standalone review sheet. Honest count from the
-    /// eligibility cache (refreshed on connect + after any delete/restore/sync/propagate).
-    @ViewBuilder private func pendingDeletionsLine(_ vr: VaultRecord) -> some View {
-        if state.driveIsPresent(vr), let pend = state.drivePendingDeletions[vr.id], !pend.isEmpty {
-            Button {
-                if let v = state.openVault(for: vr) { deletionDrive = v }
-            } label: {
-                Label("\(pend.count) deletion\(pend.count == 1 ? "" : "s") pending \u{00b7} Review",
-                      systemImage: "trash")
-                    .font(.system(size: 11)).foregroundStyle(.orange)
-            }.buttonStyle(.plain)
-        }
-    }
-
-    /// Passive drift status from the auto-scan cache (refreshed on connect + after any scan).
+    /// One status line per present drive: changes-since-last-connect (queued moves + eligible deletions
+    /// + drive drift) opens the review; else new-files-to-back-up points at Sync; else clean. Corrupt is
+    /// excluded — that's Verify Integrity's job, not the fast-scan review.
     @ViewBuilder private func statusLine(_ vr: VaultRecord) -> some View {
         if state.driveIsPresent(vr), let r = state.driveDrift[vr.id] {
-            let n = r.unknown.count + r.missing.count + r.changed.count + r.corrupt.count
-            if n == 0 {
-                if (state.drivePendingSync[vr.id] ?? 0) > 0 {
-                    Button { state.jobSheetDrive = state.openVault(for: vr) } label: {
-                        Label("Updates to sync \u{00b7} Sync", systemImage: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 11)).foregroundStyle(Theme.amber)
-                    }.buttonStyle(.plain)
-                } else {
-                    Label("No changes", systemImage: "checkmark.seal")
-                        .font(.system(size: 11)).foregroundStyle(.green)
-                }
-            } else {
+            let driftN = r.unknown.count + r.missing.count + r.changed.count
+            let delN = state.drivePendingDeletions[vr.id]?.count ?? 0
+            let opsN = (try? state.library?.catalog.pendingFolderOps(forVault: vr.id))?.count ?? 0
+            let n = driftN + delN + opsN
+            if n > 0 {
                 Button {
-                    if let v = state.openVault(for: vr) { drift = DriftPresentation(drive: v, verify: false) }
+                    if let v = state.openVault(for: vr) { state.reviewDrive = ReviewPresentation(drive: v) }
                 } label: {
-                    Label("\(n) change\(n == 1 ? "" : "s") \u{00b7} Review", systemImage: "exclamationmark.triangle.fill")
+                    Label("\(n) change\(n == 1 ? "" : "s") since last connect \u{00b7} Review",
+                          systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 11)).foregroundStyle(.orange)
                 }.buttonStyle(.plain)
+            } else if (state.drivePendingSync[vr.id] ?? 0) > 0 {
+                Button { state.jobSheetDrive = state.openVault(for: vr) } label: {
+                    Label("Updates to sync \u{00b7} Sync", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 11)).foregroundStyle(Theme.amber)
+                }.buttonStyle(.plain)
+            } else {
+                Label("No changes", systemImage: "checkmark.seal")
+                    .font(.system(size: 11)).foregroundStyle(.green)
             }
         }
     }
