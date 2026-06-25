@@ -441,11 +441,13 @@ extension AppState {
     /// files are never touched. Folder-structure ops are propagate-only in v1 (no per-op undo).
     @MainActor func reviewUndo(_ op: PendingFolderOp) async {
         guard let library, op.op == "moveFile", let s = op.src, let d = op.dst else { return }
-        try? library.revertLocalMove(from: d, to: s)
+        // Revert the Mac once; use the path it ACTUALLY landed at (a collision may suffix it) so the
+        // drive presence rows we rewrite below stay consistent with the local instance.
+        let actualSrc = (try? library.revertLocalMove(from: d, to: s)) ?? s
         for vr in durableVaults {
             for sib in (try? library.catalog.pendingFolderOps(forVault: vr.id)) ?? []
                     where sib.op == "moveFile" && sib.src == s && sib.dst == d {
-                try? library.catalog.rewriteVaultPresencePath(vaultID: vr.id, fromRelPath: d, toRelPath: s)
+                try? library.catalog.rewriteVaultPresencePath(vaultID: vr.id, fromRelPath: d, toRelPath: actualSrc)
                 try? library.catalog.clearFolderOp(id: sib.id)
             }
         }

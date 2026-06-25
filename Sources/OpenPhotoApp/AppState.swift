@@ -1570,6 +1570,10 @@ final class AppState {
         guard let lib = library else { return }
         let entries = presenceEntries(forDrive: driveVault, limitedTo: nil)
         try lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID, entries: entries)
+        // Invariant: presence == manifest + pending ops. This is the chokepoint for every manifest
+        // rebuild (evict/rehydrate/storage-job/review-propagate), so keep any optimistic offline moves
+        // for this drive afterward — a no-op when it has no queued ops.
+        try? lib.catalog.reapplyPendingOpsToPresence(vaultID: driveVault.descriptor.vaultID)
         reloadCanonicalPresence()
     }
 
@@ -1806,6 +1810,7 @@ final class AppState {
         try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
                                               entries: presenceEntries(forDrive: driveVault,
                                                                        limitedTo: enriched.presentHashes))
+        try? lib.catalog.reapplyPendingOpsToPresence(vaultID: driveVault.descriptor.vaultID)   // keep optimistic moves
         reloadCanonicalPresence()
         driveDrift[driveVault.descriptor.vaultID] = enriched
         refreshPendingDeletions()   // presence just changed → keep the deletions indicator honest after Verify
