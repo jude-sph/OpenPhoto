@@ -365,61 +365,76 @@ extension AppState {
         guard let library, let basename = driveBasename() else { return }
         let ops = (try? library.catalog.pendingFolderOps(forVault: driveID)) ?? []
         guard !ops.isEmpty else { return }
+        for op in ops where await propagateFolderOp(op, to: driveVault, basename: basename) {
+            try? library.catalog.clearFolderOp(id: op.id)
+        }
+    }
 
-        let appliedIDs = await Task.detached(priority: .userInitiated) { () -> [Int64] in
-            var done: [Int64] = []
-            for op in ops {
-                do {
-                    switch op.op {
-                    case "move":
-                        guard let src = op.src, let dst = op.dst else { continue }
-                        try VaultReorganizer.moveFolder(in: driveVault,
-                            relPath: mapToDriveStatic(src, basename: basename),
-                            intoParentRelPath: mapToDriveStatic(parentOf(dst), basename: basename))
-                    case "rename":
-                        guard let src = op.src, let dst = op.dst else { continue }
-                        do {
-                            try VaultReorganizer.renameFolder(in: driveVault,
-                                relPath: mapToDriveStatic(src, basename: basename),
-                                toName: (dst as NSString).lastPathComponent)
-                        } catch VaultReorganizer.ReorgError.missing {
-                            // The drive never held this folder — nothing to rename.
-                        }
-                    case "create":
-                        guard let dst = op.dst else { continue }
-                        try VaultReorganizer.createFolder(in: driveVault,
-                            relPath: mapToDriveStatic(dst, basename: basename))
-                    case "delete":
-                        guard let src = op.src else { continue }
-                        do {
-                            try VaultReorganizer.deleteEmptyFolder(in: driveVault,
-                                relPath: mapToDriveStatic(src, basename: basename))
-                        } catch VaultReorganizer.ReorgError.notEmpty {
-                            // Folder still holds content on this drive — leave it, but consider the
-                            // op handled (it will be reconciled by normal deletion propagation).
-                        }
-                    case "moveFile":
-                        guard let src = op.src, let dst = op.dst else { continue }
-                        do {
-                            try VaultReorganizer.moveFile(in: driveVault,
-                                relPath: mapToDriveStatic(src, basename: basename),
-                                toRelPath: mapToDriveStatic(dst, basename: basename))
-                        } catch VaultReorganizer.ReorgError.missing {
-                            // The drive never held this file — nothing to move; op is moot.
-                        }
-                    default:
-                        continue   // unknown op kind — leave it queued
-                    }
-                    done.append(op.id)
-                } catch {
-                    // Leave this op queued for a later retry; keep going with the rest.
-                    continue
+    /// Apply ONE queued op to a connected drive (the drive file/folder operation), off-main. Returns
+    /// true when the op is handled (the caller clears it). A `.missing`/`.notEmpty` from the drive is
+    /// treated as handled (the op is moot); other errors return false so the op stays queued for retry.
+    @MainActor func propagateFolderOp(_ op: PendingFolderOp, to driveVault: Vault, basename: String) async -> Bool {
+        await Task.detached(priority: .userInitiated) { () -> Bool in
+            do {
+                switch op.op {
+                case "move":
+                    guard let s = op.src, let d = op.dst else { return false }
+                    try VaultReorganizer.moveFolder(in: driveVault, relPath: mapToDriveStatic(s, basename: basename),
+                        intoParentRelPath: mapToDriveStatic(parentOf(d), basename: basename))
+                case "rename":
+                    guard let s = op.src, let d = op.dst else { return false }
+                    do { try VaultReorganizer.renameFolder(in: driveVault, relPath: mapToDriveStatic(s, basename: basename),
+                            toName: (d as NSString).lastPathComponent) }
+                    catch VaultReorganizer.ReorgError.missing {}     // drive never held it — moot
+                case "create":
+                    guard let d = op.dst else { return false }
+                    try VaultReorganizer.createFolder(in: driveVault, relPath: mapToDriveStatic(d, basename: basename))
+                case "delete":
+                    guard let s = op.src else { return false }
+                    do { try VaultReorganizer.deleteEmptyFolder(in: driveVault, relPath: mapToDriveStatic(s, basename: basename)) }
+                    catch VaultReorganizer.ReorgError.notEmpty {}    // still has content — leave dir, op handled
+                case "moveFile":
+                    guard let s = op.src, let d = op.dst else { return false }
+                    do { try VaultReorganizer.moveFile(in: driveVault, relPath: mapToDriveStatic(s, basename: basename),
+                            toRelPath: mapToDriveStatic(d, basename: basename)) }
+                    catch VaultReorganizer.ReorgError.missing {}     // drive never held it — moot
+                default:
+                    return false   // unknown op kind — leave it queued
                 }
-            }
-            return done
+                return true
+            } catch { return false }   // leave queued for a later retry
         }.value
+    }
 
-        for id in appliedIDs { try? library.catalog.clearFolderOp(id: id) }
+    // MARK: - Reconnect review actions (propagate vs undo)
+
+    /// Review "Propagate": apply one queued op to its connected drive, clear it, refresh presence.
+    @MainActor func reviewPropagate(_ op: PendingFolderOp) async {
+        guard let library, let basename = driveBasename(),
+              let drive = connectedDurableDrives().first(where: { $0.id == op.vaultID })?.vault else { return }
+        if await propagateFolderOp(op, to: drive, basename: basename) {
+            try? library.catalog.clearFolderOp(id: op.id)
+            try? refreshCanonicalPresence(driveVault: drive)
+        }
+        try? refreshQueries()
+    }
+
+    /// Review "Undo" (drive = ground truth): cancel a file move. Revert the Mac (file + instance) once,
+    /// then re-path presence back and clear the matching op on EVERY drive that queued it. The drive's
+    /// files are never touched. Folder-structure ops are propagate-only in v1 (no per-op undo).
+    @MainActor func reviewUndo(_ op: PendingFolderOp) async {
+        guard let library, op.op == "moveFile", let s = op.src, let d = op.dst else { return }
+        try? library.revertLocalMove(from: d, to: s)
+        for vr in durableVaults {
+            for sib in (try? library.catalog.pendingFolderOps(forVault: vr.id)) ?? []
+                    where sib.op == "moveFile" && sib.src == s && sib.dst == d {
+                try? library.catalog.rewriteVaultPresencePath(vaultID: vr.id, fromRelPath: d, toRelPath: s)
+                try? library.catalog.clearFolderOp(id: sib.id)
+            }
+        }
+        try? library.catalog.applyLockedFolders(lockedFolders)
+        reloadCanonicalPresence()
+        try? refreshQueries()
     }
 
     // MARK: - UI path remap
