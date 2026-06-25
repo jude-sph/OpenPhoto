@@ -145,7 +145,8 @@ struct DriftReviewSheet: View {
 
     private func load() async {
         guard report == nil else { return }
-        await state.reconcileFolderOps(driveVault: drive)   // apply offline moves before scanning
+        // No auto-apply of offline ops here — they're handled in the reconnect review. Verify scans the
+        // drive's current state; pending moves aren't drift.
         if verify {
             report = await state.verifyIntegrity(drive) { p in Task { @MainActor in progress = p } }
         } else {

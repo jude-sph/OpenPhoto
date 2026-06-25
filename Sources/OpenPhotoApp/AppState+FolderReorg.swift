@@ -7,6 +7,23 @@ import OpenPhotoCore
 // reconciled the next time it connects (see `applyPendingFolderOps`, wired into the connect path).
 // Disk loops run off the @MainActor via `Task.detached`. Per the approved design this is a full
 // auto-reconcile queue with NO user warning.
+
+/// A drive whose reconnect/mount scan found pending changes — drives the auto-presented review sheet.
+struct ReviewPresentation: Identifiable { let id = UUID(); let drive: Vault }
+
+/// The reviewable diff for one drive: queued ops + eligible deletions + drive-side drift.
+struct ReviewChanges {
+    var ops: [PendingFolderOp] = []
+    var deletions: [PendingDeletion] = []
+    var drift: DriftReport = DriftReport()
+    /// Corrupt is excluded — it's only found by Verify Integrity's deep re-hash, not the fast scan.
+    var isEmpty: Bool {
+        ops.isEmpty && deletions.isEmpty
+            && drift.unknown.isEmpty && drift.missing.isEmpty && drift.changed.isEmpty
+    }
+    var count: Int { ops.count + deletions.count + drift.unknown.count + drift.missing.count + drift.changed.count }
+}
+
 extension AppState {
 
     // MARK: - Drive relpath mapping
@@ -435,6 +452,24 @@ extension AppState {
         try? library.catalog.applyLockedFolders(lockedFolders)
         reloadCanonicalPresence()
         try? refreshQueries()
+    }
+
+    // MARK: - Reconnect review payload + auto-present
+
+    /// The reviewable diff for `drive`: queued ops + eligible deletions + the last fast-scan drift.
+    @MainActor func reviewPayload(forDrive drive: Vault) -> ReviewChanges {
+        let id = drive.descriptor.vaultID
+        return ReviewChanges(
+            ops: (try? library?.catalog.pendingFolderOps(forVault: id)) ?? [],
+            deletions: drivePendingDeletions[id] ?? [],
+            drift: driveDrift[id] ?? DriftReport())
+    }
+
+    /// Auto-present the reconnect review for `drive` when it has anything to review — unless it's an
+    /// adoption candidate, whose own prompt owns the first interaction.
+    @MainActor func presentReviewIfNeeded(_ drive: Vault) {
+        guard adoptableDrive?.id != drive.descriptor.vaultID else { return }
+        if !reviewPayload(forDrive: drive).isEmpty { reviewDrive = ReviewPresentation(drive: drive) }
     }
 
     // MARK: - UI path remap

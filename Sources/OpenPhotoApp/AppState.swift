@@ -1475,9 +1475,9 @@ final class AppState {
         ejectedDrives.remove(vr.id); persistEjected()
         cacheDriveKind(vr)
         guard let drive = openVault(for: vr) else { return }
-        // Apply any offline moves to the drive BEFORE the drift scan, so reconnecting never surfaces
-        // moved files as "new / adopt".
-        Task { await reconcileFolderOps(driveVault: drive); driftScan(drive) }
+        // Don't auto-apply offline moves — scan (driftScan reapplies the queued ops to presence so the
+        // optimistic moves survive), then present the review so the user approves/undoes each change.
+        Task { driftScan(drive); presentReviewIfNeeded(drive) }
     }
 
     /// Forget a drive entirely: unregister it + drop its presence. The files on the drive are NOT
@@ -1647,6 +1647,8 @@ final class AppState {
     /// Last drift report per drive (vaultID → report) — drives the row status line. Populated by
     /// auto-scan on connect and by every scan/verify/repair.
     private(set) var driveDrift: [String: DriftReport] = [:]
+    /// Set after a reconnect/mount scan finds pending changes → DrivesView auto-presents the review.
+    var reviewDrive: ReviewPresentation?
 
     /// Eligible pending deletions per connected drive (vaultID → entries). Drives the row
     /// indicator + both review surfaces. Recomputed whenever an eligibility input changes:
@@ -1735,7 +1737,8 @@ final class AppState {
         for vr in durableVaults where driveIsPresent(vr) {
             cacheDriveKind(vr)
             guard let drive = openVault(for: vr) else { continue }
-            await reconcileFolderOps(driveVault: drive)   // apply offline moves before verifying
+            // Don't auto-apply offline moves on verify — they're reviewed on reconnect. Pending moves
+            // aren't drift (the drive is self-consistent), so verification is correct without draining.
             let name = (vr.rootPath as NSString).lastPathComponent
             let report = await Task.detached(priority: .userInitiated) {
                 (try? DriftReconciler().verify(drive: drive) { p in progress(name, p) }) ?? DriftReport()
@@ -1827,10 +1830,9 @@ final class AppState {
         for vr in durableVaults where driveIsPresent(vr) {
             cacheDriveKind(vr)
             guard let drive = openVault(for: vr) else { continue }
-            // Reconcile any structural folder ops queued while this drive was offline BEFORE the
-            // drift scan reads its (path-keyed) structure — so a folder that moved/was created on
-            // the Mac is mirrored here first and the comparison never sees it as drift/duplication.
-            await applyPendingFolderOps(forDriveID: vr.id, driveVault: drive)
+            // Do NOT auto-apply queued offline ops — they're surfaced in the reconnect review for the
+            // user to approve/undo. Pending moves aren't drift (the drive is self-consistent), so the
+            // scan stays clean; reapply keeps the optimistic moves after the presence rebuild.
             let scanned = await Task.detached(priority: .utility) {
                 (try? DriftReconciler().scan(drive: drive)) ?? DriftReport()
             }.value
@@ -1841,10 +1843,16 @@ final class AppState {
             try? library?.catalog.replaceVaultPresence(vaultID: vr.id,
                                                        entries: presenceEntries(forDrive: drive,
                                                                                 limitedTo: report.presentHashes))
+            try? library?.catalog.reapplyPendingOpsToPresence(vaultID: vr.id)
             driveDrift[vr.id] = report
         }
         reloadCanonicalPresence()
         refreshPendingDeletions()
+        // Plugging a drive in is a "connect": surface its changes-since-last-connect for review.
+        for vr in durableVaults where driveIsPresent(vr) {
+            guard let drive = openVault(for: vr) else { continue }
+            if !reviewPayload(forDrive: drive).isEmpty { presentReviewIfNeeded(drive); break }
+        }
     }
 
     @discardableResult
