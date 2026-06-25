@@ -36,4 +36,13 @@ public final class SemanticIndex: @unchecked Sendable {
         let top = scores.enumerated().sorted { $0.element > $1.element }.prefix(n)
         return top.map { (hashes[$0.offset], $0.element) }
     }
+
+    /// Every cosine score for a query vector, in `hashes` order (q and rows are L2-normalized, so the
+    /// dot product IS cosine). For the term-comparison chart, which needs the whole distribution.
+    public func allScores(_ q: [Float]) -> [Float] {
+        guard dim > 0, q.count == dim, !hashes.isEmpty else { return [] }
+        var scores = [Float](repeating: 0, count: hashes.count)
+        vDSP_mmul(matrix, 1, q, 1, &scores, 1, vDSP_Length(hashes.count), 1, vDSP_Length(dim))
+        return scores
+    }
 }

@@ -331,6 +331,12 @@ final class AppState {
     private var semanticIndex: SemanticIndex?
     private var semanticIndexDirty = true     // set true after an embed drain
 
+    // MARK: — Compare-terms chart (overlaid CLIP cosine-similarity density curves)
+    var compareMode = false
+    var compareComputing = false
+    var compareTerms: [CompareTerm] = []
+    @ObservationIgnored var compareIndex: SemanticIndex?   // reused across term adds
+
     // MARK: — Face Map state
     var faceMap = FaceMapData()
     var faceMapLoading = false
@@ -1986,6 +1992,7 @@ final class AppState {
         _deviceRegistry = nil
         semanticIndex = nil
         semanticIndexDirty = true
+        compareIndex = nil; compareTerms = []; compareComputing = false
         derivationTask?.cancel(); derivationTask = nil
         jobCancelFlag?.cancel(); jobTask?.cancel(); jobTask = nil
         jobTickerTask?.cancel(); jobTickerTask = nil

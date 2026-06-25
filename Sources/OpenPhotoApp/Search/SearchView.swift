@@ -46,11 +46,15 @@ struct SearchView: View {
                 if state.proOnlyFilterCount > 0 { proFiltersHint }
             }
             Divider().overlay(Theme.hairline)
-            if selectMode {
+            if selectMode && !state.compareMode {
                 selectionBar       // thin action bar below the search header, only while selecting
                 Divider().overlay(Theme.hairline)
             }
-            resultGrid
+            if state.compareMode {
+                CompareTermsView(state: state)
+            } else {
+                resultGrid
+            }
         }
         .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
@@ -193,6 +197,13 @@ struct SearchView: View {
             .pickerStyle(.segmented)
             .fixedSize()
             .labelsHidden()
+
+            Button { state.toggleCompareMode() } label: {
+                Image(systemName: "chart.xyaxis.line")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(state.compareMode ? Theme.accent : Theme.textDim)
+            .help("Compare how strongly text terms appear across your photos")
 
             if !state.searchQuery.isEmpty || !state.searchFilters.isEmpty {
                 Text(resultCountLabel)
