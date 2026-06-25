@@ -117,6 +117,9 @@ struct RootView: View {
             // sync chip lives outside DrivesView). Driven by AppState so background sync survives
             // navigating away from Drives.
             .sheet(item: $state.jobSheetDrive) { drive in DriveJobSheet(state: state, drive: drive) }
+            // Present the reconnect review at the app root too, so plugging a drive in surfaces it from
+            // ANY screen — the mount handler sets `reviewDrive` regardless of which view is showing.
+            .sheet(item: $state.reviewDrive) { p in ReviewChangesSheet(state: state, drive: p.drive) }
         }
     }
 

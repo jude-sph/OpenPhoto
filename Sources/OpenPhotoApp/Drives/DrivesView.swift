@@ -41,7 +41,6 @@ struct DrivesView: View {
         mainContent
             .sheet(item: $drift) { d in DriftReviewSheet(state: state, drive: d.drive, verify: d.verify) }
             .sheet(item: $deletionDrive) { d in DeletionReviewSheet(state: state, drive: d) }
-            .sheet(item: $state.reviewDrive) { p in ReviewChangesSheet(state: state, drive: p.drive) }
             .sheet(isPresented: $consensusRepair) { ConsensusRepairSheet(state: state) }
             .alert("Forget \u{201c}\(forgetTarget.map { ($0.rootPath as NSString).lastPathComponent } ?? "")\u{201d}?",
                    isPresented: Binding(get: { forgetTarget != nil },
