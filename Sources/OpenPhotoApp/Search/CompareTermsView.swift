@@ -1,15 +1,17 @@
 import SwiftUI
 import OpenPhotoCore
 
-/// "Compare terms" chart: up to 5 text terms, each drawing its cosine-similarity distribution over
-/// the whole image corpus as a smooth filled density curve (Google-Trends-style overlay). No
-/// threshold — just curves, a legend, and axes. See `AppState+Compare.swift` for the compute.
+/// "Compare terms" chart: up to 5 text terms, each scored (cosine) against the whole image corpus.
+/// We draw a **complementary-CDF** ("matches above threshold") chart — for each term, how many photos
+/// score ≥ a given cosine similarity — on a **log Y axis**, with a draggable vertical threshold line
+/// and live per-term counts. Density curves were the wrong tool: real matches are ~0.2% of the corpus,
+/// so as area they vanished and every term looked identical. As a count-above-threshold the terms
+/// finally separate. See `AppState+Compare.swift` for the compute.
 struct CompareTermsView: View {
     @Bindable var state: AppState
     @State private var draft = ""
-    // Plot σ above each term's own average (removes CLIP's per-term baseline so the tails compare
-    // fairly). Default on — raw cosine piles every term up around the same ~0.1 background.
-    @AppStorage("compareStandardized") private var standardized = true
+    /// Current threshold cosine (nil = use the model's default ~75% across the x-range). Set by drag.
+    @State private var threshold: Float?
 
     // 5 pretty, distinct overlay colors. Index a term via `palette[term.colorIndex % count]`.
     static let palette: [Color] = [
@@ -23,7 +25,17 @@ struct CompareTermsView: View {
         palette[term.colorIndex % palette.count]
     }
 
-    private static let BINS = 64
+    // Plot geometry shared between the Canvas and the drag gesture so x↔value maps consistently.
+    fileprivate static let leftPad: CGFloat = 8
+    fileprivate static let rightPad: CGFloat = 38   // room for the right-edge log labels (1, 10, …, 10k)
+    fileprivate static let topPad: CGFloat = 16     // room for the threshold value label at the top
+    fileprivate static let axisH: CGFloat = 22      // space for the x-axis labels
+
+    fileprivate static func plotRect(in size: CGSize) -> CGRect {
+        CGRect(x: leftPad, y: topPad,
+               width: max(1, size.width - leftPad - rightPad),
+               height: max(1, size.height - topPad - axisH))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,12 +90,6 @@ struct CompareTermsView: View {
             }
 
             Spacer(minLength: 0)
-
-            if !state.compareTerms.isEmpty {
-                Toggle(isOn: $standardized) { Text("Standardize").font(.system(size: 11)) }
-                    .toggleStyle(.switch).controlSize(.mini)
-                    .help("Plot σ above each term's own average — removes CLIP's per-term baseline so the tails (real matches) compare fairly.")
-            }
         }
         .padding(.horizontal, 16)
         .frame(height: Theme.toolbarHeight)
@@ -113,29 +119,50 @@ struct CompareTermsView: View {
 
     // MARK: — Chart + legend + caption
 
+    /// The effective threshold cosine: the dragged value, or the model's default when untouched.
+    private func effectiveThreshold(_ model: CCDFModel) -> Float {
+        min(model.hi, max(model.lo, threshold ?? model.defaultThreshold))
+    }
+
     private var chartArea: some View {
-        let model = ChartModel(terms: state.compareTerms, bins: Self.BINS, standardized: standardized)
+        let model = CCDFModel(terms: state.compareTerms)
+        let thr = effectiveThreshold(model)
         return VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 16) {
-                ChartCanvas(model: model)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                legend
+                GeometryReader { geo in
+                    CCDFCanvas(model: model, threshold: thr)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { v in
+                                    let plot = Self.plotRect(in: geo.size)
+                                    let clampedX = min(plot.maxX, max(plot.minX, v.location.x))
+                                    let frac = plot.width > 0 ? Float((clampedX - plot.minX) / plot.width) : 0
+                                    threshold = model.lo + (model.hi - model.lo) * frac
+                                }
+                        )
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                legend(threshold: thr)
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
-            Text(standardized
-                 ? "σ above each term's average — a fatter right tail means more standout matches."
-                 : "Raw cosine. Every term shares a ~0.1 baseline; the real signal is the right tail.")
+            Text("Photos at least this similar (log scale). Drag to set the threshold.")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textDim)
                 .padding(.vertical, 10)
         }
     }
 
-    private var legend: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Strong matches").font(.caption2).foregroundStyle(Theme.textDim)
+    /// Legend = LIVE counts at the threshold (the payoff). Updates as the user drags.
+    private func legend(threshold thr: Float) -> some View {
+        let corpus = state.compareTerms.map(\.scores.count).max() ?? 0
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Photos ≥ \(String(format: "%.2f", thr))")
+                .font(.caption2).foregroundStyle(Theme.textDim)
             ForEach(state.compareTerms) { term in
+                let count = term.scores.lazy.filter { $0 >= thr }.count
+                let pct = corpus > 0 ? Double(count) / Double(corpus) * 100 : 0
                 HStack(spacing: 7) {
                     Circle().fill(Self.color(for: term)).frame(width: 9, height: 9)
                     Text(term.text)
@@ -143,158 +170,163 @@ struct CompareTermsView: View {
                         .foregroundStyle(Theme.text)
                         .lineLimit(1).truncationMode(.tail)
                     Spacer(minLength: 8)
-                    Text("\(term.strongCount)")
-                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(Self.color(for: term))
+                    HStack(spacing: 4) {
+                        Text("\(count)")
+                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(Self.color(for: term))
+                        Text(String(format: "(%.1f%%)", pct))
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundStyle(Theme.textFaint)
+                    }
                 }
             }
         }
-        .frame(width: 178, alignment: .leading)
+        .frame(width: 200, alignment: .leading)
         .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
-        .help("Photos more than 3σ above each term's own average similarity — its standout matches.")
+        .help("How many photos score at or above the threshold cosine similarity for each term. Drag the line to change the threshold.")
     }
 }
 
-// MARK: — Chart model (pure: binning + Gaussian smoothing + global normalization)
+// MARK: — Chart model (pure: per-term complementary-CDF over a shared, tail-focused x-range)
 
-/// Precomputed curves for the overlay, derived from the terms' raw score vectors.
-private struct ChartModel {
-    /// One drawable curve: its color slot, 64 normalized heights in 0...1, and its filled area (for
-    /// draw-ordering so small curves aren't hidden behind big ones).
+/// Precomputed CCDF curves: for each term, how many photos score ≥ x, sampled at `SAMPLES` evenly
+/// spaced thresholds across a tail-focused [lo, hi] cosine range.
+private struct CCDFModel {
+    static let SAMPLES = 96
+
+    /// One drawable curve: its color slot, `SAMPLES` counts (photos ≥ that x), and total area (for
+    /// draw-ordering so steep-dropping curves land on top of broad ones).
     struct Curve {
         let colorIndex: Int
-        let heights: [Float]   // count == bins, each 0...1
-        let area: Float
+        let counts: [Int]   // count == SAMPLES
+        let total: Int      // Σ counts — proxy for area, for draw ordering
     }
     let lo: Float
     let hi: Float
+    let maxCount: Int       // largest single-term scores.count (≈ N)
     let curves: [Curve]
-    let standardized: Bool
 
-    init(terms: [AppState.CompareTerm], bins: Int, standardized: Bool) {
-        self.standardized = standardized
-        // Per-term value vectors: raw cosine, or z-scores (s−μ)/σ when standardizing — the latter
-        // aligns every term's baseline so only the tails (real matches) differ.
-        let values: [[Float]] = terms.map { t in
-            guard standardized else { return t.scores }
-            let m = t.mean, sd = t.std
-            guard sd > 1e-6 else { return Array(repeating: 0, count: t.scores.count) }
-            return t.scores.map { ($0 - m) / sd }
-        }
+    /// Default threshold: ~75% of the way across [lo, hi] (well into the interesting tail).
+    var defaultThreshold: Float { lo + (hi - lo) * 0.75 }
 
-        // 1. Shared x-range across all terms, padded ~3%. Fall back to a sane window if degenerate.
-        var minV = Float.greatestFiniteMagnitude, maxV = -Float.greatestFiniteMagnitude
-        for vv in values {
-            for s in vv {
-                if s < minV { minV = s }
-                if s > maxV { maxV = s }
-            }
+    init(terms: [AppState.CompareTerm]) {
+        // 1. Tail-focused x-range. Pool a sample of all terms' scores; lo = 50th pctile of the pool
+        //    (the left half is a flat plateau near N and uninteresting), hi = max across all terms +3%.
+        var pooled: [Float] = []
+        var maxV = -Float.greatestFiniteMagnitude
+        var maxCnt = 0
+        for t in terms {
+            maxCnt = max(maxCnt, t.scores.count)
+            for s in t.scores where s > maxV { maxV = s }
+            // Sample up to ~2000 scores per term into the pool (median estimate doesn't need all 12k).
+            if t.scores.isEmpty { continue }
+            let stride = max(1, t.scores.count / 2000)
+            var i = 0
+            while i < t.scores.count { pooled.append(t.scores[i]); i += stride }
         }
-        if !(minV.isFinite && maxV.isFinite) || maxV <= minV {
-            if standardized { minV = -3; maxV = 6 } else { minV = 0; maxV = 0.4 }
+        self.maxCount = max(1, maxCnt)
+
+        var lo: Float = 0.05, hi: Float = 0.35
+        if !pooled.isEmpty && maxV.isFinite {
+            pooled.sort()
+            let median = pooled[pooled.count / 2]
+            let pad = (maxV - median) * 0.03
+            lo = median
+            hi = maxV + pad
         }
-        let pad = (maxV - minV) * 0.03
-        let lo = minV - pad, hi = maxV + pad
+        if !(lo.isFinite && hi.isFinite) || hi <= lo { lo = 0.05; hi = 0.35 }
         self.lo = lo
         self.hi = hi
 
-        // 2. Histogram each term into `bins`, then Gaussian-smooth (±3 bins, sigma ≈ 1.5).
-        let kernel = Self.gaussianKernel(radius: 3, sigma: 1.5)
-        var smoothed: [[Float]] = []
-        var globalMax: Float = 0
-        for vv in values {
-            let hist = Self.histogram(vv, lo: lo, hi: hi, bins: bins)
-            let sm = Self.convolve(hist, kernel: kernel)
-            globalMax = max(globalMax, sm.max() ?? 0)
-            smoothed.append(sm)
+        // 2. Per term, count(scores >= x) at SAMPLES thresholds. Sort once, then binary-search each
+        //    threshold — O(SAMPLES·log N) per term instead of O(SAMPLES·N).
+        let xs: [Float] = (0..<Self.SAMPLES).map { i in
+            lo + (hi - lo) * Float(i) / Float(Self.SAMPLES - 1)
         }
-
-        // 3. Normalize ALL curves by the single global max bin (relative heights stay honest).
-        let scale = globalMax > 0 ? globalMax : 1
         var built: [Curve] = []
-        for (i, sm) in smoothed.enumerated() {
-            let heights = sm.map { $0 / scale }
-            let area = heights.reduce(0, +)
-            built.append(Curve(colorIndex: terms[i].colorIndex, heights: heights, area: area))
-        }
-        // Draw biggest-area first so small, tall curves land on top and stay visible.
-        self.curves = built.sorted { $0.area > $1.area }
-    }
-
-    private static func histogram(_ values: [Float], lo: Float, hi: Float, bins: Int) -> [Float] {
-        var h = [Float](repeating: 0, count: bins)
-        let span = hi - lo
-        guard span > 0 else { return h }
-        let scale = Float(bins) / span
-        for v in values {
-            var idx = Int((v - lo) * scale)
-            if idx < 0 { idx = 0 }
-            if idx >= bins { idx = bins - 1 }
-            h[idx] += 1
-        }
-        return h
-    }
-
-    private static func gaussianKernel(radius: Int, sigma: Float) -> [Float] {
-        var k = [Float](); k.reserveCapacity(2 * radius + 1)
-        var sum: Float = 0
-        for i in -radius...radius {
-            let x = Float(i)
-            let w = expf(-(x * x) / (2 * sigma * sigma))
-            k.append(w); sum += w
-        }
-        return sum > 0 ? k.map { $0 / sum } : k
-    }
-
-    private static func convolve(_ input: [Float], kernel: [Float]) -> [Float] {
-        let n = input.count, r = kernel.count / 2
-        guard n > 0 else { return input }
-        var out = [Float](repeating: 0, count: n)
-        for i in 0..<n {
-            var acc: Float = 0
-            for (j, w) in kernel.enumerated() {
-                let idx = min(n - 1, max(0, i + j - r))   // clamp at edges
-                acc += input[idx] * w
+        for t in terms {
+            let sorted = t.scores.sorted()
+            var counts = [Int](repeating: 0, count: Self.SAMPLES)
+            var total = 0
+            for (j, x) in xs.enumerated() {
+                // First index with sorted[idx] >= x → all from there to the end are ≥ x.
+                let idx = Self.lowerBound(sorted, x)
+                let c = sorted.count - idx
+                counts[j] = c
+                total += c
             }
-            out[i] = acc
+            built.append(Curve(colorIndex: t.colorIndex, counts: counts, total: total))
         }
-        return out
+        // Draw biggest-area (broadest) first so steep-dropping curves land on top and stay visible.
+        self.curves = built.sorted { $0.total > $1.total }
+    }
+
+    /// First index `i` in sorted `a` with `a[i] >= value` (== a.count if none). Standard lower_bound.
+    private static func lowerBound(_ a: [Float], _ value: Float) -> Int {
+        var lo = 0, hi = a.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if a[mid] < value { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
     }
 }
 
-// MARK: — Canvas: gridlines, axis ticks, smooth filled curves
+// MARK: — Canvas: log-Y gridlines, smooth CCDF curves, x-axis ticks, draggable threshold line
 
-private struct ChartCanvas: View {
-    let model: ChartModel
+private struct CCDFCanvas: View {
+    let model: CCDFModel
+    let threshold: Float
 
     var body: some View {
         Canvas { ctx, size in
-            let leftPad: CGFloat = 8
-            let rightPad: CGFloat = 8
-            let topPad: CGFloat = 8
-            let axisH: CGFloat = 22          // space for x-axis labels
-            let plot = CGRect(x: leftPad, y: topPad,
-                              width: max(1, size.width - leftPad - rightPad),
-                              height: max(1, size.height - topPad - axisH))
-
-            drawGrid(ctx, plot: plot)
+            let plot = CompareTermsView.plotRect(in: size)
+            drawGrid(ctx, plot: plot, size: size)
             drawCurves(ctx, plot: plot)
             drawAxis(ctx, plot: plot, size: size)
+            drawThreshold(ctx, plot: plot, size: size)
         }
         .drawingGroup()
     }
 
-    // Faint horizontal gridlines.
-    private func drawGrid(_ ctx: GraphicsContext, plot: CGRect) {
-        let rows = 4
-        for i in 0...rows {
-            let y = plot.minY + plot.height * CGFloat(i) / CGFloat(rows)
-            var p = Path()
-            p.move(to: CGPoint(x: plot.minX, y: y))
-            p.addLine(to: CGPoint(x: plot.maxX, y: y))
-            ctx.stroke(p, with: .color(Theme.hairline), lineWidth: i == rows ? 1 : 0.5)
+    // Map a count → y using a log scale from 1…maxCount.
+    private func yFor(count c: Int, plot: CGRect) -> CGFloat {
+        let denom = log10(Double(model.maxCount) + 1)
+        let frac = c <= 0 || denom <= 0 ? 0 : log10(Double(c) + 1) / denom
+        return plot.maxY - plot.height * CGFloat(frac)
+    }
+
+    // Faint horizontal gridlines + right-edge labels at the log decades within range.
+    private func drawGrid(_ ctx: GraphicsContext, plot: CGRect, size: CGSize) {
+        // Bottom & top frame lines.
+        var frame = Path()
+        frame.move(to: CGPoint(x: plot.minX, y: plot.maxY))
+        frame.addLine(to: CGPoint(x: plot.maxX, y: plot.maxY))
+        ctx.stroke(frame, with: .color(Theme.hairline), lineWidth: 1)
+
+        // Decades that fall in [1, maxCount], plus maxCount itself.
+        var decades: [Int] = []
+        var d = 1
+        while d <= model.maxCount { decades.append(d); d *= 10 }
+        if decades.last != model.maxCount { decades.append(model.maxCount) }
+
+        for c in decades {
+            let y = yFor(count: c, plot: plot)
+            var line = Path()
+            line.move(to: CGPoint(x: plot.minX, y: y))
+            line.addLine(to: CGPoint(x: plot.maxX, y: y))
+            ctx.stroke(line, with: .color(Theme.hairline.opacity(0.7)), lineWidth: 0.5)
+
+            let label = Self.shortCount(c)
+            let text = ctx.resolve(
+                Text(label)
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundColor(Theme.textFaint))
+            let tsize = text.measure(in: size)
+            ctx.draw(text, at: CGPoint(x: plot.maxX + 4 + tsize.width / 2,
+                                       y: min(plot.maxY, max(plot.minY, y))))
         }
     }
 
@@ -305,16 +337,12 @@ private struct ChartCanvas: View {
             let frac = CGFloat(i) / CGFloat(ticks - 1)
             let x = plot.minX + plot.width * frac
             let value = model.lo + (model.hi - model.lo) * Float(frac)
-            // small tick mark
             var tick = Path()
             tick.move(to: CGPoint(x: x, y: plot.maxY))
             tick.addLine(to: CGPoint(x: x, y: plot.maxY + 4))
             ctx.stroke(tick, with: .color(Theme.hairline), lineWidth: 1)
-            let label = model.standardized
-                ? (abs(value) < 0.5 ? "0" : String(format: "%.0fσ", value))
-                : String(format: "%.2f", value)
             let text = ctx.resolve(
-                Text(label)
+                Text(String(format: "%.2f", value))
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundColor(Theme.textDim))
             let tsize = text.measure(in: size)
@@ -325,38 +353,71 @@ private struct ChartCanvas: View {
         }
     }
 
-    // Smooth filled overlaid density curves (Catmull-Rom → Bezier).
+    // Smooth CCDF lines (Catmull-Rom → Bezier), a light fill under each so overlaps read.
     private func drawCurves(_ ctx: GraphicsContext, plot: CGRect) {
         for curve in model.curves {
             let color = CompareTermsView.palette[curve.colorIndex % CompareTermsView.palette.count]
-            let pts = points(for: curve.heights, in: plot)
+            let pts = points(for: curve.counts, in: plot)
             guard pts.count >= 2 else { continue }
 
-            // Filled area: smooth top from left baseline → curve → right baseline, closed.
+            // Very light fill under the line so overlaps read.
             var fill = Path()
             fill.move(to: CGPoint(x: pts.first!.x, y: plot.maxY))
             fill.addLine(to: pts.first!)
             appendSmooth(&fill, points: pts)
             fill.addLine(to: CGPoint(x: pts.last!.x, y: plot.maxY))
             fill.closeSubpath()
-            ctx.fill(fill, with: .color(color.opacity(0.18)))
+            ctx.fill(fill, with: .color(color.opacity(0.08)))
 
-            // Stroked top outline.
+            // Stroked top line.
             var line = Path()
             line.move(to: pts.first!)
             appendSmooth(&line, points: pts)
-            ctx.stroke(line, with: .color(color.opacity(0.9)),
+            ctx.stroke(line, with: .color(color.opacity(0.95)),
                        style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
         }
     }
 
-    private func points(for heights: [Float], in plot: CGRect) -> [CGPoint] {
-        let n = heights.count
+    // Vertical draggable threshold line: dashed accent line + value label + top grabber handle.
+    private func drawThreshold(_ ctx: GraphicsContext, plot: CGRect, size: CGSize) {
+        let span = model.hi - model.lo
+        guard span > 0 else { return }
+        let frac = CGFloat((threshold - model.lo) / span)
+        let x = plot.minX + plot.width * min(1, max(0, frac))
+
+        var line = Path()
+        line.move(to: CGPoint(x: x, y: plot.minY))
+        line.addLine(to: CGPoint(x: x, y: plot.maxY))
+        ctx.stroke(line, with: .color(Theme.accent.opacity(0.9)),
+                   style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+
+        // Value label at the top, in a small pill.
+        let label = "≥ \(String(format: "%.2f", threshold))"
+        let text = ctx.resolve(
+            Text(label).font(.system(size: 10, weight: .semibold).monospacedDigit())
+                .foregroundColor(.white))
+        let tsize = text.measure(in: size)
+        var lx = x
+        if lx - tsize.width / 2 - 5 < plot.minX { lx = plot.minX + tsize.width / 2 + 5 }
+        if lx + tsize.width / 2 + 5 > plot.maxX { lx = plot.maxX - tsize.width / 2 - 5 }
+        let pill = CGRect(x: lx - tsize.width / 2 - 5, y: plot.minY - 14,
+                          width: tsize.width + 10, height: 15)
+        ctx.fill(Path(roundedRect: pill, cornerRadius: 5), with: .color(Theme.accent))
+        ctx.draw(text, at: CGPoint(x: lx, y: plot.minY - 14 + 7.5))
+
+        // Grabber handle on the line to signal it's draggable.
+        let handle = CGRect(x: x - 3.5, y: plot.minY + 2, width: 7, height: 16)
+        ctx.fill(Path(roundedRect: handle, cornerRadius: 3.5), with: .color(Theme.accent))
+        ctx.stroke(Path(roundedRect: handle, cornerRadius: 3.5),
+                   with: .color(.white.opacity(0.7)), lineWidth: 0.75)
+    }
+
+    private func points(for counts: [Int], in plot: CGRect) -> [CGPoint] {
+        let n = counts.count
         guard n > 1 else { return [] }
-        return heights.enumerated().map { i, h in
+        return counts.enumerated().map { i, c in
             let x = plot.minX + plot.width * CGFloat(i) / CGFloat(n - 1)
-            let y = plot.maxY - plot.height * CGFloat(max(0, min(1, h)))
-            return CGPoint(x: x, y: y)
+            return CGPoint(x: x, y: yFor(count: c, plot: plot))
         }
     }
 
@@ -377,5 +438,14 @@ private struct ChartCanvas: View {
             let c2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
             path.addCurve(to: p2, control1: c1, control2: c2)
         }
+    }
+
+    /// Compact count labels for the log axis: 1, 10, 100, 1k, 10k.
+    private static func shortCount(_ c: Int) -> String {
+        if c >= 1000 {
+            let k = Double(c) / 1000
+            return k == k.rounded() ? "\(Int(k))k" : String(format: "%.1fk", k)
+        }
+        return "\(c)"
     }
 }
