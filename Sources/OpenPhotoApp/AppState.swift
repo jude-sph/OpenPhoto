@@ -1717,6 +1717,9 @@ final class AppState {
         try? lib.catalog.replaceVaultPresence(vaultID: driveVault.descriptor.vaultID,
                                               entries: presenceEntries(forDrive: driveVault,
                                                                        limitedTo: report.presentHashes))
+        // Invariant: presence == manifest + pending ops. The rebuild above resets moved files to their
+        // manifest (old) location; reapply the queued ops so optimistic offline moves aren't reverted.
+        try? lib.catalog.reapplyPendingOpsToPresence(vaultID: driveVault.descriptor.vaultID)
         reloadCanonicalPresence()
         driveDrift[driveVault.descriptor.vaultID] = report
         refreshPendingDeletions()   // vault_presence just changed → recompute eligibility (reconnect + drift-repair paths)
@@ -1743,6 +1746,7 @@ final class AppState {
             }
             try? lib.catalog.replaceVaultPresence(vaultID: vr.id,
                 entries: presenceEntries(forDrive: drive, limitedTo: enriched.presentHashes))
+            try? lib.catalog.reapplyPendingOpsToPresence(vaultID: vr.id)   // keep optimistic moves
             driveDrift[vr.id] = enriched
             out.append((vr, enriched))
         }
