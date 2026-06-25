@@ -10,6 +10,17 @@ extension AppState {
         let colorIndex: Int          // 0..4 → palette slot
         let scores: [Float]          // cosine of this term vs every image embedding
         var mean: Float { scores.isEmpty ? 0 : scores.reduce(0, +) / Float(scores.count) }
+        var std: Float {
+            guard scores.count > 1 else { return 0 }
+            let m = mean
+            return (scores.reduce(Float(0)) { $0 + ($1 - m) * ($1 - m) } / Float(scores.count)).squareRoot()
+        }
+        /// Photos more than 3σ above this term's own average — its standout matches (a baseline-free
+        /// "how represented is this concept" count, shown in the legend).
+        var strongCount: Int {
+            let t = mean + 3 * std
+            return scores.lazy.filter { $0 > t }.count
+        }
     }
 
     func toggleCompareMode() { compareMode.toggle() }

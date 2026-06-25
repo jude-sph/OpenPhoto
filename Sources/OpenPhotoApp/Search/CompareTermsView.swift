@@ -7,6 +7,9 @@ import OpenPhotoCore
 struct CompareTermsView: View {
     @Bindable var state: AppState
     @State private var draft = ""
+    // Plot σ above each term's own average (removes CLIP's per-term baseline so the tails compare
+    // fairly). Default on — raw cosine piles every term up around the same ~0.1 background.
+    @AppStorage("compareStandardized") private var standardized = true
 
     // 5 pretty, distinct overlay colors. Index a term via `palette[term.colorIndex % count]`.
     static let palette: [Color] = [
@@ -75,6 +78,12 @@ struct CompareTermsView: View {
             }
 
             Spacer(minLength: 0)
+
+            if !state.compareTerms.isEmpty {
+                Toggle(isOn: $standardized) { Text("Standardize").font(.system(size: 11)) }
+                    .toggleStyle(.switch).controlSize(.mini)
+                    .help("Plot σ above each term's own average — removes CLIP's per-term baseline so the tails (real matches) compare fairly.")
+            }
         }
         .padding(.horizontal, 16)
         .frame(height: Theme.toolbarHeight)
@@ -105,7 +114,7 @@ struct CompareTermsView: View {
     // MARK: — Chart + legend + caption
 
     private var chartArea: some View {
-        let model = ChartModel(terms: state.compareTerms, bins: Self.BINS)
+        let model = ChartModel(terms: state.compareTerms, bins: Self.BINS, standardized: standardized)
         return VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 16) {
                 ChartCanvas(model: model)
@@ -114,7 +123,9 @@ struct CompareTermsView: View {
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
-            Text("Absolute positions vary by term; compare the shapes.")
+            Text(standardized
+                 ? "σ above each term's average — a fatter right tail means more standout matches."
+                 : "Raw cosine. Every term shares a ~0.1 baseline; the real signal is the right tail.")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textDim)
                 .padding(.vertical, 10)
@@ -123,24 +134,26 @@ struct CompareTermsView: View {
 
     private var legend: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Terms").font(.caption2).foregroundStyle(Theme.textDim)
+            Text("Strong matches").font(.caption2).foregroundStyle(Theme.textDim)
             ForEach(state.compareTerms) { term in
                 HStack(spacing: 7) {
                     Circle().fill(Self.color(for: term)).frame(width: 9, height: 9)
                     Text(term.text)
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.text)
+                        .lineLimit(1).truncationMode(.tail)
                     Spacer(minLength: 8)
-                    Text(String(format: "μ %.2f", term.mean))
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(Theme.textDim)
+                    Text("\(term.strongCount)")
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Self.color(for: term))
                 }
             }
         }
-        .frame(width: 168, alignment: .leading)
+        .frame(width: 178, alignment: .leading)
         .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.hairline))
+        .help("Photos more than 3σ above each term's own average similarity — its standout matches.")
     }
 }
 
@@ -158,18 +171,29 @@ private struct ChartModel {
     let lo: Float
     let hi: Float
     let curves: [Curve]
+    let standardized: Bool
 
-    init(terms: [AppState.CompareTerm], bins: Int) {
+    init(terms: [AppState.CompareTerm], bins: Int, standardized: Bool) {
+        self.standardized = standardized
+        // Per-term value vectors: raw cosine, or z-scores (s−μ)/σ when standardizing — the latter
+        // aligns every term's baseline so only the tails (real matches) differ.
+        let values: [[Float]] = terms.map { t in
+            guard standardized else { return t.scores }
+            let m = t.mean, sd = t.std
+            guard sd > 1e-6 else { return Array(repeating: 0, count: t.scores.count) }
+            return t.scores.map { ($0 - m) / sd }
+        }
+
         // 1. Shared x-range across all terms, padded ~3%. Fall back to a sane window if degenerate.
         var minV = Float.greatestFiniteMagnitude, maxV = -Float.greatestFiniteMagnitude
-        for t in terms {
-            for s in t.scores {
+        for vv in values {
+            for s in vv {
                 if s < minV { minV = s }
                 if s > maxV { maxV = s }
             }
         }
         if !(minV.isFinite && maxV.isFinite) || maxV <= minV {
-            minV = 0; maxV = 0.4
+            if standardized { minV = -3; maxV = 6 } else { minV = 0; maxV = 0.4 }
         }
         let pad = (maxV - minV) * 0.03
         let lo = minV - pad, hi = maxV + pad
@@ -180,8 +204,8 @@ private struct ChartModel {
         let kernel = Self.gaussianKernel(radius: 3, sigma: 1.5)
         var smoothed: [[Float]] = []
         var globalMax: Float = 0
-        for t in terms {
-            let hist = Self.histogram(t.scores, lo: lo, hi: hi, bins: bins)
+        for vv in values {
+            let hist = Self.histogram(vv, lo: lo, hi: hi, bins: bins)
             let sm = Self.convolve(hist, kernel: kernel)
             globalMax = max(globalMax, sm.max() ?? 0)
             smoothed.append(sm)
@@ -286,8 +310,11 @@ private struct ChartCanvas: View {
             tick.move(to: CGPoint(x: x, y: plot.maxY))
             tick.addLine(to: CGPoint(x: x, y: plot.maxY + 4))
             ctx.stroke(tick, with: .color(Theme.hairline), lineWidth: 1)
+            let label = model.standardized
+                ? (abs(value) < 0.5 ? "0" : String(format: "%.0fσ", value))
+                : String(format: "%.2f", value)
             let text = ctx.resolve(
-                Text(String(format: "%.2f", value))
+                Text(label)
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundColor(Theme.textDim))
             let tsize = text.measure(in: size)
