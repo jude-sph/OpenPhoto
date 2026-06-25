@@ -1210,13 +1210,25 @@ final class AppState {
         endQuickView()   // tear down any prior peek first (single peekContext)
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenPhotoPeek-" + UUID().uuidString)
-        let ctx = await Task.detached(priority: .userInitiated) {
+        // Mount the peek surface IMMEDIATELY in a loading state: the banner and a working Done button
+        // appear at once, and PeekSource.load() — which can take seconds to import a drive's catalog
+        // snapshot — runs in the background instead of blocking the whole screen on a blank window.
+        peekContext = PeekContext(
+            sourceName: root.lastPathComponent, items: [],
+            thumbnails: ThumbnailStore(cacheDir: tmp.appendingPathComponent("thumbs")),
+            tempDir: tmp, root: root, loading: true)
+        let loaded = await Task.detached(priority: .userInitiated) {
             try? PeekSource.load(root: root, tempDir: tmp)
         }.value
-        if let ctx {
-            peekContext = ctx
+        // The user may have hit Done (or started another peek) while this loaded — don't clobber.
+        guard let current = peekContext, current.tempDir == tmp else {
+            try? FileManager.default.removeItem(at: tmp)   // cancelled mid-load — clean up the temp dir
+            return
+        }
+        if let loaded {
+            peekContext = loaded
         } else {
-            try? FileManager.default.removeItem(at: tmp)
+            endQuickView()
             driveAlert("Couldn\u{2019}t open Quick View",
                        "\u{201c}\(root.lastPathComponent)\u{201d} couldn\u{2019}t be read.")
         }

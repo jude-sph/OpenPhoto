@@ -22,11 +22,13 @@ public struct PeekContext: Sendable {
     public var thumbnails: ThumbnailStore      // temp cache (cacheDir under tempDir)
     public var tempDir: URL                    // deleted wholesale on teardown
     public var root: URL                       // the peeked drive/folder (for eject-mid-peek detection)
+    public var loading: Bool                   // true = surface mounted, PeekSource.load() still running
 
     public init(sourceName: String, items: [PeekItem], thumbnails: ThumbnailStore,
-                tempDir: URL, root: URL) {
+                tempDir: URL, root: URL, loading: Bool = false) {
         self.sourceName = sourceName; self.items = items
         self.thumbnails = thumbnails; self.tempDir = tempDir; self.root = root
+        self.loading = loading
     }
 }
 

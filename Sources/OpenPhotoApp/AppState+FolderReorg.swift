@@ -178,13 +178,27 @@ extension AppState {
             }
         }
 
-        // 2. Propagate the Mac moves: connected durable drives now, offline drives queued.
+        // 2. Propagate the Mac moves to durable drives. Re-key each drive's presence row NOW so the
+        //    catalog reflects the move immediately — otherwise the photo lingers as a drive-only
+        //    "ghost" in the OLD folder (its presence row still points there) until the next rescan.
+        //    Connected drives also move the file now; offline drives queue the file move for reconnect.
         if let basename = driveBasename(), !result.moved.isEmpty {
-            let drives = connectedDurableDrives()
-            if !drives.isEmpty {
+            let connected = connectedDurableDrives()
+            let connectedIDs = Set(connected.map(\.id))
+            for driveID in connectedIDs.union(offlineDurableDriveIDs()) {
+                for (old, new) in result.moved {
+                    try? library.catalog.rewriteVaultPresencePath(vaultID: driveID,
+                                                                  fromRelPath: old, toRelPath: new)
+                    if !connectedIDs.contains(driveID) {
+                        _ = try? library.catalog.enqueueFolderOp(vaultID: driveID, op: "moveFile",
+                                                                 src: old, dst: new)
+                    }
+                }
+            }
+            if !connected.isEmpty {
                 let moved = result.moved
                 await Task.detached(priority: .userInitiated) {
-                    for d in drives {
+                    for d in connected {
                         for (old, new) in moved {
                             _ = try? VaultReorganizer.moveFile(in: d.vault,
                                 relPath: mapToDriveStatic(old, basename: basename),
@@ -192,12 +206,6 @@ extension AppState {
                         }
                     }
                 }.value
-            }
-            for driveID in offlineDurableDriveIDs() {
-                for (old, new) in result.moved {
-                    _ = try? library.catalog.enqueueFolderOp(vaultID: driveID, op: "moveFile",
-                                                             src: old, dst: new)
-                }
             }
         }
 

@@ -25,7 +25,13 @@ struct PeekView: View {
                 .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
                 Divider().overlay(Theme.hairline)
 
-                if context.items.isEmpty {
+                if context.loading {
+                    VStack(spacing: 10) {
+                        ProgressView().controlSize(.large)
+                        Text("Loading\u{2026}").font(.system(size: 12)).foregroundStyle(Theme.textDim)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if context.items.isEmpty {
                     ContentUnavailableView("No photos here", systemImage: "photo.on.rectangle")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {

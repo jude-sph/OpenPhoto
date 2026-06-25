@@ -68,6 +68,46 @@ private func asset(_ h: String) -> AssetRecord {
     #expect(try c.folderCounts()["B"] == 1)
 }
 
+// Regression for the "ghost in the old folder" bug: a photo present on BOTH the Mac and an
+// (offline) drive, when moved to another folder, must leave NO drive-only ghost behind. The Mac
+// instance re-paths immediately; the drive's presence row MUST re-path too — otherwise the still-old
+// presence row resurfaces as a drive-only row in the OLD folder while the moved copy shows in the new.
+@Test func movedDualPresencePhotoLeavesNoGhostInOldFolder() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let c = try makeCatalog(t)
+    let h = "sha256:" + String(repeating: "d", count: 64)
+    try c.upsert(assets: [asset(h)])
+    try c.registerVault(id: "mac", role: "local", rootPath: "/tmp/pics")
+    try c.registerVault(id: "drv", role: "canonical", rootPath: "/Volumes/Drive")
+    // Present in folder A both locally and on the drive (the drive row is hidden behind the local one).
+    try c.replaceInstances(inVault: "mac", with: [
+        InstanceRecord(hash: h, vaultID: "mac", relPath: "A/p.jpg", dirPath: "A", size: 1, mtimeMs: 1),
+    ])
+    try c.replaceVaultPresence(vaultID: "drv", entries: [
+        VaultPresenceEntry(hash: h, relPath: "A/p.jpg", dirPath: "A", size: 1,
+                           driveRelPath: "Pictures/A/p.jpg"),
+    ])
+    #expect(try c.items(inDir: "A").count == 1)
+
+    // Mac side only (the OLD, buggy behavior): the instance moves but the drive presence does not.
+    try c.rewriteInstancePath(vaultID: "mac", fromRelPath: "A/p.jpg", toRelPath: "B/p.jpg")
+    // BUG repro: the stale drive presence resurfaces as a drive-only ghost in the old folder.
+    #expect(try c.items(inDir: "A").count == 1)
+    #expect(try c.items(inDir: "A").first?.driveRelPath != nil)
+
+    // The fix: also re-path the drive's presence row. Now no ghost — A is empty, B shows it once.
+    try c.rewriteVaultPresencePath(vaultID: "drv", fromRelPath: "A/p.jpg", toRelPath: "B/p.jpg")
+    #expect(try c.items(inDir: "A").isEmpty)
+    #expect(try c.items(inDir: "B").count == 1)
+    #expect(try c.folderCounts()["A"] == nil)
+    #expect(try c.folderCounts()["B"] == 1)
+    // The drive's driveRelPath followed the move (suffix swap A → B), so the queued file move lands right.
+    let drv = try c.vaultPresenceRows(forVault: "drv")
+    #expect(drv.count == 1)
+    #expect(drv.first?.relPath == "B/p.jpg")
+    #expect(drv.first?.driveRelPath == "Pictures/B/p.jpg")
+}
+
 @Test func purgeLocalVaultRemovesItsInstancesRegistrationAndOrphanAssets() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let c = try makeCatalog(t)
