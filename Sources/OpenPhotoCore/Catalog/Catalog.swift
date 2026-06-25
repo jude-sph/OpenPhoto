@@ -572,6 +572,16 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// True if a local instance exists at this exact (vaultID, relPath). Gates a move-revert.
+    public func instanceExists(vaultID: String, relPath: String) -> Bool {
+        let rel = relPath.precomposedStringWithCanonicalMapping
+        return (try? dbQueue.read { db in
+            try Bool.fetchOne(db, sql:
+                "SELECT EXISTS(SELECT 1 FROM instances WHERE vaultID = ? AND relPath = ?)",
+                arguments: [vaultID, rel])
+        }) ?? false
+    }
+
     /// Update a LOCAL instance's path in place after a move (its `relPath` + derived `dirPath`),
     /// so a folder move needs only this targeted write — no full vault rescan. NFC-normalizes;
     /// no-ops when `from == to` or either is empty. (Mirror of `rewriteVaultPresencePath` for the

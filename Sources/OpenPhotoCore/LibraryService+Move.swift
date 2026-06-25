@@ -48,4 +48,17 @@ extension LibraryService {
         }
         return result
     }
+
+    /// Reverse a single local file move (`dst` → `src`) on the Mac primary vault: move the file back
+    /// (carrying its sidecar + patching the manifest, via `VaultReorganizer.moveFile`) and re-key the
+    /// instance in place. No-op when there's no local instance at `dst` (e.g. the photo is drive-only).
+    /// The drive is never touched. Used by the reconnect review's "Undo" (drive = ground truth).
+    public func revertLocalMove(from dstRelPath: String, to srcRelPath: String) throws {
+        guard let vault = vaults.first else { return }
+        let vaultID = vault.descriptor.vaultID
+        guard catalog.instanceExists(vaultID: vaultID, relPath: dstRelPath) else { return }
+        let parent = (srcRelPath as NSString).deletingLastPathComponent
+        let newRel = try VaultReorganizer.moveFile(in: vault, relPath: dstRelPath, intoDirRelPath: parent)
+        try catalog.rewriteInstancePath(vaultID: vaultID, fromRelPath: dstRelPath, toRelPath: newRel)
+    }
 }

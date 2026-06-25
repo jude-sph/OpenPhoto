@@ -42,6 +42,29 @@ private func makeLibrary(_ t: TestDirs, files: [String]) async throws -> (Librar
     #expect(try lib.items(inDir: "b").map(\.relPath) == ["b/x.jpg"])
 }
 
+// The reconnect review's "Undo" primitive: revert a local move using the drive as truth.
+@Test func revertLocalMoveMovesFileBackAndRepathsInstance() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, vault) = try await makeLibrary(t, files: ["a/x.jpg"])
+    _ = lib.movePhotos(try lib.items(inDir: "a"), toDir: "b")     // a/x.jpg -> b/x.jpg
+    #expect(try lib.items(inDir: "b").map(\.relPath) == ["b/x.jpg"])
+
+    try lib.revertLocalMove(from: "b/x.jpg", to: "a/x.jpg")
+
+    #expect(try lib.items(inDir: "b").isEmpty)
+    #expect(try lib.items(inDir: "a").map(\.relPath) == ["a/x.jpg"])
+    #expect(FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: "a/x.jpg").path))
+    #expect(!FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: "b/x.jpg").path))
+}
+
+// Drive-only photo: no local instance to move back, so revert is a safe no-op (drive untouched).
+@Test func revertLocalMoveIsNoOpWhenNoLocalInstance() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, _) = try await makeLibrary(t, files: ["a/x.jpg"])
+    try lib.revertLocalMove(from: "z/none.jpg", to: "a/none.jpg")   // no instance at z/none.jpg
+    #expect(try lib.items(inDir: "a").map(\.relPath) == ["a/x.jpg"])   // untouched
+}
+
 @Test func movePhotosCarriesLivePairPartnerWithSidecars() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     // Two scanned assets; we declare them a Live pair in the catalog (the carry logic
