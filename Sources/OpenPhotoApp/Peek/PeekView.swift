@@ -17,7 +17,8 @@ struct PeekView: View {
                 HStack(spacing: 8) {
                     Text("Viewing \u{201c}\(context.sourceName)\u{201d}")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("temporary \u{00b7} not added to your library")
+                    Text(context.isLibraryDrive ? "this drive\u{2019}s library \u{00b7} read-only"
+                                                : "temporary \u{00b7} not added to your library")
                         .font(.system(size: 12)).foregroundStyle(Theme.textDim)
                     Spacer()
                     Button("Done") { onDone() }.controlSize(.small)

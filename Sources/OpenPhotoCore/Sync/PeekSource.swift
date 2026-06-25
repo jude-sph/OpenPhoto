@@ -23,12 +23,13 @@ public struct PeekContext: Sendable {
     public var tempDir: URL                    // deleted wholesale on teardown
     public var root: URL                       // the peeked drive/folder (for eject-mid-peek detection)
     public var loading: Bool                   // true = surface mounted, PeekSource.load() still running
+    public var isLibraryDrive: Bool            // root is a registered OpenPhoto drive (changes the banner copy)
 
     public init(sourceName: String, items: [PeekItem], thumbnails: ThumbnailStore,
-                tempDir: URL, root: URL, loading: Bool = false) {
+                tempDir: URL, root: URL, loading: Bool = false, isLibraryDrive: Bool = false) {
         self.sourceName = sourceName; self.items = items
         self.thumbnails = thumbnails; self.tempDir = tempDir; self.root = root
-        self.loading = loading
+        self.loading = loading; self.isLibraryDrive = isLibraryDrive
     }
 }
 

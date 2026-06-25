@@ -1208,6 +1208,11 @@ final class AppState {
     /// throwaway temp dir; nothing is written to `root` or persisted on the Mac.
     func startQuickView(root: URL) async {
         endQuickView()   // tear down any prior peek first (single peekContext)
+        // A registered OpenPhoto drive's photos ARE the library — so the banner must NOT claim
+        // "not added to your library." Match the peeked root against the registered durable drives.
+        let isLibraryDrive = durableVaults.contains {
+            URL(fileURLWithPath: $0.rootPath).standardizedFileURL == root.standardizedFileURL
+        }
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenPhotoPeek-" + UUID().uuidString)
         // Mount the peek surface IMMEDIATELY in a loading state: the banner and a working Done button
@@ -1216,7 +1221,7 @@ final class AppState {
         peekContext = PeekContext(
             sourceName: root.lastPathComponent, items: [],
             thumbnails: ThumbnailStore(cacheDir: tmp.appendingPathComponent("thumbs")),
-            tempDir: tmp, root: root, loading: true)
+            tempDir: tmp, root: root, loading: true, isLibraryDrive: isLibraryDrive)
         let loaded = await Task.detached(priority: .userInitiated) {
             try? PeekSource.load(root: root, tempDir: tmp)
         }.value
@@ -1225,7 +1230,8 @@ final class AppState {
             try? FileManager.default.removeItem(at: tmp)   // cancelled mid-load — clean up the temp dir
             return
         }
-        if let loaded {
+        if var loaded {
+            loaded.isLibraryDrive = isLibraryDrive
             peekContext = loaded
         } else {
             endQuickView()
