@@ -553,6 +553,25 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// Re-apply the catalog-side (presence-only) effect of this drive's queued ops, oldest-first, so a
+    /// manifest-driven presence rebuild (`replaceVaultPresence`) doesn't revert an optimistic offline
+    /// move. NEVER touches the drive or any file — only re-keys vault_presence rows. No-op for ops with
+    /// no presence rows (empty-folder create/delete). Invariant: presence == manifest + pending ops.
+    public func reapplyPendingOpsToPresence(vaultID: String) throws {
+        for op in try pendingFolderOps(forVault: vaultID) {
+            switch op.op {
+            case "moveFile":
+                if let s = op.src, let d = op.dst {
+                    try rewriteVaultPresencePath(vaultID: vaultID, fromRelPath: s, toRelPath: d)
+                }
+            case "move", "rename":
+                if let s = op.src, let d = op.dst { try rewriteVaultPresencePaths(fromDir: s, toDir: d) }
+            default:
+                continue   // create / delete: an empty folder has no presence rows
+            }
+        }
+    }
+
     /// Update a LOCAL instance's path in place after a move (its `relPath` + derived `dirPath`),
     /// so a folder move needs only this targeted write — no full vault rescan. NFC-normalizes;
     /// no-ops when `from == to` or either is empty. (Mirror of `rewriteVaultPresencePath` for the
