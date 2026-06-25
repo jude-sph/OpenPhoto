@@ -190,49 +190,68 @@ struct SelectionActionBar: View {
     let onDeselect: () -> Void
     let onDone: () -> Void
     var body: some View {
-        HStack(spacing: 12) {
-            Text("\(count) selected")
-                .font(.system(size: 13, weight: .medium).monospacedDigit())
-                .foregroundStyle(Theme.textDim)
-            Spacer()
-            if let moveControls { moveControls }
-            if let tagControls, count > 0 { tagControls }
-            if let albumControls, count > 0 { albumControls }
-            Button("Deselect", action: onDeselect).disabled(count == 0).controlSize(.small)
-            if let shareControls, count > 0 { shareControls }
-            if let name = sendTargetName {
-                Button(action: onSend) {
-                    Label("Send to \(name)", systemImage: "paperplane")
-                }.disabled(count == 0).controlSize(.small)
+        ViewThatFits(in: .horizontal) {
+            // Fits: count on the left, actions spread to the right edge (the usual look).
+            HStack(spacing: 12) {
+                countLabel
+                Spacer(minLength: 8)
+                actions
             }
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete…", systemImage: "trash")
-            }
-            .disabled(count == 0).controlSize(.small)
-            .help("Move to the bin and queue removal from drives (review before it propagates).")
-            Button(action: onEvict) {
-                Label("Evict…", systemImage: "arrow.down.circle")
-            }
-            .disabled(count == 0).controlSize(.small)
-            .help("Free local space — keep the copy on the drive. Doesn’t delete anywhere.")
-            if showRehydrate {
-                Button(action: onRehydrate) {
-                    Label("Rehydrate", systemImage: "arrow.down.circle.dotted")
-                }.disabled(count == 0).controlSize(.small)
-                    .help("Copy the selected drive-only originals back to this Mac.")
-            }
-            Menu {
-                Button(role: .destructive, action: onForceEvict) {
-                    Label("Force Evict (skip verification)…", systemImage: "exclamationmark.triangle")
+            // Too narrow for all the buttons: pin the count, scroll the actions so NONE clip.
+            HStack(spacing: 12) {
+                countLabel
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) { actions }.padding(.trailing, 2)
                 }
-            } label: {
-                Image(systemName: "ellipsis.circle").font(.system(size: 14))
             }
-            .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
-            .disabled(count == 0)
-            Button("Done", action: onDone).controlSize(.small)
         }
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
+    }
+
+    private var countLabel: some View {
+        Text("\(count) selected")
+            .font(.system(size: 13, weight: .medium).monospacedDigit())
+            .foregroundStyle(Theme.textDim)
+            .fixedSize()       // never let the count itself truncate
+    }
+
+    @ViewBuilder private var actions: some View {
+        if let moveControls { moveControls }
+        if let tagControls, count > 0 { tagControls }
+        if let albumControls, count > 0 { albumControls }
+        Button("Deselect", action: onDeselect).disabled(count == 0).controlSize(.small)
+        if let shareControls, count > 0 { shareControls }
+        if let name = sendTargetName {
+            Button(action: onSend) {
+                Label("Send to \(name)", systemImage: "paperplane")
+            }.disabled(count == 0).controlSize(.small)
+        }
+        Button(role: .destructive, action: onDelete) {
+            Label("Delete…", systemImage: "trash")
+        }
+        .disabled(count == 0).controlSize(.small)
+        .help("Move to the bin and queue removal from drives (review before it propagates).")
+        Button(action: onEvict) {
+            Label("Evict…", systemImage: "arrow.down.circle")
+        }
+        .disabled(count == 0).controlSize(.small)
+        .help("Free local space — keep the copy on the drive. Doesn’t delete anywhere.")
+        if showRehydrate {
+            Button(action: onRehydrate) {
+                Label("Rehydrate", systemImage: "arrow.down.circle.dotted")
+            }.disabled(count == 0).controlSize(.small)
+                .help("Copy the selected drive-only originals back to this Mac.")
+        }
+        Menu {
+            Button(role: .destructive, action: onForceEvict) {
+                Label("Force Evict (skip verification)…", systemImage: "exclamationmark.triangle")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.system(size: 14))
+        }
+        .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
+        .disabled(count == 0)
+        Button("Done", action: onDone).controlSize(.small)
     }
 }
 

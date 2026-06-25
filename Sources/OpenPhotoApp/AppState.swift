@@ -124,6 +124,11 @@ final class AppState {
     /// run concurrently and revert it (S03). `beginReorg()`/`endReorg()` gate it; scans and reorgs
     /// take turns through `libraryMutationWaiters` (continuation-based, no busy-spin).
     private var reorganizing = false
+    /// After an in-app reorg (move), the 2s-debounced file watcher will fire for our OWN file moves
+    /// ~2s later and would trigger a full, redundant rescan (the catalog was already reconciled
+    /// incrementally). Ignore watcher events until this time so a move stays fast. A genuine external
+    /// change is still picked up by the next event after the window (and by the scan on open).
+    private var watcherSuppressedUntil = Date.distantPast
     private var libraryMutationWaiters: [CheckedContinuation<Void, Never>] = []
     var refreshToken = 0
     /// Bumped after a per-photo move so the folder grid clears its (now-stale) selection.
@@ -2093,9 +2098,12 @@ final class AppState {
         reorganizing = true
     }
 
-    /// Release the reorg lock and wake whoever is waiting (a queued scan or the next reorg).
+    /// Release the reorg lock and wake whoever is waiting (a queued scan or the next reorg). Also
+    /// mute the file watcher past its debounce so our own moves' file-system events don't kick off a
+    /// redundant full rescan (the reorg already updated the catalog + manifest).
     func endReorg() {
         reorganizing = false
+        watcherSuppressedUntil = Date().addingTimeInterval(3)   // > FolderWatcher's 2s debounce
         wakeLibraryMutationWaiters()
     }
 
@@ -2517,7 +2525,13 @@ final class AppState {
 
     private func startWatcher(roots: [URL]) {
         watcher = FolderWatcher(paths: roots.map(\.path)) { [weak self] in
-            Task { @MainActor in await self?.rescan() }
+            Task { @MainActor in
+                guard let self else { return }
+                // Skip the rescan for our own just-completed reorg — the catalog is already current,
+                // so this would be a wasteful full re-index (the move's debounced FS events landing).
+                if Date() < self.watcherSuppressedUntil { return }
+                await self.rescan()
+            }
         }
         watcher?.start()
     }
