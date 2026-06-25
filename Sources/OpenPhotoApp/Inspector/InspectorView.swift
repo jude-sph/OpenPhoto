@@ -281,23 +281,20 @@ struct InspectorView: View {
                     }
                 }
 
-                // This content also lives in other folders (same sha256, different file). The timeline
-                // shows it once; here are its other locations.
+                // This content also lives in other folders (same sha256). Just the folder list — the
+                // timeline shows it once; per-location state is in LOCATIONS above.
                 if instances.count > 1 {
-                    let others = instances.filter { !($0.vaultID == item.vaultID && $0.relPath == item.relPath) }
-                    section("Also in \(others.count) other folder\(others.count == 1 ? "" : "s")") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(others, id: \.relPath) { inst in
-                                HStack(alignment: .top) {
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        let folder = (inst.relPath as NSString).deletingLastPathComponent
-                                        Text(folder.isEmpty ? "(library root)" : folder)
-                                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.textFaint)
-                                        Text((inst.relPath as NSString).lastPathComponent)
-                                            .font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.text)
-                                    }
-                                    Spacer()
-                                    Button("Reveal") { revealInstance(inst) }.controlSize(.small)
+                    let currentFolder = (item.relPath as NSString).deletingLastPathComponent
+                    let otherFolders = Set(instances.map { ($0.relPath as NSString).deletingLastPathComponent })
+                        .subtracting([currentFolder]).sorted()
+                    if !otherFolders.isEmpty {
+                        section("Also in \(otherFolders.count) other folder\(otherFolders.count == 1 ? "" : "s")") {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(otherFolders, id: \.self) { folder in
+                                    Text(folder.isEmpty ? "(library root)" : folder)
+                                        .font(.system(size: 11.5, design: .monospaced))
+                                        .foregroundStyle(Theme.textDim)
+                                        .lineLimit(1).truncationMode(.middle)
                                 }
                             }
                         }

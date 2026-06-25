@@ -101,6 +101,15 @@ extension AppState {
     @MainActor private func finishStorageJob(result: DriveJobResult, cancelled: Bool) async {
         jobTickerTask?.cancel(); jobTickerTask = nil
         guard library != nil else { jobTask = nil; jobCancelFlag = nil; jobRaw = nil; return }
+        // Show a "finishing" state during the post-job bookkeeping (rebuilding presence + refreshing
+        // the queries takes a few seconds) so the UI doesn't sit frozen on the last item — same as the
+        // sync job's finishing state.
+        if !cancelled, var a = activeJob, a.phase == .running {
+            a.stage = .finishing; a.bytesDone = a.bytesTotal; a.filesDone = a.filesTotal
+            a.currentName = ""; a.speedBytesPerSec = 0; a.etaSeconds = nil
+            activeJob = a
+        }
+        await Task.yield()   // let SwiftUI paint the finishing state before the slow work
         reloadCanonicalPresence()
         await reloadLibraryAfterStorageChange()
         var a = activeJob ?? DriveJob(kind: .evict, scopeLabel: "", driveName: "", stage: .finishing)

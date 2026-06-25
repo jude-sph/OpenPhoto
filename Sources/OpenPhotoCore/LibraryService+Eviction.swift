@@ -50,7 +50,7 @@ extension LibraryService {
                     return outcome
                 }
                 let name = (item.relPath as NSString).lastPathComponent
-                progress?(DriveProgress(stage: .verifying, filesDone: filesDone, filesTotal: local.count,
+                progress?(DriveProgress(stage: .verifying, filesDone: filesDone + 1, filesTotal: local.count,
                                         bytesDone: bytesDone, bytesTotal: bytesTotal, currentName: name))
                 var halves: [(hash: String, relPath: String)] = [(item.hash, item.relPath)]
                 if let pairHash = item.livePairHash,
@@ -103,7 +103,7 @@ extension LibraryService {
             if shouldCancel?() == true { break }
             let name = (item.relPath as NSString).lastPathComponent
             let base = bytesDone
-            progress?(DriveProgress(stage: .copying, filesDone: i, filesTotal: targets.count,
+            progress?(DriveProgress(stage: .copying, filesDone: i + 1, filesTotal: targets.count,
                                     bytesDone: base, bytesTotal: bytesTotal, currentName: name))
             func fail(_ reason: SyncFailureReason) {
                 outcome.failedItems.append(FailedItem(
@@ -133,7 +133,7 @@ extension LibraryService {
                     from: drive.absoluteURL(forRelativePath: half.driveRelPath), to: dest,
                     expectedHash: half.hash,
                     onBytes: { fileBytes in
-                        progress?(DriveProgress(stage: .copying, filesDone: i, filesTotal: targets.count,
+                        progress?(DriveProgress(stage: .copying, filesDone: i + 1, filesTotal: targets.count,
                                                 bytesDone: base + fileBytes, bytesTotal: bytesTotal,
                                                 currentName: name))
                     },
