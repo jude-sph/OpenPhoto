@@ -190,19 +190,18 @@ struct SelectionActionBar: View {
     let onDeselect: () -> Void
     let onDone: () -> Void
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            // Fits: count on the left, actions spread to the right edge (the usual look).
-            HStack(spacing: 12) {
-                countLabel
-                Spacer(minLength: 8)
-                actions
-            }
-            // Too narrow for all the buttons: pin the count, scroll the actions so NONE clip.
-            HStack(spacing: 12) {
-                countLabel
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) { actions }.padding(.trailing, 2)
-                }
+        // Count pinned left, actions pushed to the right edge. When the window is too narrow for the
+        // labels the actions degrade to ICON-ONLY — never a horizontal ScrollView. The window uses
+        // `.hiddenTitleBar`, so this bar sits under the draggable title-bar region; AppKit lets clicks
+        // through to real controls (plain buttons), but it treats a ScrollView there as draggable
+        // window background and swallows the taps. Keeping the actions a plain HStack — the same
+        // construction as the working toolbar — keeps every button clickable.
+        HStack(spacing: 12) {
+            countLabel
+            Spacer(minLength: 8)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { actions }                         // labels (the usual look)
+                HStack(spacing: 12) { actions }.labelStyle(.iconOnly)   // compact: icons only, no clip
             }
         }
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
