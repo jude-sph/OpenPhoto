@@ -127,7 +127,13 @@ struct DrivesView: View {
             HStack {
                 Text("Drives").font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Button("Add Drive\u{2026}") { state.addDriveViaPanel() }.controlSize(.small)
+                Menu("Add Drive\u{2026}") {
+                    if state.canonicalVault != nil {
+                        Button("Add Backup Drive\u{2026}") { state.addDriveViaPanel(asBackup: true) }
+                    }
+                    Button("Add Canonical Drive\u{2026}") { state.addDriveViaPanel(asBackup: false) }
+                }
+                .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
                 Button("Quick View Folder\u{2026}") { state.quickViewFolderViaPanel() }.controlSize(.small)
                 Button("Verify All Drives") { consensusRepair = true }.controlSize(.small)
                     .disabled(syncing)

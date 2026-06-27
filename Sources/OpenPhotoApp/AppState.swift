@@ -1500,16 +1500,23 @@ final class AppState {
 
     func isBackedUpOnCanonical(_ item: TimelineItem) -> Bool { canonicalPresence.contains(item.hash) }
 
-    func addDriveViaPanel() {
+    func addDriveViaPanel(asBackup: Bool = false) {
+        if asBackup && canonicalVault == nil {
+            driveAlert("Add your canonical drive first",
+                       "A backup mirrors your canonical library, so you need a canonical drive before adding a backup.")
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Use as Canonical Drive"
-        panel.message = "Choose a drive or folder to hold your canonical library."
+        panel.prompt = asBackup ? "Use as Backup Drive" : "Use as Canonical Drive"
+        panel.message = asBackup
+            ? "Choose a drive or folder to hold a backup copy of your library."
+            : "Choose a drive or folder to hold your canonical library."
         guard panel.runModal() == .OK, let url = panel.url, let lib = library else { return }
         do {
-            let vault = try Vault.openOrCreate(at: url, role: .canonical)
+            let vault = try Vault.openOrCreate(at: url, role: asBackup ? .backup : .canonical)
             // Accept a canonical or backup drive (a backup self-describes as `backup` and is a valid
             // library to add/adopt for browse). Refuse a folder that is one of the user's own LOCAL
             // source vaults — adopting it would diverge catalog/disk role and could make the engine
@@ -1539,6 +1546,11 @@ final class AppState {
                 atPath: url.appendingPathComponent(".openphoto/catalog-snapshot/catalog.sqlite").path)
             if !hasSnapshot {
                 try refreshCanonicalPresence(driveVault: vault)
+            }
+            // A freshly-created empty backup holds nothing yet — point the user at the clone action.
+            if asBackup, !hasSnapshot, vault.descriptor.role == .backup {
+                driveAlert("Backup drive added",
+                    "It’s empty for now — click “Update backup” on the drive to copy your canonical library onto it.")
             }
         } catch { driveAlert("Couldn’t add drive", error.localizedDescription) }
     }
