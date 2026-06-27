@@ -121,16 +121,22 @@ extension AppState {
         // (Moved verbatim from the old SyncPlanSheet.runApply post-apply block.)
         try? refreshCanonicalPresence(driveVault: drive)
         refreshPendingDeletions()
-        let pending = drivePendingDeletions[drive.descriptor.vaultID] ?? []
-        let chosen = pending.filter { p in chosenDeletions.contains { $0.hash == p.hash } }
-        if !chosen.isEmpty { _ = await propagateDeletions(drive: drive, selected: chosen) }
-        if let lib = library {
-            let cat = lib.catalog, thumbs = lib.thumbnails, syncedDrive = drive
-            let macRoot = lib.vaults.first?.rootURL
-            await Task.detached(priority: .utility) {
-                try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: syncedDrive)
-                if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: syncedDrive.stateDirURL) }
-            }.value
+        // On cancel, STOP immediately: skip the slow post-sync bookkeeping (deletion propagation +
+        // writing the drive's catalog snapshot/albums, which can take a while on a big library). What
+        // was copied stays on the drive with an up-to-date manifest, so the next sync simply resumes;
+        // the in-flight file was a temp that's already discarded (atomic copy — never half-written).
+        if !r.cancelled {
+            let pending = drivePendingDeletions[drive.descriptor.vaultID] ?? []
+            let chosen = pending.filter { p in chosenDeletions.contains { $0.hash == p.hash } }
+            if !chosen.isEmpty { _ = await propagateDeletions(drive: drive, selected: chosen) }
+            if let lib = library {
+                let cat = lib.catalog, thumbs = lib.thumbnails, syncedDrive = drive
+                let macRoot = lib.vaults.first?.rootURL
+                await Task.detached(priority: .utility) {
+                    try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: syncedDrive)
+                    if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: syncedDrive.stateDirURL) }
+                }.value
+            }
         }
         var a = activeJob ?? DriveJob(kind: .sync, scopeLabel: "",
                                       driveName: drive.rootURL.lastPathComponent, stage: .finishing)
