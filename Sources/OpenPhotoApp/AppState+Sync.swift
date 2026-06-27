@@ -45,7 +45,7 @@ private extension SyncProgress.Stage {
 
 extension AppState {
     /// Start the shared 2 Hz progress ticker for whatever job is currently in `activeJob`. It samples
-    /// the raw progress buffer (`jobRaw`) and computes a windowed-average speed + whole-job ETA, so the
+    /// the raw progress buffer (`jobRaw`) and computes a whole-job average speed + ETA, so the
     /// UI refreshes calmly instead of jittering at the engine's per-chunk callback rate. Used by sync,
     /// evict, and rehydrate. Caller must have already set `activeJob`/`jobRateMeter`.
     @MainActor func startJobTicker(start: Date, bytesTotal: Int64) {
@@ -88,7 +88,7 @@ extension AppState {
         weak var weakSelf = self
 
         // The ticker is the ONLY thing that updates the visible numbers: every 0.5s it samples the raw
-        // buffer and computes a windowed-average speed + whole-job ETA, so the UI refreshes calmly at
+        // buffer and computes a whole-job average speed + ETA, so the UI refreshes calmly at
         // 2 Hz instead of jittering at the engine's per-chunk callback rate (which made it flicker and
         // the speed/ETA nonsense).
         startJobTicker(start: start, bytesTotal: bytesTotal)

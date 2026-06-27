@@ -1,32 +1,21 @@
 import Foundation
 
-/// Pure running-average throughput + ETA over a sliding time window. Feed cumulative
-/// (bytesDone, monotonic time) at any cadence; the speed is the average over roughly the last
-/// `window` seconds, so bursty samples (cached/duplicate files that copy in a blink, or a batch of
-/// callbacks landing together) don't make it spike. The ETA is for the WHOLE job: remaining total
-/// bytes ÷ that averaged speed. No clock inside — the caller passes `now`.
+/// Whole-job throughput + ETA. Feed cumulative (bytesDone, seconds-elapsed-since-start) at any
+/// cadence; the speed is the running WHOLE-JOB average (bytesDone ÷ elapsed) and the ETA is the
+/// remaining bytes ÷ that average. A whole-job average is smooth and — unlike a short sliding window —
+/// never craters to "Zero KB/s" while a single large file is flushing to a slow drive; it just reflects
+/// the overall rate. No clock inside — the caller passes the elapsed time as `now`.
 public struct SyncRateMeter {
-    private var samples: [(t: Double, bytes: Int64)] = []
-    private let window: Double
-    private let minSpan: Double
+    private let minElapsed: Double
 
-    public init(window: Double = 3.0, minSpan: Double = 0.4) {
-        self.window = window; self.minSpan = minSpan
-    }
+    public init(minElapsed: Double = 0.5) { self.minElapsed = minElapsed }
 
-    /// Returns the averaged speed (bytes/sec) and a whole-job ETA (seconds, nil until there's enough
-    /// span to trust a rate).
+    /// The whole-job average speed (bytes/sec) and ETA (seconds) — both 0/nil until a little time has
+    /// elapsed and some bytes have moved, so the very first samples don't report a wild rate.
     public mutating func update(bytesDone: Int64, bytesTotal: Int64, now: Double)
         -> (speed: Double, eta: Double?) {
-        samples.append((now, bytesDone))
-        // Trim samples older than the window, but always keep at least two to measure a span.
-        while samples.count > 2, let first = samples.first, now - first.t > window {
-            samples.removeFirst()
-        }
-        guard let first = samples.first, let last = samples.last else { return (0, nil) }
-        let span = last.t - first.t
-        guard span >= minSpan else { return (0, nil) }     // warm-up: not enough time to estimate yet
-        let speed = Double(max(0, last.bytes - first.bytes)) / span
+        guard now >= minElapsed, bytesDone > 0 else { return (0, nil) }   // warm-up
+        let speed = Double(bytesDone) / now
         let eta: Double? = speed > 1 ? Double(max(0, bytesTotal - bytesDone)) / speed : nil
         return (speed, eta)
     }
