@@ -421,6 +421,13 @@ struct PersonDetailView: View {
     @State private var showFaces = true
     @State private var renaming = false
     @State private var renameField = ""
+    // Photo-action selection state (parity with Timeline/Folders).
+    @State private var showEvict = false
+    @State private var showForceEvict = false
+    @State private var showDelete = false
+    @State private var showSend = false
+    @State private var sendChooser = false
+    @State private var chosenSendDevice: ConnectedDevice?
 
     private let gridColumns = [GridItem(.adaptive(minimum: 108), spacing: Theme.gridGap)]
     private let space = "persongrid"
@@ -430,6 +437,16 @@ struct PersonDetailView: View {
         pairs.map { SelectableItem(id: $0.id) }
     }
     private var selectedFaceIDs: [Int64] { selection.selected.compactMap(Int64.init) }
+    /// Selected photos (deduped by content hash) for the photo actions (send/share/album/delete/evict).
+    private var selectedItems: [TimelineItem] {
+        var seen = Set<String>(); var out: [TimelineItem] = []
+        for pair in pairs where selection.contains(pair.id) {
+            if seen.insert(pair.item.hash).inserted { out.append(pair.item) }
+        }
+        return out
+    }
+    private var evictableItems: [TimelineItem] { selectedItems.filter { $0.driveRelPath == nil } }
+    private var rehydratableItems: [TimelineItem] { state.rehydratableItems(selectedItems) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -444,7 +461,54 @@ struct PersonDetailView: View {
         }
         .onAppear { reload() }
         .onChange(of: state.people) { reload() }   // refresh after suggestions are added/dismissed
+        .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
+            Button("Cancel", role: .cancel) {}
+            Button("Move to Bin", role: .destructive) {
+                let items = evictableItems
+                Task { await state.evict(items); endSelect(); reload() }
+            }
+        } message: {
+            Text(evictAlertMessage(total: evictableItems.count, onlyCopy: state.onlyCopyCount(evictableItems)))
+        }
+        .alert("Delete \(evictableItems.count) photo\(evictableItems.count == 1 ? "" : "s")?", isPresented: $showDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                let items = evictableItems
+                Task { await state.deletePhotos(items); endSelect(); reload() }
+            }
+        } message: {
+            Text("They move to the bin (restore anytime). On connected drives, their copies are then queued for removal — review under the drive before anything is deleted there.")
+        }
+        .alert("Split to new person", isPresented: $showSplitField) {
+            TextField("Name", text: $splitName)
+            Button("Create") {
+                let name = splitName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let ids = selectedFaceIDs
+                if !name.isEmpty, !ids.isEmpty { state.splitFaces(ids, fromPerson: person.id, toNewPerson: name) }
+                splitName = ""; afterFaceAction()
+            }
+            Button("Cancel", role: .cancel) { splitName = "" }
+        }
+        .sheet(isPresented: $showSend, onDismiss: { chosenSendDevice = nil }) {
+            if let target = chosenSendDevice ?? state.connectedSendTarget() {
+                SendSheet(state: state, items: selectedItems, device: target) { endSelect() }
+            }
+        }
+        .confirmationDialog("Send to which device?", isPresented: $sendChooser, titleVisibility: .visible) {
+            ForEach(state.connectedSendTargets(), id: \.id) { dev in
+                Button(dev.name) { chosenSendDevice = dev; showSend = true }
+            }
+        }
+        .sheet(isPresented: $showForceEvict) {
+            ForceEvictSheet(count: evictableItems.count) {
+                let items = evictableItems
+                Task { _ = await state.evict(items, mode: .forced); endSelect() }
+            }
+        }
     }
+
+    private func endSelect() { selection.clear(); selectMode = false; showSplitField = false }
+    private func afterFaceAction() { selection.clear(); reload() }
 
     /// Faces matched to this person's centroid, offered for one-tap confirmation. Tapping a face adds
     /// just it; "Add all" confirms the lot; "Dismiss" drops them to the Other-faces bucket.
@@ -599,66 +663,60 @@ struct PersonDetailView: View {
     }
 
     private var selectionBar: some View {
-        HStack(spacing: 12) {
-            Text("\(selection.count) selected")
-                .font(.system(size: 13, weight: .medium).monospacedDigit())
-                .foregroundStyle(Theme.textDim)
-            Spacer()
-            Button("Deselect") { selection.clear() }
-                .controlSize(.small)
-                .disabled(selection.count == 0)
-            Button("Remove from person") {
-                for id in selectedFaceIDs {
-                    state.reassignFace(id, to: nil, fromPerson: person.id)
-                }
-                selection.clear()
-                reload()
-            }
-            .controlSize(.small)
-            .disabled(selection.count == 0)
+        SelectionActionBar(
+            count: selection.count,
+            moveControls: AnyView(personActions),
+            sendTargetName: {
+                let t = state.connectedSendTargets()
+                return t.count > 1 ? "device\u{2026}" : t.first?.name
+            }(),
+            onSend: {
+                let t = state.connectedSendTargets()
+                if t.count <= 1 { showSend = true } else { sendChooser = true }
+            },
+            onDelete: { if !evictableItems.isEmpty { showDelete = true } },
+            onEvict: { if !evictableItems.isEmpty { showEvict = true } },
+            onForceEvict: { if !evictableItems.isEmpty { showForceEvict = true } },
+            showRehydrate: !rehydratableItems.isEmpty,
+            onRehydrate: { let items = rehydratableItems
+                           Task { _ = await state.rehydrate(items); endSelect() } },
+            tagControls: AnyView(TagPersonMenu(
+                state: state, hashes: selectedItems.map(\.hash), onDone: { endSelect() })),
+            albumControls: AnyView(AddToAlbumMenu(
+                state: state, hashes: selectedItems.map(\.hash), onDone: { endSelect() })),
+            shareControls: AnyView(
+                ShareLink(items: state.localFileURLs(for: selectedItems)) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }.controlSize(.small)),
+            onDeselect: { selection.clear() },
+            onDone: { endSelect() })
+    }
 
-            Menu("Move to person…") {
+    /// People-specific face actions, injected into the shared bar's leading slot beside the photo
+    /// actions. These keep the selection (so you can manage several in a row); photo actions exit.
+    @ViewBuilder private var personActions: some View {
+        HStack(spacing: 6) {
+            Menu("Move to person\u{2026}") {
                 let others = allPeople.filter { $0.id != person.id }
-                if others.isEmpty {
-                    Text("No other people yet")
-                } else {
+                if others.isEmpty { Text("No other people yet") }
+                else {
                     ForEach(others, id: \.id) { p in
                         Button(p.name) {
                             state.moveFaces(selectedFaceIDs, toPerson: p.id, fromPerson: person.id)
-                            selection.clear(); reload()
+                            afterFaceAction()
                         }
                     }
                 }
             }
-            .menuStyle(.borderlessButton).fixedSize().controlSize(.small)
-            .disabled(selection.count == 0)
-
-            if showSplitField {
-                TextField("New person name…", text: $splitName)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Theme.elevated, in: RoundedRectangle(cornerRadius: 6))
-                    .frame(width: 160)
-                    .onSubmit {
-                        let name = splitName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !name.isEmpty else { showSplitField = false; return }
-                        state.splitFaces(selectedFaceIDs, fromPerson: person.id, toNewPerson: name)
-                        selection.clear(); splitName = ""; showSplitField = false
-                        reload()
-                    }
-                Button("Cancel") { showSplitField = false; splitName = "" }
-                    .controlSize(.small)
-            } else {
-                Button("Split to new person…") { showSplitField = true }
-                    .controlSize(.small)
-                    .disabled(selection.count == 0)
+            .menuStyle(.borderlessButton).fixedSize().controlSize(.small).disabled(selection.count == 0)
+            Button("Split\u{2026}") { showSplitField = true }.controlSize(.small).disabled(selection.count == 0)
+            Button("Remove") {
+                for id in selectedFaceIDs { state.reassignFace(id, to: nil, fromPerson: person.id) }
+                afterFaceAction()
             }
-            Button("Done") { selection.clear(); selectMode = false; showSplitField = false }
-                .controlSize(.small)
+            .controlSize(.small).disabled(selection.count == 0)
+            .help("Remove the selected faces from \(person.name)")
         }
-        .padding(.horizontal, 16)
-        .frame(height: Theme.toolbarHeight)
     }
 
     private var emptyFaces: some View {
