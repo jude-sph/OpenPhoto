@@ -143,7 +143,7 @@ private final class Box<T>: @unchecked Sendable {
     #expect(copying.last?.bytesDone == copying.last?.bytesTotal)
 }
 
-@Test func applyCancelStopsAndStillWritesManifest() async throws {
+@Test func applyCancelRollsBackThisSessionsCopies() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let lib = try scannedLibrary(t); try await lib.scanAll()
     let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
@@ -152,37 +152,72 @@ private final class Box<T>: @unchecked Sendable {
     let plan = try engine.plan(sources: lib.vaults, destinationVault: drive)
     #expect(plan.copies.count == 2)
 
-    // Let the first file fully copy, then cancel before the second. shouldCancel is polled
-    // both at the top of each file's loop AND per-chunk inside VerifiedCopy, so a call-count
-    // trigger is fragile. Instead key off durable state: cancel only once the first file's
-    // verified bytes have landed atomically at its dest. During file 0 it's still in a temp
-    // (dest absent → false); file 1's top-of-loop check sees it present → cancels.
+    // Cancel once the first file's verified bytes have landed atomically at its dest (file 1's
+    // top-of-loop check then sees it present → cancels). During file 0 it's still in a temp.
     let firstDest = drive.rootURL.appendingPathComponent(plan.copies[0].destRelPath)
     let result = await engine.apply(plan, destinationVault: drive, volume: vol,
                                     shouldCancel: { FileManager.default.fileExists(atPath: firstDest.path) })
 
     #expect(result.cancelled == true)
-    #expect(result.copied == 1)
-    #expect(result.copied < plan.copies.count)
+    #expect(result.copied == 0)                                  // rolled back — nothing kept
+    // The drive is left exactly as it was: no copied file on disk, empty manifest.
+    for item in plan.copies {
+        #expect(!FileManager.default.fileExists(
+            atPath: drive.rootURL.appendingPathComponent(item.destRelPath).path))
+    }
+    #expect((try? Manifest.read(from: drive.manifestURL))?.isEmpty ?? true)
 
-    // The manifest must record the file copied before cancel, so a re-sync resumes.
-    let first = plan.copies[0]
-    let entries = try Manifest.read(from: drive.manifestURL)
-    #expect(entries.contains { $0.path == first.destRelPath })
-    #expect(FileManager.default.fileExists(
-        atPath: drive.rootURL.appendingPathComponent(first.destRelPath).path))
-    // The cancelled file is neither on disk nor in the manifest.
-    let second = plan.copies[1]
-    #expect(!entries.contains { $0.path == second.destRelPath })
-
-    // Re-sync (no cancel) finishes the rest, skipping the already-copied file.
+    // A fresh re-sync copies BOTH (nothing was kept from the cancelled run).
     let plan2 = try engine.plan(sources: lib.vaults, destinationVault: drive)
+    #expect(plan2.copies.count == 2)
     let resume = await engine.apply(plan2, destinationVault: drive, volume: vol)
-    #expect(resume.cancelled == false)
-    #expect(resume.copied == 1)
-    let after = try Manifest.read(from: drive.manifestURL)
-    #expect(Set(after.map(\.path)) ==
+    #expect(resume.copied == 2)
+    #expect(Set(try Manifest.read(from: drive.manifestURL).map(\.path)) ==
             ["Pictures/rome2022/IMG_1.jpg", "Pictures/lisbon25/IMG_2.jpg"])
+}
+
+// The critical safety property: a cancel rolls back ONLY this session's copies — files synced by a
+// PRIOR run (here, the skipped first file) are never touched.
+@Test func applyCancelKeepsPreviouslySyncedFiles() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let pics = try t.sub("Pics3")
+    for (i, rel) in ["a/A.jpg", "b/B.jpg", "c/C.jpg"].enumerated() {
+        try makeJPEG(at: pics.appendingPathComponent(rel).creatingParent(),
+                     dateTimeOriginal: "2022:10:07 14:23:0\(i)", lat: nil, lon: nil)
+    }
+    let lib = try LibraryService(vaultRoots: [pics], appSupportDir: try t.sub("as3"))
+    try await lib.scanAll()
+    let drive = try Vault.openOrCreate(at: try t.sub("drive"), role: .canonical)
+    let engine = SyncEngine(library: lib)
+    let vol = FileSystemVolume(rootURL: drive.rootURL)
+    let full = try engine.plan(sources: lib.vaults, destinationVault: drive)
+    #expect(full.copies.count == 3)
+
+    // 1) Fully sync just the first file — now a PRIOR file from an earlier run.
+    var priorPlan = SyncPlan()
+    priorPlan.copies = [full.copies[0]]
+    priorPlan.totalCopyBytes = full.copies[0].size
+    #expect(await engine.apply(priorPlan, destinationVault: drive, volume: vol).copied == 1)
+    let priorPath = full.copies[0].destRelPath
+
+    // 2) Re-list all three (the prior one is present+matching → skipped) and cancel after the SECOND
+    //    lands (the third's top-of-loop cancels), so exactly the second is a this-session copy.
+    var plan = SyncPlan()
+    plan.copies = full.copies
+    plan.totalCopyBytes = full.copies.reduce(0) { $0 + $1.size }
+    let secondDest = drive.rootURL.appendingPathComponent(full.copies[1].destRelPath)
+    let r = await engine.apply(plan, destinationVault: drive, volume: vol,
+                               shouldCancel: { FileManager.default.fileExists(atPath: secondDest.path) })
+    #expect(r.cancelled == true)
+
+    // Prior file untouched; only the second (this session's copy) is rolled back; the third never ran.
+    let fm = FileManager.default
+    #expect(fm.fileExists(atPath: drive.rootURL.appendingPathComponent(priorPath).path))
+    #expect(!fm.fileExists(atPath: secondDest.path))
+    #expect(!fm.fileExists(atPath: drive.rootURL.appendingPathComponent(full.copies[2].destRelPath).path))
+    let entries = try Manifest.read(from: drive.manifestURL)
+    #expect(entries.contains { $0.path == priorPath })
+    #expect(!entries.contains { $0.path == full.copies[1].destRelPath })
 }
 
 @Test func applyClassifiesConflictNotRetryable() async throws {

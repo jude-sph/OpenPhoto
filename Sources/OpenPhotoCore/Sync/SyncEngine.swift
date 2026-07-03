@@ -145,6 +145,7 @@ public struct SyncEngine: Sendable {
         let total = plan.copies.count
         let bytesTotal = plan.totalCopyBytes
         var bytesDone: Int64 = 0
+        var copiedThisRun: [String] = []   // files written THIS session — rolled back on cancel
         for (i, item) in plan.copies.enumerated() {
             if shouldCancel?() == true { result.cancelled = true; break }
             let name = (item.destRelPath as NSString).lastPathComponent
@@ -175,6 +176,7 @@ public struct SyncEngine: Sendable {
                 case .copied:
                     verified[item.destRelPath] = try Self.manifestEntry(for: item, at: destURL)
                     result.copied += 1; bytesDone += item.size
+                    copiedThisRun.append(item.destRelPath)
                 case .cancelled:
                     result.cancelled = true
                 case .failed(let reason):
@@ -197,6 +199,17 @@ public struct SyncEngine: Sendable {
             }
         }
 
+        if result.cancelled {
+            // Roll back THIS session's copies so a cancelled sync leaves the drive exactly as it was.
+            // These are freshly-written, hash-verified copies of files still present on the Mac, so
+            // removing them loses nothing — it's operation cleanup (the same as discarding the in-flight
+            // temp). Previously-synced and skipped files are untouched; the manifest reverts to prior.
+            for path in copiedThisRun {
+                try? fm.removeItem(at: drive.rootURL.appendingPathComponent(path))
+                verified[path] = nil
+            }
+            result.copied = 0
+        }
         progress?(SyncProgress(stage: .finishing, done: total, total: total,
                                bytesDone: bytesDone, bytesTotal: bytesTotal, currentName: ""))
         try? Manifest.write(verified.values.sorted { $0.path < $1.path }, to: drive.manifestURL)
