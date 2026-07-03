@@ -92,9 +92,55 @@ public enum VaultReorganizer {
     public static func moveFile(in vault: Vault, relPath: String,
                                 toRelPath target: String) throws -> String {
         let src = norm(relPath)
-        var dst = norm(target)
+        let dst = norm(target)
         guard !src.isEmpty, !dst.isEmpty else { throw ReorgError.invalidTarget }
         if dst == src { return src }   // already there — no-op
+        let final = try relocateFileAndSidecar(in: vault, fromSrc: src, toDst: dst)
+        try rewriteManifestEntries(vault, mapping: [src: final])
+        return final
+    }
+
+    /// Batch exact-target move (drive propagation): relocate each `from → to` file + sidecar on
+    /// `vault`, collision-safe, then rewrite the manifest ONCE for the whole batch. Best-effort
+    /// per file (a file that can't move is skipped, the batch continues). Returns `from → final`
+    /// (collision-adjusted) for the files that moved — so an N-file drive move costs one drive
+    /// manifest rewrite, not N.
+    @discardableResult
+    public static func moveFilesExact(in vault: Vault,
+                                      moves: [(from: String, to: String)]) throws -> [String: String] {
+        var mapping: [String: String] = [:]
+        for m in moves {
+            let from = norm(m.from), to = norm(m.to)
+            guard !from.isEmpty, !to.isEmpty, from != to else { continue }
+            if let final = try? relocateFileAndSidecar(in: vault, fromSrc: from, toDst: to) {
+                mapping[from] = final
+            }
+        }
+        try rewriteManifestEntries(vault, mapping: mapping)
+        return mapping
+    }
+
+    /// Batch helper for `movePhotos`: relocate a file's bytes + sidecar (collision-safe) WITHOUT
+    /// rewriting the manifest, returning the final relPath. The caller collects every `old → final`
+    /// and rewrites the manifest ONCE for the whole batch (`rewriteManifestEntries`) — so an N-file
+    /// move pays one manifest read+write, not N. Mirrors the `intoDirRelPath:` move signature.
+    static func moveFileNoManifest(in vault: Vault, relPath: String,
+                                   intoDirRelPath dir: String) throws -> String {
+        let src = norm(relPath)
+        guard !src.isEmpty else { throw ReorgError.invalidTarget }
+        let name = (src as NSString).lastPathComponent
+        let dstDir = norm(dir)
+        let dst = dstDir.isEmpty ? name : dstDir + "/" + name
+        if dst == src { return src }   // already there — no-op
+        return try relocateFileAndSidecar(in: vault, fromSrc: src, toDst: dst)
+    }
+
+    /// Move ONE file's bytes + its `.openphoto/*.xmp` sidecar, collision-safe, returning the final
+    /// relPath. Same-volume atomic rename; Finder-tag xattrs ride along. Does NOT touch the manifest
+    /// — every caller (`moveFile`, `moveFileNoManifest`) decides how to record the path change.
+    private static func relocateFileAndSidecar(in vault: Vault, fromSrc src: String,
+                                               toDst dst0: String) throws -> String {
+        var dst = dst0
         try assertContained(src, in: vault); try assertContained(dst, in: vault)
         let fm = FileManager.default
         let srcURL = vault.absoluteURL(forRelativePath: src)
@@ -116,15 +162,20 @@ public enum VaultReorganizer {
             try? fm.removeItem(at: dstSidecar)   // stale sidecar with no media — garbage
             try fm.moveItem(at: srcSidecar, to: dstSidecar)
         }
-        try rewriteManifestEntry(vault, from: src, to: dst)
         return dst
     }
 
-    private static func rewriteManifestEntry(_ vault: Vault, from old: String, to new: String) throws {
+    /// Apply a batch of `old → new` path rewrites to the vault manifest in a SINGLE read + write —
+    /// the primitive that makes an N-file move cost one manifest rewrite, not N. Entries whose path
+    /// isn't in `mapping` are left exactly as-is; a mapping whose `old` isn't present is ignored (the
+    /// file isn't cataloged yet — a rescan adopts it). Hash/size/mtime are preserved verbatim.
+    public static func rewriteManifestEntries(_ vault: Vault, mapping: [String: String]) throws {
+        guard !mapping.isEmpty else { return }
         let entries = try Manifest.read(from: vault.manifestURL)
-        guard entries.contains(where: { $0.path == old }) else { return }  // not cataloged yet — rescan adopts it
+        guard entries.contains(where: { mapping[$0.path] != nil }) else { return }  // nothing here to rewrite
         try Manifest.write(entries.map { e in
-            e.path == old ? ManifestEntry(hash: e.hash, path: new, size: e.size, mtime: e.mtime) : e
+            guard let new = mapping[e.path] else { return e }
+            return ManifestEntry(hash: e.hash, path: new, size: e.size, mtime: e.mtime)
         }, to: vault.manifestURL)
     }
 

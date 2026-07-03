@@ -184,7 +184,14 @@ extension AppState {
         await beginReorg()                                   // exclude the background scan (S03)
 
         // 1. Mac primary vault (local instances; movePhotos skips drive-only + in-dest).
-        let result = library.movePhotos(items.filter { $0.driveRelPath == nil }, toDir: destDir)
+        //    Run OFF the @MainActor: the file renames + the (single, batched) manifest write + the
+        //    catalog transaction are blocking I/O that must not stall the window. LibraryService is
+        //    Sendable and its catalog uses a serial DB queue, so this is safe off-main; beginReorg()
+        //    has already fenced the background scanner. UI-state refresh resumes on main below.
+        let localItems = items.filter { $0.driveRelPath == nil }
+        let result = await Task.detached(priority: .userInitiated) { [library] in
+            library.movePhotos(localItems, toDir: destDir)
+        }.value
 
         // Undo bookkeeping: every file actually moved (primary vault + drive-only rekeys below)
         // as data-only records; recorded once after the final rescan.
@@ -202,25 +209,23 @@ extension AppState {
         if let basename = driveBasename(), !result.moved.isEmpty {
             let connected = connectedDurableDrives()
             let connectedIDs = Set(connected.map(\.id))
+            let offlineMoves = result.moved.map { (src: $0.key, dst: $0.value) }
             for driveID in connectedIDs.union(offlineDurableDriveIDs()) {
-                for (old, new) in result.moved {
-                    try? library.catalog.rewriteVaultPresencePath(vaultID: driveID,
-                                                                  fromRelPath: old, toRelPath: new)
-                    if !connectedIDs.contains(driveID) {
-                        _ = try? library.catalog.enqueueFolderOp(vaultID: driveID, op: "moveFile",
-                                                                 src: old, dst: new)
-                    }
+                // One presence-rewrite transaction per drive for the whole batch (was one per file).
+                try? library.catalog.rewriteVaultPresencePaths(vaultID: driveID, mapping: result.moved)
+                if !connectedIDs.contains(driveID) {
+                    // One enqueue transaction per offline drive (was one per file).
+                    try? library.catalog.enqueueFolderOps(vaultID: driveID, op: "moveFile", moves: offlineMoves)
                 }
             }
             if !connected.isEmpty {
                 let moved = result.moved
                 await Task.detached(priority: .userInitiated) {
                     for d in connected {
-                        for (old, new) in moved {
-                            _ = try? VaultReorganizer.moveFile(in: d.vault,
-                                relPath: mapToDriveStatic(old, basename: basename),
-                                toRelPath: mapToDriveStatic(new, basename: basename))
-                        }
+                        // One manifest rewrite per drive for the whole batch (was one per file).
+                        let moves = moved.map { (from: mapToDriveStatic($0.key, basename: basename),
+                                                 to: mapToDriveStatic($0.value, basename: basename)) }
+                        _ = try? VaultReorganizer.moveFilesExact(in: d.vault, moves: moves)
                     }
                 }.value
             }
@@ -233,7 +238,7 @@ extension AppState {
         if !driveOnly.isEmpty, let basename = driveBasename() {
             let connected = Dictionary(uniqueKeysWithValues:
                 connectedDurableDrives().map { ($0.id, $0.vault) })
-            var driveFileMoves: [(vault: Vault, old: String, new: String)] = []
+            var driveFileMovesByVault: [String: [(old: String, new: String)]] = [:]   // vaultID → moves
             for item in driveOnly {
                 var relPaths = [item.relPath]
                 if let pairHash = item.livePairHash,
@@ -248,21 +253,23 @@ extension AppState {
                     try? library.catalog.rewriteVaultPresencePath(vaultID: item.vaultID,
                                                                   fromRelPath: old, toRelPath: new)
                     undoMoves.append(MovedFileRecord(vaultID: item.vaultID, from: old, to: new))
-                    if let dv = connected[item.vaultID] {
-                        driveFileMoves.append((dv, old, new))
+                    if connected[item.vaultID] != nil {
+                        driveFileMovesByVault[item.vaultID, default: []].append((old, new))
                     } else {
                         _ = try? library.catalog.enqueueFolderOp(vaultID: item.vaultID,
                                 op: "moveFile", src: old, dst: new)
                     }
                 }
             }
-            if !driveFileMoves.isEmpty {
-                let moves = driveFileMoves
+            if !driveFileMovesByVault.isEmpty {
+                let movesByVault = driveFileMovesByVault, conn = connected
                 await Task.detached(priority: .userInitiated) {
-                    for m in moves {
-                        _ = try? VaultReorganizer.moveFile(in: m.vault,
-                            relPath: mapToDriveStatic(m.old, basename: basename),
-                            toRelPath: mapToDriveStatic(m.new, basename: basename))
+                    for (vaultID, list) in movesByVault {
+                        guard let v = conn[vaultID] else { continue }
+                        // One manifest rewrite per drive for the whole batch (was one per file).
+                        let moves = list.map { (from: mapToDriveStatic($0.old, basename: basename),
+                                                to: mapToDriveStatic($0.new, basename: basename)) }
+                        _ = try? VaultReorganizer.moveFilesExact(in: v, moves: moves)
                     }
                 }.value
             }

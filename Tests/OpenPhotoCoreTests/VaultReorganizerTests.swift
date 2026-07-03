@@ -204,3 +204,68 @@ private func sidecarSeed(_ vault: Vault, mediaRelPath: String) throws -> URL {
     _ = try seed(vault, relPath: "c/y.jpg")
     #expect(try VaultReorganizer.moveFile(in: vault, relPath: "c/y.jpg", intoDirRelPath: "") == "y.jpg")
 }
+
+// MARK: - batch manifest rewrite (one read+write for N path changes)
+
+// The batch primitive that makes a multi-file move cost ONE manifest rewrite instead of N:
+// apply every (old → new) path change in a single read+write, preserving hash/size/mtime and
+// leaving unrelated entries untouched. A mapping whose `old` isn't present is ignored (a rescan
+// adopts a not-yet-cataloged file).
+@Test func rewriteManifestEntriesAppliesEveryMappingInOnePassAndPreservesTheRest() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vaultRoot = t.root.appendingPathComponent("V")
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    let vault = try Vault.openOrCreate(at: vaultRoot, role: .canonical)
+    let hA = ContentHash(stringValue: "sha256:" + String(repeating: "a", count: 64))
+    let hB = ContentHash(stringValue: "sha256:" + String(repeating: "b", count: 64))
+    let hC = ContentHash(stringValue: "sha256:" + String(repeating: "c", count: 64))
+    try Manifest.write([
+        ManifestEntry(hash: hA, path: "a/x.jpg", size: 11, mtime: "2026-01-01T00:00:00.000Z"),
+        ManifestEntry(hash: hB, path: "a/y.jpg", size: 22, mtime: "2026-01-02T00:00:00.000Z"),
+        ManifestEntry(hash: hC, path: "keep/z.jpg", size: 33, mtime: "2026-01-03T00:00:00.000Z"),
+    ], to: vault.manifestURL)
+
+    try VaultReorganizer.rewriteManifestEntries(
+        vault, mapping: ["a/x.jpg": "c/x.jpg", "a/y.jpg": "c/y.jpg", "ghost.jpg": "c/ghost.jpg"])
+
+    let byHash = Dictionary(uniqueKeysWithValues:
+        try Manifest.read(from: vault.manifestURL).map { ($0.hash, $0) })
+    #expect(byHash.count == 3)
+    #expect(byHash[hA]?.path == "c/x.jpg")
+    #expect(byHash[hB]?.path == "c/y.jpg")
+    #expect(byHash[hC]?.path == "keep/z.jpg")            // untouched
+    #expect(byHash[hA]?.size == 11 && byHash[hA]?.mtime == "2026-01-01T00:00:00.000Z")  // metadata preserved
+}
+
+// Drive propagation: relocate every file on a drive to its aligned target and rewrite the drive
+// manifest ONCE (not per file). The result is drift-clean — moved files are recognised at their new
+// paths, nothing reads as unknown/missing.
+@Test func moveFilesExactRelocatesAllRewritesManifestOnceAndStaysDriftClean() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vaultRoot = t.root.appendingPathComponent("V")
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    let vault = try Vault.openOrCreate(at: vaultRoot, role: .canonical)
+    let hX = try seed(vault, relPath: "old/x.jpg")
+    let hY = try seed(vault, relPath: "old/y.jpg", bytes: "yy")
+    // Seed the manifest from each file's ACTUAL size+mtime (the same resource keys the drift walk
+    // reads) so the drift assertion below is deterministic — moveFilesExact preserves these verbatim.
+    func entry(_ rel: String, _ h: ContentHash) throws -> ManifestEntry {
+        let v = try vault.absoluteURL(forRelativePath: rel)
+            .resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        return ManifestEntry(hash: h, path: rel, size: Int64(v.fileSize ?? 0),
+                             mtime: ISO8601Millis.string(from: v.contentModificationDate ?? Date()))
+    }
+    try Manifest.write([try entry("old/x.jpg", hX), try entry("old/y.jpg", hY)], to: vault.manifestURL)
+
+    let mapping = try VaultReorganizer.moveFilesExact(in: vault, moves: [
+        (from: "old/x.jpg", to: "new/x.jpg"), (from: "old/y.jpg", to: "new/y.jpg")])
+
+    #expect(mapping == ["old/x.jpg": "new/x.jpg", "old/y.jpg": "new/y.jpg"])
+    #expect(Set(try Manifest.read(from: vault.manifestURL).map(\.path)) == ["new/x.jpg", "new/y.jpg"])
+    for rel in ["new/x.jpg", "new/y.jpg"] {
+        #expect(FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: rel).path))
+    }
+    let report = try DriftReconciler().scan(drive: vault)
+    #expect(report.unknown.isEmpty && report.missing.isEmpty && report.changed.isEmpty)
+    #expect(report.presentHashes.count == 2)
+}

@@ -103,23 +103,30 @@ struct TimelineView: View {
     }
 
     @ViewBuilder private func cell(_ item: TimelineItem) -> some View {
-        MediaTile(
-            id: item.hash,
-            selectMode: selectMode,
-            selected: selection.contains(item.hash),
-            rubberBandSpace: "timelinegrid",
-            thumbnail: ThumbnailImage(timelineItem: item, library: state.library!, targetPixel: thumbPixels),
-            badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
-            onTap: {
-                if selectMode {
-                    if let idx = state.flatItems.firstIndex(where: { $0.hash == item.hash }) {
-                        selection.tap(index: idx, items: orderedSelectable,
-                                      extendingRange: NSEvent.modifierFlags.contains(.shift))
+        if let library = state.library {
+            // `.equatable()` so a marquee tick only re-renders cells whose inputs changed (the tap
+            // closure reads @State/@Bindable, always current, so memoizing the body is safe).
+            MediaGridCell(
+                id: item.hash,
+                item: item,
+                selectMode: selectMode,
+                selected: selection.contains(item.hash),
+                backedUp: state.isBackedUpOnCanonical(item),
+                thumbPixels: thumbPixels,
+                space: "timelinegrid",
+                library: library,
+                onTap: {
+                    if selectMode {
+                        if let idx = state.flatItems.firstIndex(where: { $0.hash == item.hash }) {
+                            selection.tap(index: idx, items: orderedSelectable,
+                                          extendingRange: NSEvent.modifierFlags.contains(.shift))
+                        }
+                    } else {
+                        state.openViewer(item, within: state.flatItems)
                     }
-                } else {
-                    state.openViewer(item, within: state.flatItems)
-                }
-            })
+                })
+            .equatable()
+        }
     }
 
     @ViewBuilder private func sectionHeader(_ section: TimelineSection) -> some View {

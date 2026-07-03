@@ -4,6 +4,9 @@ import OpenPhotoCore
 struct FolderGridView: View {
     @Bindable var state: AppState
     @State private var items: [TimelineItem] = []
+    /// Cached from `items` on reload so the rubber-band modifier + tile taps don't rebuild this
+    /// O(items) array on every selection tick.
+    @State private var orderedSelectable: [SelectableItem] = []
     @State private var selectMode = false
     @State private var selection = SelectionModel()
     @State private var showEvict = false
@@ -12,9 +15,6 @@ struct FolderGridView: View {
     @State private var showSend = false
     @State private var dragToMove = false
 
-    private var orderedSelectable: [SelectableItem] {
-        items.map { SelectableItem(id: $0.instanceID) }
-    }
     private var selectedItems: [TimelineItem] {
         items.filter { selection.contains($0.instanceID) }
     }
@@ -118,13 +118,17 @@ struct FolderGridView: View {
         // Guard the library: a teardown (Close Library) can nil it while a grid/sheet is still
         // on screen, and a force-unwrap here would crash (S57). Render nothing if it's gone.
         if let library = state.library {
-            MediaTile(
+            // `.equatable()` so a marquee tick only re-renders cells whose inputs changed (the tap
+            // closure reads @State/@Bindable, always current, so memoizing the body is safe).
+            MediaGridCell(
                 id: item.instanceID,
+                item: item,
                 selectMode: selectMode,
                 selected: selection.contains(item.instanceID),
-                rubberBandSpace: "foldergrid",
-                thumbnail: ThumbnailImage(timelineItem: item, library: library, targetPixel: thumbPixels),
-                badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
+                backedUp: state.isBackedUpOnCanonical(item),
+                thumbPixels: thumbPixels,
+                space: "foldergrid",
+                library: library,
                 onTap: {
                     if selectMode {
                         if let idx = items.firstIndex(where: { $0.instanceID == item.instanceID }) {
@@ -135,13 +139,17 @@ struct FolderGridView: View {
                         state.openViewer(item, within: items)
                     }
                 })
+            .equatable()
         }
     }
 
     private func reload() {
-        guard let lib = state.library, let dir = state.selectedFolder else { items = []; return }
+        guard let lib = state.library, let dir = state.selectedFolder else {
+            items = []; orderedSelectable = []; return
+        }
         let all = (try? lib.items(inDir: dir, recursive: state.foldersRecursive)) ?? []
         items = state.videoOnly ? all.filter { $0.kind == MediaKind.video.rawValue } : all
+        orderedSelectable = items.map { SelectableItem(id: $0.instanceID) }
     }
 
     private var selectionBar: some View {

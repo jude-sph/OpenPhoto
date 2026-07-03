@@ -61,3 +61,55 @@ private func hash64(_ c: Character) -> String { "sha256:" + String(repeating: c,
     try cat.clearFolderOp(id: ops[0].id)
     #expect(try cat.pendingFolderOps(forVault: "drive").isEmpty)
 }
+
+// Batch instance re-path: a multi-file move applies all path changes in ONE transaction
+// (atomic, not N separate commits), each row's derived dirPath updated too.
+@Test func rewriteInstancePathsRepathsEveryInstanceInOneCall() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    let hX = hash64("a"); let hY = hash64("b")
+    try cat.upsert(assets: [asset(hX), asset(hY)])
+    try cat.replaceInstances(inVault: "mac", with: [
+        InstanceRecord(hash: hX, vaultID: "mac", relPath: "a/x.jpg", dirPath: "a", size: 1, mtimeMs: 1),
+        InstanceRecord(hash: hY, vaultID: "mac", relPath: "a/y.jpg", dirPath: "a", size: 1, mtimeMs: 1)])
+
+    try cat.rewriteInstancePaths(vaultID: "mac", mapping: ["a/x.jpg": "c/x.jpg", "a/y.jpg": "c/y.jpg"])
+
+    let moved = try cat.items(instanceIDs: ["mac|c/x.jpg", "mac|c/y.jpg"])
+    #expect(Set(moved.map(\.relPath)) == ["c/x.jpg", "c/y.jpg"])
+    #expect(moved.first { $0.relPath == "c/x.jpg" }?.dirPath == "c")   // derived dirPath followed
+    #expect(try cat.items(instanceIDs: ["mac|a/x.jpg"]).isEmpty)        // old path no longer resolves
+}
+
+// Drive presence re-path, batched: every row re-keyed in ONE transaction, each driveRelPath
+// suffix-swapped to follow the move (same per-row logic as the single rewriteVaultPresencePath).
+@Test func rewriteVaultPresencePathsRepathsEveryRowAndSwapsDriveRelInOneCall() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    let hX = hash64("a"); let hY = hash64("b")
+    try cat.upsert(assets: [asset(hX), asset(hY)])
+    try cat.replaceVaultPresence(vaultID: "drive", entries: [
+        VaultPresenceEntry(hash: hX, relPath: "old/x.jpg", dirPath: "old", size: 1, driveRelPath: "Lib/old/x.jpg"),
+        VaultPresenceEntry(hash: hY, relPath: "old/y.jpg", dirPath: "old", size: 1, driveRelPath: "Lib/old/y.jpg")])
+
+    try cat.rewriteVaultPresencePaths(vaultID: "drive",
+        mapping: ["old/x.jpg": "new/x.jpg", "old/y.jpg": "new/y.jpg"])
+
+    let moved = try cat.items(instanceIDs: ["drive|new/x.jpg", "drive|new/y.jpg"])
+    #expect(Set(moved.map(\.relPath)) == ["new/x.jpg", "new/y.jpg"])
+    #expect(moved.first { $0.relPath == "new/x.jpg" }?.driveRelPath == "Lib/new/x.jpg")  // suffix-swapped
+    #expect(moved.first { $0.relPath == "new/x.jpg" }?.dirPath == "new")
+    #expect(try cat.items(instanceIDs: ["drive|old/x.jpg"]).isEmpty)
+}
+
+// Offline-drive queue, batched: all queued ops inserted in ONE transaction.
+@Test func enqueueFolderOpsInsertsEveryMoveInOneCall() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.enqueueFolderOps(vaultID: "drive", op: "moveFile",
+        moves: [(src: "a/x.jpg", dst: "b/x.jpg"), (src: "a/y.jpg", dst: "b/y.jpg")])
+    let ops = try cat.pendingFolderOps(forVault: "drive")
+    #expect(ops.count == 2)
+    #expect(Set(ops.compactMap(\.src)) == ["a/x.jpg", "a/y.jpg"])
+    #expect(ops.allSatisfy { $0.op == "moveFile" })
+}

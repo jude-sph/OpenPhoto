@@ -1,6 +1,44 @@
 import SwiftUI
 import OpenPhotoCore
 
+/// An `Equatable` wrapper around a timeline/folders `MediaTile`, so a whole-grid re-render (every
+/// rubber-band tick re-evaluates the parent body) only re-runs the cells whose inputs ACTUALLY
+/// changed — not every visible tile. Without this, dragging a marquee over a dense grid re-evaluates
+/// hundreds of `MediaTile` bodies per frame; with it, only the handful crossing the marquee edge do.
+///
+/// The `==` keys on every value that affects rendering: `item` (Equatable — covers favorite/kind/
+/// rotation/livePair/duration/driveRelPath/hash), `selected`, `selectMode`, `backedUp`, `thumbPixels`,
+/// `space`. `onTap` is deliberately excluded: it reads `@State`/`@Bindable` storage (selection, items,
+/// selectMode) which is reference-backed, so it always sees current values even when the body is
+/// memoized — there is no stale-closure hazard.
+struct MediaGridCell: View, Equatable {
+    let id: String          // cell + rubber-band frame identity (folders: instanceID, timeline: hash)
+    let item: TimelineItem
+    let selectMode: Bool
+    let selected: Bool
+    let backedUp: Bool
+    let thumbPixels: Int
+    let space: String
+    let library: LibraryService
+    var onTap: () -> Void = {}
+
+    nonisolated static func == (l: MediaGridCell, r: MediaGridCell) -> Bool {
+        l.id == r.id && l.item == r.item && l.selectMode == r.selectMode && l.selected == r.selected
+            && l.backedUp == r.backedUp && l.thumbPixels == r.thumbPixels && l.space == r.space
+    }
+
+    var body: some View {
+        MediaTile(
+            id: id,
+            selectMode: selectMode,
+            selected: selected,
+            rubberBandSpace: space,
+            thumbnail: ThumbnailImage(timelineItem: item, library: library, targetPixel: thumbPixels),
+            badges: { TimelineTileBadges(item: item, backedUp: backedUp) },
+            onTap: onTap)
+    }
+}
+
 /// The one correct grid-cell chrome: a square frame, the thumbnail clipped to a rounded rect on the
 /// OUTER frame, and the selection ring + checkbox + badges drawn on that SAME rounded frame -- so
 /// corners never poke past the ring and badges are never clipped (the bug the timeline/folders cells

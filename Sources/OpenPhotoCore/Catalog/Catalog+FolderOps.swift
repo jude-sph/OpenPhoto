@@ -24,6 +24,23 @@ extension Catalog {
         }
     }
 
+    /// Batch form of `enqueueFolderOp`: insert every `(src, dst)` op for a drive in ONE transaction,
+    /// so propagating an N-file move to an offline drive commits once, not N times. Oldest-first
+    /// ordering is preserved (single `createdAtMs`, sequential rowids).
+    public func enqueueFolderOps(vaultID: String, op: String,
+                                 moves: [(src: String, dst: String)]) throws {
+        guard !moves.isEmpty else { return }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        try dbQueue.write { db in
+            for m in moves {
+                try db.execute(sql: """
+                    INSERT INTO pending_folder_ops (vaultID, op, srcRelPath, dstRelPath, createdAtMs)
+                    VALUES (?, ?, ?, ?, ?)
+                    """, arguments: [vaultID, op, m.src, m.dst, now])
+            }
+        }
+    }
+
     /// Queued ops for a drive, oldest-first (apply in order).
     public func pendingFolderOps(forVault vaultID: String) throws -> [PendingFolderOp] {
         try dbQueue.read { db in

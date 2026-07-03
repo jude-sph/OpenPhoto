@@ -553,6 +553,39 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// Batch form of `rewriteVaultPresencePath`: re-key every `old → new` presence row in ONE write
+    /// transaction (so a propagated N-file move commits once per drive, not N times). Same per-row
+    /// logic: NFC-normalize, skip empty/no-op pairs, suffix-swap each row's `driveRelPath`.
+    public func rewriteVaultPresencePaths(vaultID: String, mapping: [String: String]) throws {
+        let pairs = mapping.compactMap { from, to -> (String, String)? in
+            let f = from.precomposedStringWithCanonicalMapping
+            let t = to.precomposedStringWithCanonicalMapping
+            guard !f.isEmpty, !t.isEmpty, f != t else { return nil }
+            return (f, t)
+        }
+        guard !pairs.isEmpty else { return }
+        try dbQueue.write { db in
+            for (from, to) in pairs {
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT rowid AS rid, driveRelPath FROM vault_presence
+                    WHERE vaultID = ? AND relPath = ?
+                    """, arguments: [vaultID, from])
+                for row in rows {
+                    let rid: Int64 = row["rid"]
+                    let oldDriveRel: String = row["driveRelPath"]
+                    let newDriveRel = oldDriveRel.hasSuffix(from)
+                        ? String(oldDriveRel.dropLast(from.count)) + to
+                        : oldDriveRel
+                    try db.execute(sql: """
+                        UPDATE vault_presence SET relPath = ?, dirPath = ?, driveRelPath = ?
+                        WHERE rowid = ?
+                        """, arguments: [to, (to as NSString).deletingLastPathComponent,
+                                         newDriveRel, rid])
+                }
+            }
+        }
+    }
+
     /// Re-apply the catalog-side (presence-only) effect of this drive's queued ops, oldest-first, so a
     /// manifest-driven presence rebuild (`replaceVaultPresence`) doesn't revert an optimistic offline
     /// move. NEVER touches the drive or any file — only re-keys vault_presence rows. No-op for ops with
@@ -593,6 +626,25 @@ public final class Catalog: Sendable {
         try dbQueue.write { db in
             try db.execute(sql: "UPDATE instances SET relPath = ?, dirPath = ? WHERE vaultID = ? AND relPath = ?",
                            arguments: [to, (to as NSString).deletingLastPathComponent, vaultID, from])
+        }
+    }
+
+    /// Batch form of `rewriteInstancePath`: apply every `old → new` re-path in ONE write transaction
+    /// (atomic — all rows move or none), so an N-file move commits once instead of N times. Same
+    /// per-row semantics: NFC-normalize, skip empty/no-op pairs, update the derived `dirPath`.
+    public func rewriteInstancePaths(vaultID: String, mapping: [String: String]) throws {
+        let pairs = mapping.compactMap { from, to -> (String, String)? in
+            let f = from.precomposedStringWithCanonicalMapping
+            let t = to.precomposedStringWithCanonicalMapping
+            guard !f.isEmpty, !t.isEmpty, f != t else { return nil }
+            return (f, t)
+        }
+        guard !pairs.isEmpty else { return }
+        try dbQueue.write { db in
+            for (f, t) in pairs {
+                try db.execute(sql: "UPDATE instances SET relPath = ?, dirPath = ? WHERE vaultID = ? AND relPath = ?",
+                               arguments: [t, (t as NSString).deletingLastPathComponent, vaultID, f])
+            }
         }
     }
 

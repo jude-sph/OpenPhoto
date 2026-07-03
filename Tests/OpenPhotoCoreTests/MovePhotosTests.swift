@@ -42,6 +42,34 @@ private func makeLibrary(_ t: TestDirs, files: [String]) async throws -> (Librar
     #expect(try lib.items(inDir: "b").map(\.relPath) == ["b/x.jpg"])
 }
 
+// Batch move of several files into one folder — including a name collision — lands every file
+// + manifest entry + catalog row correctly in a SINGLE manifest/catalog commit, and a full rescan
+// is then a no-op. Guards the batched movePhotos path (one manifest rewrite for the whole batch).
+@Test func movePhotosBatchHandlesCollisionAndLeavesManifestAndCatalogExact() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (lib, vault) = try await makeLibrary(t, files: ["a/x.jpg", "a/y.jpg", "b/x.jpg"])
+    let toMove = try lib.items(inDir: "a")               // a/x.jpg, a/y.jpg
+    #expect(toMove.count == 2)
+
+    let result = lib.movePhotos(toMove, toDir: "b")       // a/x.jpg collides with the existing b/x.jpg
+
+    #expect(result.failures.isEmpty)
+    #expect(result.moved == ["a/x.jpg": "b/x (2).jpg", "a/y.jpg": "b/y.jpg"])
+    // Catalog reflects all three in b, none left in a — no rescan needed.
+    #expect(try lib.items(inDir: "a").isEmpty)
+    #expect(Set(try lib.items(inDir: "b").map(\.relPath)) == ["b/x.jpg", "b/x (2).jpg", "b/y.jpg"])
+    // Manifest: three entries, the moved ones at their final (collision-adjusted) paths, all on disk.
+    let manifest = try Manifest.read(from: vault.manifestURL)
+    #expect(Set(manifest.map(\.path)) == ["b/x.jpg", "b/x (2).jpg", "b/y.jpg"])
+    for rel in ["b/x.jpg", "b/x (2).jpg", "b/y.jpg"] {
+        #expect(FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: rel).path))
+    }
+    // Air-tight: a full rescan changes nothing — incremental index already matches disk.
+    try await lib.rescan(vaultID: vault.descriptor.vaultID)
+    #expect(try lib.items(inDir: "a").isEmpty)
+    #expect(Set(try lib.items(inDir: "b").map(\.relPath)) == ["b/x.jpg", "b/x (2).jpg", "b/y.jpg"])
+}
+
 // The reconnect review's "Undo" primitive: revert a local move using the drive as truth.
 @Test func revertLocalMoveMovesFileBackAndRepathsInstance() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
