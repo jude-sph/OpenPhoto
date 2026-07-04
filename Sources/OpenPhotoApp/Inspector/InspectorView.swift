@@ -194,26 +194,7 @@ struct InspectorView: View {
 
                 Divider().overlay(Theme.hairline)
 
-                section("Locations") {
-                    // Every folder this image lives in (a duplicate spans several), each tagged Mac vs
-                    // drive-only — so an evicted copy reads honestly instead of a blanket "This Mac".
-                    let folders = state.folderPresences(for: item)
-                    ForEach(folders) { folderPresenceRow($0) }
-                    // Drives it's backed up on / devices it was sent to. The per-hash "This Mac" row is
-                    // replaced by the per-folder rows above, so drop it here.
-                    let devices = state.locations(for: item).filter {
-                        if case .thisMac = $0.place { return false }; return true
-                    }
-                    ForEach(devices) { locationRow($0) }
-                    if folders.isEmpty && devices.isEmpty {
-                        Text("Only on this Mac")
-                            .font(.system(size: 12)).foregroundStyle(Theme.textFaint)
-                    }
-                    // At-a-glance "not backed up": flag absence from the canonical drive.
-                    if !state.durableVaults.isEmpty && !state.isBackedUpOnCanonical(item) {
-                        notOnCanonicalRow()
-                    }
-                }
+                locationsSection
 
                 section("File") {
                     VStack(alignment: .leading, spacing: 2) {
@@ -282,7 +263,7 @@ struct InspectorView: View {
                 }
 
                 // This content also lives in other folders (same sha256). Just the folder list — the
-                // timeline shows it once; per-location state is in LOCATIONS above.
+                // timeline shows it once; per-location state is in the location groups above.
                 if instances.count > 1 {
                     let currentFolder = (item.relPath as NSString).deletingLastPathComponent
                     let otherFolders = Set(instances.map { ($0.relPath as NSString).deletingLastPathComponent })
@@ -439,25 +420,72 @@ struct InspectorView: View {
         }
     }
 
+    /// Where this photo lives, split into two honest groups so a copy filed in a different folder
+    /// never reads as "not on your Mac":
+    ///  • "In your library" — the folder(s) it's filed in, each marked downloaded vs on-drive-only.
+    ///  • "Copies" — the physical copies of the bytes: this Mac, drives (canonical/backup), sources.
+    @ViewBuilder private var locationsSection: some View {
+        let folders = state.folderPresences(for: item)
+        let hasLocalCopy = folders.contains { $0.onMac }
+        // Drives it's backed up on / devices it was sent to / sources it came from. The per-hash
+        // "This Mac" row is replaced by thisMacCopyRow below, so drop it here.
+        let devices = state.locations(for: item).filter {
+            if case .thisMac = $0.place { return false }; return true
+        }
+
+        if !folders.isEmpty {
+            section("In your library") {
+                ForEach(folders) { folderPresenceRow($0) }
+            }
+        }
+
+        section("Copies") {
+            if hasLocalCopy { thisMacCopyRow() }
+            ForEach(devices) { locationRow($0) }
+            if !hasLocalCopy && devices.isEmpty {
+                Text("Only on this Mac")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textFaint)
+            }
+            // At-a-glance "not backed up": flag absence from the canonical drive.
+            if !state.durableVaults.isEmpty && !state.isBackedUpOnCanonical(item) {
+                notOnCanonicalRow()
+            }
+        }
+    }
+
+    /// One folder this photo is filed in. Honest per-folder state — downloaded to the Mac vs present
+    /// on the drive but not downloaded — never a bare "on the drive only" (which reads as "not on
+    /// your Mac" even when another folder holds a local copy).
     @ViewBuilder private func folderPresenceRow(_ fp: AppState.FolderPresence) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: fp.onMac ? "laptopcomputer" : "sdcard")
+            Image(systemName: "folder")
                 .foregroundStyle(Theme.textDim).frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
                 Text(fp.folder.isEmpty ? "(root)" : fp.folder)
                     .font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
-                Text(fp.onMac ? "On this Mac" : "On the drive only")
+                Text(fp.onMac ? "on this Mac" : "on drive, not downloaded")
                     .font(.system(size: 10.5))
                     .foregroundStyle(fp.onMac ? Theme.textFaint : Theme.amber)
             }
             Spacer()
-            if fp.onMac { Image(systemName: "checkmark").foregroundStyle(Theme.green) }
+        }
+    }
+
+    /// The local copy of the bytes on this machine — shown once in "Copies" (the folders it's filed
+    /// in are listed under "In your library").
+    @ViewBuilder private func thisMacCopyRow() -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "laptopcomputer")
+                .foregroundStyle(Theme.textDim).frame(width: 16)
+            Text("This Mac").font(.system(size: 12.5))
+            Spacer()
+            Image(systemName: "checkmark").foregroundStyle(Theme.green)
         }
     }
 
     @ViewBuilder private func locationRow(_ loc: Location) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: locationSymbol(loc.place))
+            Image(systemName: locationSymbol(loc))
                 .foregroundStyle(Theme.textDim).frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
                 Text(locationName(loc.place)).font(.system(size: 12.5))
@@ -480,10 +508,19 @@ struct InspectorView: View {
         }
     }
 
-    private func locationSymbol(_ place: Location.Place) -> String {
-        switch place {
-        case .thisMac: return "laptopcomputer"
-        case .device(_, _, let kind): return kind == .phone ? "iphone" : "sdcard"
+    /// Distinct glyphs so a drive, a source and a folder are never confused: `externaldrive` for
+    /// backup/canonical drives (and volumes we sent to), `iphone`/`camera`/`square.and.arrow.down`
+    /// for import sources & phones. Folders use `folder` (see folderPresenceRow).
+    private func locationSymbol(_ loc: Location) -> String {
+        switch loc.place {
+        case .thisMac:
+            return "laptopcomputer"
+        case .device(_, _, let kind):
+            // Imported-from (historical) reads as a source; drives & sent-to devices as hardware.
+            if loc.confidence == .historical {
+                return kind == .phone ? "camera" : "square.and.arrow.down"
+            }
+            return kind == .phone ? "iphone" : "externaldrive"
         }
     }
     private func locationName(_ place: Location.Place) -> String {
