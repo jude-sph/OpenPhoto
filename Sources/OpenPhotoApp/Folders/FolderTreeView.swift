@@ -218,7 +218,7 @@ private struct FolderRow: View {
                     }
                     Menu {
                         ForEach(mergeTargets(excluding: node.path), id: \.self) { target in
-                            Button(mergeTargetLabel(target)) { mergeInto = target }
+                            Button(mergeTargetLabel(target)) { beginMerge(into: target) }
                         }
                     } label: { Label("Merge Into\u{2026}", systemImage: "arrow.triangle.merge") }
                 }
@@ -280,7 +280,7 @@ private struct FolderRow: View {
             Text("Renames this folder on disk. Your photos and their edits are unaffected.")
         }
         // Merge-into confirmation (set union: uniques move in, exact dupes go to the bin)
-        .alert("Merge \u{201C}\(node.name)\u{201D} into \u{201C}\(mergeIntoName)\u{201D}?",
+        .alert("Merge \u{201C}\(mergeSrcLabel)\u{201D} into \u{201C}\(mergeDestLabel)\u{201D}?",
                isPresented: Binding(get: { mergeInto != nil }, set: { if !$0 { mergeInto = nil } })) {
             Button("Cancel", role: .cancel) { mergeInto = nil }
             Button("Merge") {
@@ -290,7 +290,7 @@ private struct FolderRow: View {
         } message: {
             if let dest = mergeInto {
                 let c = state.mergeFolderCounts(node.path, into: dest)
-                Text("\(c.move) photo\(c.move == 1 ? "" : "s") move in; \(c.bin) exact duplicate\(c.bin == 1 ? "" : "s") move to the bin (restore anytime). The now-empty \u{201C}\(node.name)\u{201D} is removed. Only content already present in the destination is treated as a duplicate.")
+                Text("\(c.move) photo\(c.move == 1 ? "" : "s") move in; \(c.bin) exact duplicate\(c.bin == 1 ? "" : "s") move to the bin (restore anytime). The now-empty \u{201C}\(mergeSrcLabel)\u{201D} is removed. Only content already present in the destination is treated as a duplicate.")
             }
         }
         // Tag-all-in-folder prompt
@@ -376,6 +376,20 @@ private struct FolderRow: View {
         }
     }
 
+    /// Begin a "Merge Into…": a drive-only source (no photos on this Mac) can't be merged as a set, so
+    /// explain that instead of arming a meaningless "0 / 0" confirmation. Otherwise show the dialog.
+    private func beginMerge(into target: String) {
+        guard !state.folderHasNoLocalItems(node.path) else {
+            let alert = NSAlert()
+            alert.messageText = "\u{201C}\(node.name)\u{201D} has no photos on this Mac to merge"
+            alert.informativeText = "It exists only on a drive. Merge combines folders that are on this Mac."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+        mergeInto = target
+    }
+
     /// Every folder you could merge THIS one into — all folders except itself and its own descendants
     /// (can't merge a folder into its own subtree).
     private func mergeTargets(excluding src: String) -> [String] {
@@ -385,5 +399,16 @@ private struct FolderRow: View {
         return paths.filter { $0 != src && !$0.isEmpty && !$0.hasPrefix(src + "/") }.sorted()
     }
     private func mergeTargetLabel(_ p: String) -> String { p.replacingOccurrences(of: "/", with: " \u{203A} ") }
-    private var mergeIntoName: String { ((mergeInto ?? "") as NSString).lastPathComponent }
+
+    // The pending merge's source & destination share a leaf name, so bare names would be ambiguous
+    // (which "Trip" into which "Trip"?) — fall back to the full path (a › b › c) for BOTH sides.
+    private var mergeNameCollision: Bool {
+        guard let dest = mergeInto else { return false }
+        return (dest as NSString).lastPathComponent == node.name
+    }
+    private var mergeSrcLabel: String { mergeNameCollision ? mergeTargetLabel(node.path) : node.name }
+    private var mergeDestLabel: String {
+        guard let dest = mergeInto else { return "" }
+        return mergeNameCollision ? mergeTargetLabel(dest) : (dest as NSString).lastPathComponent
+    }
 }

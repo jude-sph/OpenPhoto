@@ -140,6 +140,14 @@ extension AppState {
         return (plan.moves.count, plan.binInstanceIDs.count)
     }
 
+    /// True when folder `src` holds NO local (on-Mac) items — it's drive-only (or empty), so a
+    /// set-union merge would move nothing. Used to block a meaningless "0 / 0" merge with a clear note.
+    func folderHasNoLocalItems(_ src: String) -> Bool {
+        guard let library else { return true }
+        let items = (try? library.items(inDir: src, recursive: true)) ?? []
+        return !items.contains { $0.driveRelPath == nil }
+    }
+
     /// Merge folder `src` into `dest` by CONTENT (set union): photos not already in `dest` move in
     /// (sub-path preserved); exact-duplicate copies go to the bin (recoverable); the emptied `src` tree
     /// is pruned. Reuses the batched movePhotos + delete paths, so drive propagation + safety apply.
