@@ -1738,8 +1738,25 @@ final class AppState {
     /// Run a fast drift scan, set this drive's presence to verified reality, refresh badges + status.
     @discardableResult
     func driftScan(_ driveVault: Vault) -> DriftReport {
-        guard let lib = library else { return DriftReport() }
-        var report = (try? DriftReconciler().scan(drive: driveVault)) ?? DriftReport()
+        applyDriftReport((try? DriftReconciler().scan(drive: driveVault)) ?? DriftReport(), for: driveVault)
+    }
+
+    /// Same as `driftScan`, but runs the filesystem walk OFF the main actor. The scan enumerates every
+    /// file on the drive (tens of thousands), which froze the review sheet on open; the catalog/state
+    /// reconcile still runs on the main actor afterwards. Used by the review sheets' `load()`.
+    @MainActor func driftScanAsync(_ driveVault: Vault) async -> DriftReport {
+        let report = await Task.detached(priority: .userInitiated) {
+            (try? DriftReconciler().scan(drive: driveVault)) ?? DriftReport()
+        }.value
+        return applyDriftReport(report, for: driveVault)
+    }
+
+    /// Fold a fresh drift report into the catalog + app state (presence rebuild, canonical presence,
+    /// pending-deletion eligibility). Main-actor; the caller supplies the report (sync or off-main scan).
+    @discardableResult
+    private func applyDriftReport(_ report0: DriftReport, for driveVault: Vault) -> DriftReport {
+        guard let lib = library else { return report0 }
+        var report = report0
         if let p = presenceService() {
             DriftReconciler().annotateRecoverability(&report, driveID: driveVault.descriptor.vaultID, presence: p)
         }

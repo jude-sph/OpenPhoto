@@ -127,6 +127,7 @@ private struct FolderRow: View {
     @State private var untagName = ""
     @State private var showRename = false
     @State private var renameText = ""
+    @State private var mergeInto: String?     // chosen destination for a pending "Merge Into…"
     @State private var confirmEvictFolder: (name: String, items: [TimelineItem])?
     @State private var plugInPrompt: String?
     @State private var folderNote: String?        // "nothing to do" feedback for folder evict/download
@@ -215,6 +216,11 @@ private struct FolderRow: View {
                     Button("Rename Folder\u{2026}", systemImage: "pencil") {
                         renameText = node.name; showRename = true
                     }
+                    Menu {
+                        ForEach(mergeTargets(excluding: node.path), id: \.self) { target in
+                            Button(mergeTargetLabel(target)) { mergeInto = target }
+                        }
+                    } label: { Label("Merge Into\u{2026}", systemImage: "arrow.triangle.merge") }
                 }
                 Divider()
                 if state.isFolderLocked(node.path) {
@@ -272,6 +278,20 @@ private struct FolderRow: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Renames this folder on disk. Your photos and their edits are unaffected.")
+        }
+        // Merge-into confirmation (set union: uniques move in, exact dupes go to the bin)
+        .alert("Merge \u{201C}\(node.name)\u{201D} into \u{201C}\(mergeIntoName)\u{201D}?",
+               isPresented: Binding(get: { mergeInto != nil }, set: { if !$0 { mergeInto = nil } })) {
+            Button("Cancel", role: .cancel) { mergeInto = nil }
+            Button("Merge") {
+                if let dest = mergeInto { let src = node.path; Task { await state.mergeFolder(src, into: dest) } }
+                mergeInto = nil
+            }
+        } message: {
+            if let dest = mergeInto {
+                let c = state.mergeFolderCounts(node.path, into: dest)
+                Text("\(c.move) photo\(c.move == 1 ? "" : "s") move in; \(c.bin) exact duplicate\(c.bin == 1 ? "" : "s") move to the bin (restore anytime). The now-empty \u{201C}\(node.name)\u{201D} is removed. Only content already present in the destination is treated as a duplicate.")
+            }
         }
         // Tag-all-in-folder prompt
         .alert("Tag all photos in \u{201C}\(node.name)\u{201D}", isPresented: $showTagAll) {
@@ -355,4 +375,15 @@ private struct FolderRow: View {
         case .nothingToDo: break
         }
     }
+
+    /// Every folder you could merge THIS one into — all folders except itself and its own descendants
+    /// (can't merge a folder into its own subtree).
+    private func mergeTargets(excluding src: String) -> [String] {
+        var paths: [String] = []
+        func walk(_ nodes: [FolderNode]) { for n in nodes { paths.append(n.path); walk(n.children) } }
+        walk(state.folderTree)
+        return paths.filter { $0 != src && !$0.isEmpty && !$0.hasPrefix(src + "/") }.sorted()
+    }
+    private func mergeTargetLabel(_ p: String) -> String { p.replacingOccurrences(of: "/", with: " \u{203A} ") }
+    private var mergeIntoName: String { ((mergeInto ?? "") as NSString).lastPathComponent }
 }

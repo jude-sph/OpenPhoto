@@ -178,7 +178,7 @@ struct DriftReviewSheet: View {
         if verify {
             report = await state.verifyIntegrity(drive) { p in Task { @MainActor in progress = p } }
         } else {
-            report = state.driftScan(drive)
+            report = await state.driftScanAsync(drive)
         }
     }
 

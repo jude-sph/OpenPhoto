@@ -58,6 +58,28 @@ public enum VaultReorganizer {
                                                 withIntermediateDirectories: true)
     }
 
+    /// Remove now-empty directories under (and including) `relPath`, deepest-first. Best-effort and
+    /// SAFE: each removal goes through `deleteEmptyFolder`, which refuses any dir still holding media,
+    /// so this can never delete a photo — it only cleans up husks left after a merge/move.
+    public static func pruneEmptyDirs(in vault: Vault, under relPath: String) {
+        let root = norm(relPath)
+        guard !root.isEmpty else { return }   // never prune the vault root
+        let fm = FileManager.default
+        let rootURL = vault.absoluteURL(forRelativePath: root)
+        var dirs: [URL] = []
+        if let en = fm.enumerator(at: rootURL, includingPropertiesForKeys: [.isDirectoryKey],
+                                  options: [.skipsHiddenFiles]) {
+            for case let u as URL in en where (try? u.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                dirs.append(u)
+            }
+        }
+        // Deepest first, then the root itself, so a parent is only removed once its children are gone.
+        for u in dirs.sorted(by: { $0.pathComponents.count > $1.pathComponents.count }) {
+            try? deleteEmptyFolder(in: vault, relPath: vault.relativePath(of: u))
+        }
+        try? deleteEmptyFolder(in: vault, relPath: root)
+    }
+
     public static func deleteEmptyFolder(in vault: Vault, relPath: String) throws {
         let p = norm(relPath); guard !p.isEmpty else { throw ReorgError.invalidTarget }
         try assertContained(p, in: vault)

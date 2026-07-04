@@ -205,7 +205,7 @@ struct ReviewChangesSheet: View {
     // MARK: helpers
 
     private func load() async {
-        _ = state.driftScan(drive)                       // fresh fast scan, then read the payload
+        _ = await state.driftScanAsync(drive)            // fresh scan (off-main), then read the payload
         payload = state.reviewPayload(forDrive: drive)
     }
     private func reload() { payload = state.reviewPayload(forDrive: drive) }

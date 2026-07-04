@@ -104,6 +104,23 @@ private func seed(_ vault: Vault, relPath: String, bytes: String = "x") throws -
     #expect(throws: (any Error).self) { try VaultReorganizer.renameFolder(in: vault, relPath: "", toName: "x") }     // root
 }
 
+@Test func pruneEmptyDirsRemovesHusksButNeverAFolderWithPhotos() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vaultRoot = t.root.appendingPathComponent("V")
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    let vault = try Vault.openOrCreate(at: vaultRoot, role: .canonical)
+    let fm = FileManager.default
+    try fm.createDirectory(at: vault.absoluteURL(forRelativePath: "old/emptySub"), withIntermediateDirectories: true)
+    _ = try seed(vault, relPath: "old/kept/photo.jpg")   // a folder that still holds a photo
+
+    VaultReorganizer.pruneEmptyDirs(in: vault, under: "old")
+
+    #expect(!fm.fileExists(atPath: vault.absoluteURL(forRelativePath: "old/emptySub").path))  // empty husk removed
+    #expect(fm.fileExists(atPath: vault.absoluteURL(forRelativePath: "old/kept/photo.jpg").path))  // photo untouched
+    #expect(fm.fileExists(atPath: vault.absoluteURL(forRelativePath: "old/kept").path))       // non-empty dir kept
+    #expect(fm.fileExists(atPath: vault.absoluteURL(forRelativePath: "old").path))            // 'old' kept (still has kept/)
+}
+
 @Test func createAndDeleteEmptyFolder() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let vaultRoot = t.root.appendingPathComponent("V")

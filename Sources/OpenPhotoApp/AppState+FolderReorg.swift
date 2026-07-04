@@ -90,13 +90,26 @@ extension AppState {
                 driveHasFolder($0.vault, macRelPath: src, basename: basename)
             }
             if !drives.isEmpty {
-                await Task.detached(priority: .userInitiated) {
+                let failedIDs = await Task.detached(priority: .userInitiated) { () -> [String] in
+                    var failed: [String] = []
                     for d in drives {
-                        _ = try? VaultReorganizer.moveFolder(in: d.vault,
-                            relPath: mapToDriveStatic(src, basename: basename),
-                            intoParentRelPath: mapToDriveStatic(parent, basename: basename))
+                        do {
+                            try VaultReorganizer.moveFolder(in: d.vault,
+                                relPath: mapToDriveStatic(src, basename: basename),
+                                intoParentRelPath: mapToDriveStatic(parent, basename: basename))
+                        } catch {
+                            failed.append(d.id)   // DON'T swallow — queue it below
+                        }
                     }
+                    return failed
                 }.value
+                // A connected drive whose move failed gets a queued op instead of a silent drop, so it
+                // surfaces in the reconnect review and retries. With the tolerance fix, an already-applied
+                // move now clears (and tidies the old folder) instead of sticking — this closes the
+                // silent-duplication gap (a swallowed failure + additive sync = a folder left at both paths).
+                for id in failedIDs {
+                    _ = try? library.catalog.enqueueFolderOp(vaultID: id, op: "move", src: src, dst: newPath)
+                }
             }
         }
 
@@ -117,6 +130,35 @@ extension AppState {
         endReorg()                                           // release before the post-reorg scan
         await rescan()
         remapUIPaths(from: src, to: newPath)
+    }
+
+    // MARK: - Merge (set union)
+
+    /// The move/bin counts a merge of `src` into `dest` would perform, for the confirmation preview.
+    func mergeFolderCounts(_ src: String, into dest: String) -> (move: Int, bin: Int) {
+        guard let library, let plan = try? library.mergeFolderPlan(src: src, into: dest) else { return (0, 0) }
+        return (plan.moves.count, plan.binInstanceIDs.count)
+    }
+
+    /// Merge folder `src` into `dest` by CONTENT (set union): photos not already in `dest` move in
+    /// (sub-path preserved); exact-duplicate copies go to the bin (recoverable); the emptied `src` tree
+    /// is pruned. Reuses the batched movePhotos + delete paths, so drive propagation + safety apply.
+    func mergeFolder(_ src: String, into dest: String) async {
+        guard let library, src != dest else { return }
+        let plan = (try? library.mergeFolderPlan(src: src, into: dest)) ?? MergeFolderPlan()
+        // 1. Move the uniques, grouped by their destination sub-dir.
+        for (dir, group) in Dictionary(grouping: plan.moves, by: \.intoDir) {
+            await movePhotos(ids: group.map(\.instanceID), into: dir)
+        }
+        // 2. Bin the exact duplicates (recoverable; connected drives queue removal for review).
+        if !plan.binInstanceIDs.isEmpty {
+            let dups = (try? library.catalog.items(instanceIDs: plan.binInstanceIDs)) ?? []
+            await delete(dups)
+        }
+        // 3. Prune the now-empty source tree (safe — never removes a dir that still holds photos).
+        if let primary = library.vaults.first { VaultReorganizer.pruneEmptyDirs(in: primary, under: src) }
+        try? refreshQueries()
+        photoMoveToken += 1
     }
 
     // MARK: - Rename
@@ -403,13 +445,25 @@ extension AppState {
                 switch op.op {
                 case "move":
                     guard let s = op.src, let d = op.dst else { return false }
-                    try VaultReorganizer.moveFolder(in: driveVault, relPath: mapToDriveStatic(s, basename: basename),
-                        intoParentRelPath: mapToDriveStatic(parentOf(d), basename: basename))
+                    let driveSrc = mapToDriveStatic(s, basename: basename)
+                    do { try VaultReorganizer.moveFolder(in: driveVault, relPath: driveSrc,
+                            intoParentRelPath: mapToDriveStatic(parentOf(d), basename: basename)) }
+                    catch VaultReorganizer.ReorgError.missing {}     // drive never held the source — moot
+                    catch VaultReorganizer.ReorgError.destinationExists {
+                        // Already at the destination (applied earlier / additive sync). The op is done;
+                        // tidy up the now-redundant OLD folder — but only if it's empty (deleteEmptyFolder
+                        // refuses a non-empty dir, so this can never remove photos).
+                        try? VaultReorganizer.deleteEmptyFolder(in: driveVault, relPath: driveSrc)
+                    }
                 case "rename":
                     guard let s = op.src, let d = op.dst else { return false }
-                    do { try VaultReorganizer.renameFolder(in: driveVault, relPath: mapToDriveStatic(s, basename: basename),
+                    let driveSrc = mapToDriveStatic(s, basename: basename)
+                    do { try VaultReorganizer.renameFolder(in: driveVault, relPath: driveSrc,
                             toName: (d as NSString).lastPathComponent) }
                     catch VaultReorganizer.ReorgError.missing {}     // drive never held it — moot
+                    catch VaultReorganizer.ReorgError.destinationExists {
+                        try? VaultReorganizer.deleteEmptyFolder(in: driveVault, relPath: driveSrc)   // already renamed
+                    }
                 case "create":
                     guard let d = op.dst else { return false }
                     try VaultReorganizer.createFolder(in: driveVault, relPath: mapToDriveStatic(d, basename: basename))
