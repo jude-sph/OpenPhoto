@@ -91,12 +91,27 @@ public enum ReconcileExecutor {
             let remaining = try Manifest.read(from: drive.manifestURL).filter { !clearedPaths.contains($0.path) }
             try Manifest.write(remaining, to: drive.manifestURL)
             try catalog.removeVaultPresence(vaultID: drive.id, driveRelPaths: Array(clearedPaths))
+            pruneEmptyAncestors(of: clearedPaths, in: drive)   // no empty phantom folders left behind
         }
         if removed > 0 {
             SyncLog.append(event: "reconcile", summary: "removed \(removed) stale copies",
                            counterparty: macVaultID, to: drive.syncLogURL)
         }
         return RemovalResult(removed: removed, skipped: skipped, alreadyGone: alreadyGone)
+    }
+
+    /// Remove husk directories the removals emptied, deepest-first. `deleteEmptyFolder` refuses any dir
+    /// still holding media (ignoring `.openphoto`/dotfiles), so a shared ancestor like the library root
+    /// is never touched — only genuinely-empty leftovers are cleaned.
+    private static func pruneEmptyAncestors(of paths: Set<String>, in drive: Vault) {
+        var dirs = Set<String>()
+        for p in paths {
+            var dir = (p as NSString).deletingLastPathComponent
+            while !dir.isEmpty { dirs.insert(dir); dir = (dir as NSString).deletingLastPathComponent }
+        }
+        for d in dirs.sorted(by: { $0.split(separator: "/").count > $1.split(separator: "/").count }) {
+            try? VaultReorganizer.deleteEmptyFolder(in: drive, relPath: d)
+        }
     }
 
     /// True iff a byte-verified copy of `hash` physically exists at a path NOT being removed — a local

@@ -221,3 +221,26 @@ private func P(_ h: String, _ p: String) -> Placement { Placement(hash: h, path:
     #expect(!r.onDrive("Pics/stale/a.jpg"))                     // stale removed
     #expect(r.onDrive("Pics/x/gone.jpg"))                       // genuine deletion NOT auto-applied
 }
+
+// After removals empty a folder, its husk is pruned — but a non-empty ancestor (still holding other
+// media) is never touched. No empty phantom folders left behind on the drive.
+@Test func prunesEmptiedHuskKeepingNonEmptyAncestor() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.drive, "Pics/stale/sub/only.jpg", "SHARED")
+    _ = try put(r.drive, "Pics/keep/only.jpg", "SHARED")   // keeps 'Pics' non-empty
+    _ = try put(r.local, "album/only.jpg", "SHARED")
+    try r.cat.upsert(instances: [inst(r.local.id, "album/only.jpg", h)])
+    try Manifest.write([mEntry("Pics/stale/sub/only.jpg", h), mEntry("Pics/keep/only.jpg", h)], to: r.drive.manifestURL)
+    try r.cat.replaceVaultPresence(vaultID: r.drive.id, entries: [pres(h, "Pics/stale/sub/only.jpg"), pres(h, "Pics/keep/only.jpg")])
+
+    _ = try ReconcileExecutor.applyStaleRemovals([P(h, "Pics/stale/sub/only.jpg")],
+            drive: r.drive, localVault: r.local, catalog: r.cat, macVaultID: "mac")
+
+    let fm = FileManager.default
+    #expect(!fm.fileExists(atPath: r.drive.absoluteURL(forRelativePath: "Pics/stale/sub").path))  // husk gone
+    #expect(!fm.fileExists(atPath: r.drive.absoluteURL(forRelativePath: "Pics/stale").path))       // and its parent
+    #expect(fm.fileExists(atPath: r.drive.absoluteURL(forRelativePath: "Pics/keep").path))         // sibling kept
+    #expect(fm.fileExists(atPath: r.drive.absoluteURL(forRelativePath: "Pics").path))              // ancestor kept
+    #expect(r.onDrive("Pics/keep/only.jpg"))
+}
