@@ -31,9 +31,17 @@ struct BinView: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)], spacing: 8) {
                         ForEach(state.binEntries) { entry in
                             VStack(spacing: 6) {
-                                BinThumb(entry: entry, library: state.library!)
-                                    .frame(height: 120)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                if let lib = state.library {
+                                    // Same square/rounded chrome as every other grid in the app.
+                                    MediaTile(
+                                        id: entry.item.hash,
+                                        thumbnail: ThumbnailImage(id: entry.item.hash, provider: { _ in
+                                            try? await lib.thumbnails.thumbnail(
+                                                for: ContentHash(stringValue: entry.item.hash), sourceURL: entry.fileURL,
+                                                kind: MediaKind.of(filename: entry.fileURL.lastPathComponent) ?? .photo)
+                                        }),
+                                        badges: { EmptyView() })
+                                }
                                 Text((entry.item.path as NSString).lastPathComponent)
                                     .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(Theme.textFaint).lineLimit(1)
@@ -90,26 +98,3 @@ struct BinView: View {
     }
 }
 
-private struct BinThumb: View {
-    let entry: LibraryService.BinEntry
-    let library: LibraryService
-    @State private var image: CGImage?
-    var body: some View {
-        ZStack {
-            Theme.tile
-            if let image {
-                Image(decorative: image, scale: 1).resizable()
-                    .aspectRatio(contentMode: .fill)
-            }
-        }
-        .clipped()
-        .task {
-            let e = entry, lib = library
-            image = await Task.detached {
-                try? await lib.thumbnails.thumbnail(
-                    for: ContentHash(stringValue: e.item.hash), sourceURL: e.fileURL,
-                    kind: MediaKind.of(filename: e.fileURL.lastPathComponent) ?? .photo)
-            }.value
-        }
-    }
-}
