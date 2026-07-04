@@ -1772,6 +1772,36 @@ final class AppState {
         return report
     }
 
+    /// Number of binned items across all CONNECTED drives (for the "Clear Drive Bins" preview).
+    func connectedDriveBinCount() -> Int {
+        connectedDurableDrives().reduce(0) { $0 + ((try? BinStore(vault: $1.vault).list().count) ?? 0) }
+    }
+
+    /// Empty the `.openphoto/bin` on every CONNECTED drive — reclaiming the space held by
+    /// already-deleted photos. Where the drive's filesystem supports it the bin goes to the drive's
+    /// Trash (recoverable); otherwise (exFAT/FAT, which have no Trash) it's removed. Offline drives are
+    /// skipped — their bins clear when next connected. Returns the number of drives cleared.
+    @discardableResult
+    func clearConnectedDriveBins() -> Int {
+        var cleared = 0
+        for d in connectedDurableDrives() {
+            let binURL = d.vault.binDirURL
+            if FileManager.default.fileExists(atPath: binURL.path) {
+                do {
+                    if (try? FileManager.default.trashItem(at: binURL, resultingItemURL: nil)) == nil {
+                        try FileManager.default.removeItem(at: binURL)   // fallback: no Trash on this FS
+                    }
+                    try? AtomicFile.write(Data(), to: d.vault.binLogURL)   // clear the bin log after
+                } catch {
+                    NSLog("clear drive bin failed for \(d.vault.rootURL.lastPathComponent): \(error)")
+                    continue
+                }
+            }
+            cleared += 1
+        }
+        return cleared
+    }
+
     /// Verify every connected durable drive (off-main, with progress), annotate cross-set
     /// recoverability, update presence, and return each drive's report. Drives "Verify All Drives".
     func verifyAllConnected(progress: @escaping @Sendable (String, DriftProgress) -> Void)

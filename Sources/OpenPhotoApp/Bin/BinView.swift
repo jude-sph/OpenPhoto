@@ -11,6 +11,8 @@ struct BinView: View {
                 Text("\(state.binEntries.count) items")
                     .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)
                 Spacer()
+                Button("Clear Drive Bins…", role: .destructive) { confirmEmptyDriveBins() }
+                    .help("Reclaim space by clearing the deleted-photo bin on each connected drive.")
                 Button("Empty Bin…", role: .destructive) { confirmEmpty() }
                     .disabled(state.binEntries.isEmpty)
             }
@@ -48,6 +50,23 @@ struct BinView: View {
                 }
             }
         }
+    }
+
+    private func confirmEmptyDriveBins() {
+        let count = state.connectedDriveBinCount()
+        let alert = NSAlert()
+        guard count > 0 else {
+            alert.messageText = "No drive bins to clear"
+            alert.informativeText = "Connected drives have nothing in their bin. (An offline drive's bin clears when you reconnect it and clear again.)"
+            alert.addButton(withTitle: "OK"); alert.runModal(); return
+        }
+        alert.messageText = "Clear the bin on connected drives?"
+        alert.informativeText = "\(count) already-deleted item\(count == 1 ? "" : "s") will be removed from your connected drives to reclaim space. Where the drive supports it they go to the drive's Trash (recoverable); otherwise they're removed permanently. Offline drives are skipped."
+        alert.addButton(withTitle: "Clear Drive Bins")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        _ = state.clearConnectedDriveBins()
+        try? state.refreshQueries()
     }
 
     private func confirmEmpty() {

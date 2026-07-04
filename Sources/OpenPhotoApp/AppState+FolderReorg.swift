@@ -42,7 +42,7 @@ extension AppState {
     }
 
     /// Connected durable drives (canonical + backups) as open Vaults, paired with their vaultID.
-    private func connectedDurableDrives() -> [(id: String, vault: Vault)] {
+    func connectedDurableDrives() -> [(id: String, vault: Vault)] {
         durableVaults.filter { driveIsPresent($0) }
             .compactMap { vr in openVault(for: vr).map { (vr.id, $0) } }
     }
