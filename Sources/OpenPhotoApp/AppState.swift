@@ -193,6 +193,17 @@ final class AppState {
         }
     }
 
+    /// The keyword tag auto-applied to photos imported from Apple Photos. A plain, searchable tag.
+    static let applePhotosImportTag = "From Apple Photos"
+
+    /// Auto-tag Apple Photos imports with `applePhotosImportTag`. Default ON (unset → on), so the
+    /// `object(forKey:) == nil` idiom, mirroring `sidebarShown`.
+    var tagApplePhotosImports: Bool =
+        UserDefaults.standard.object(forKey: "tagApplePhotosImports") == nil
+        ? true : UserDefaults.standard.bool(forKey: "tagApplePhotosImports") {
+        didSet { UserDefaults.standard.set(tagApplePhotosImports, forKey: "tagApplePhotosImports") }
+    }
+
     /// Reconcile a save (tags + favourite) with Finder when sync is on, returning the merged values to
     /// persist. The reserved "Favourite" tag is always stripped from regular tags (it's driven by the
     /// favourite flag, never typed as a tag) — even when sync is off.

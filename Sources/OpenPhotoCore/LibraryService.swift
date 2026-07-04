@@ -227,6 +227,21 @@ public final class LibraryService: Sendable {
 
     // MARK: Edit
 
+    /// Add a keyword tag to each item, MERGING with its existing tags (never replacing) and skipping
+    /// items that already carry it. Persists to the XMP sidecar + catalog via `updateMetadata`, so the
+    /// tag is durable and searchable like any hand-set tag. Used for auto-tagging (e.g. an import
+    /// provenance tag). Other metadata (rating/favorite/caption/faces/rotation) is preserved.
+    public func appendTag(_ tag: String, toItems items: [TimelineItem]) throws {
+        for item in items {
+            var tags = (try? JSONDecoder().decode([String].self,
+                                                  from: Data(item.tagsJSON.utf8))) ?? []
+            guard !tags.contains(tag) else { continue }
+            tags.append(tag)
+            try updateMetadata(for: item, rating: item.rating, favorite: item.favorite,
+                               caption: item.caption, tags: tags)
+        }
+    }
+
     public func updateMetadata(for item: TimelineItem, rating: Int, favorite: Bool,
                                caption: String?, tags: [String]) throws {
         if let store = sidecarStores[item.vaultID] {

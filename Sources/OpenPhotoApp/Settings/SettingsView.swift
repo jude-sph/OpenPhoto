@@ -32,6 +32,14 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Button("Sync Finder tags now") { state.syncFinderTagsNow() }
                 .disabled(!state.finderTagSyncEnabled)
+
+            Divider().padding(.vertical, 4)
+
+            Toggle("Tag Apple Photos imports", isOn: $state.tagApplePhotosImports)
+            Text("Photos you import from Apple Photos get a “\(AppState.applePhotosImportTag)” tag, so you can find them later. Only newly imported photos are tagged; you can remove the tag like any other.")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textDim)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding()
     }

@@ -505,6 +505,12 @@ struct ImportView: View {
             Task { @MainActor in phase = .importing(done: p.done, total: p.total) }
         }
         lastResult = result
+        // Auto-tag NEWLY imported Apple Photos items (skipped duplicates aren't in `imported`).
+        if state.tagApplePhotosImports, source.sourceKey == "photoslib", !result.imported.isEmpty {
+            let ids = result.imported.map { "\(vault.descriptor.vaultID)|\($0.placedRelPath)" }
+            let placed = (try? lib.catalog.items(instanceIDs: ids)) ?? []
+            try? lib.appendTag(AppState.applePhotosImportTag, toItems: placed)
+        }
         sessionImported.append(contentsOf: result.imported)
         sessionImportedIDs.formUnion(result.imported.map(\.item.id))
         rebuildImportedCache()
