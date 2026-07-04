@@ -73,7 +73,7 @@ private struct PeekViewer: View {
     let onClose: () -> Void
 
     @State private var current: PeekItem
-    @State private var fullImage: NSImage?
+    @State private var fullImage: CGImage?
     @State private var player: AVPlayer?
     @State private var loadFailed = false
     @FocusState private var focused: Bool
@@ -140,8 +140,9 @@ private struct PeekViewer: View {
             return
         }
         let url = current.sourceURL
-        // NSImage isn't Sendable; load raw Data in the detached task, build on the main actor.
-        let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: url) }.value
-        if let data, let img = NSImage(data: data) { fullImage = img } else { loadFailed = true }
+        // Decode full-res OFF the main thread via ImageIO (the fast path) — not NSImage(data:) + a
+        // main-thread cgImage decode, which was the freeze.
+        let decoded = await Task.detached(priority: .userInitiated) { FullResImage.decode(url: url) }.value
+        if let decoded { fullImage = decoded } else { loadFailed = true }
     }
 }

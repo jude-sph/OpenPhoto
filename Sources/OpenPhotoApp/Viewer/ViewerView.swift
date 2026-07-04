@@ -3,9 +3,20 @@ import AVKit
 import CoreImage
 import OpenPhotoCore
 
+/// Decoded full-res photos for the viewer, so stepping back/forth (and prefetched neighbors) is
+/// instant instead of re-decoding. Bounded hard by BOTH count and total bytes — full-res images are
+/// large (a 50MP photo is ~200MB decoded), so an unbounded cache would blow up memory. NSCache evicts
+/// under pressure. Keyed by "instanceID|rotation".
+nonisolated(unsafe) let viewerImageCache: NSCache<NSString, TileImageBox> = {
+    let c = NSCache<NSString, TileImageBox>()
+    c.countLimit = 6                              // current + a couple neighbors + a few revisits
+    c.totalCostLimit = 768 * 1024 * 1024          // ~768 MB ceiling
+    return c
+}()
+
 struct ViewerView: View {
     @Bindable var state: AppState
-    @State private var fullImage: NSImage?
+    @State private var fullImage: CGImage?
     @State private var playingLive = false
     @State private var player: AVPlayer?
     @FocusState private var stageFocused: Bool
@@ -163,6 +174,11 @@ struct ViewerView: View {
                 // in the upright frame. Keyed per photo + rotation.
                 ZoomableImageView(image: fullImage)
                     .id("\(state.openedItem?.instanceID ?? "")|\(state.openedItem?.rotation ?? 0)")
+            } else if let library = state.library {
+                // Full-res not decoded yet (a cache miss) — show the instant thumbnail as a soft
+                // placeholder instead of a blank spinner, then swap to full-res when it lands.
+                ThumbnailImage(timelineItem: item, library: library)
+                    .id(item.instanceID)
             } else {
                 ProgressView().controlSize(.large)
             }
@@ -236,32 +252,72 @@ struct ViewerView: View {
     }
 
     private func loadFull() async {
-        fullImage = nil
         tearDownPlayer()
         playingLive = false
         liveURL = nil
         driveUnplugged = false
-        guard let item = state.openedItem else { return }
+        guard let item = state.openedItem else { fullImage = nil; return }
         // Read the rotation from the catalog (source of truth), not the possibly-stale `item`.
-        liveRotation = (try? state.library?.catalog.rotation(forHash: item.hash)) ?? item.rotation
+        liveRotation = rotation(for: item)
         guard let url = state.fullResURL(for: item) else {
-            // Drive-only and the drive is not connected.
-            if state.isDriveOnly(item) { driveUnplugged = true }
+            fullImage = nil
+            if state.isDriveOnly(item) { driveUnplugged = true }   // drive-only, not connected
             return
         }
         if item.kind == MediaKind.video.rawValue {
+            fullImage = nil
             // Bake any user display-rotation into the video itself (composition) so the player's
             // native controls stay upright — a .rotationEffect rotated the whole player, controls too.
             player = Self.makeVideoPlayer(url: url, rotationCW: liveRotation)
             return
         }
         liveURL = resolveLiveURL(for: item, photoURL: url)
-        // NSImage is not Sendable; load raw Data in the detached task, construct on main actor.
-        let data = await Task.detached(priority: .userInitiated) {
-            try? Data(contentsOf: url)
+        let rot = liveRotation
+        let key = "\(item.instanceID)|\(rot)" as NSString
+        // Cache hit (e.g. a prefetched neighbor) → show instantly. No blank, no decode.
+        if let cached = viewerImageCache.object(forKey: key)?.image {
+            fullImage = cached
+            prefetchNeighbors()
+            return
+        }
+        // Miss → decode full-res OFF the main thread via ImageIO (the fast, Quick-Look path). The old
+        // code decoded on the MAIN thread (NSImage → cgImage at draw time), which was the freeze. While
+        // it decodes, the placeholder shows the instant thumbnail, not a spinner. Full resolution.
+        fullImage = nil
+        let decoded = await Task.detached(priority: .userInitiated) {
+            FullResImage.decode(url: url, extraRotationCW: rot)
         }.value
-        if let data, let img = NSImage(data: data) {
-            fullImage = Self.rotated(img, degrees: liveRotation)
+        // Ignore a result that arrived after the user already navigated away.
+        guard state.openedItem?.instanceID == item.instanceID, liveRotation == rot else { return }
+        if let decoded {
+            viewerImageCache.setObject(TileImageBox(decoded), forKey: key,
+                                       cost: decoded.width * decoded.height * 4)
+            fullImage = decoded
+        }
+        prefetchNeighbors()
+    }
+
+    /// The open photo's display rotation, from the catalog (source of truth), falling back to the item.
+    private func rotation(for item: TimelineItem) -> Int {
+        (try? state.library?.catalog.rotation(forHash: item.hash)) ?? item.rotation
+    }
+
+    /// Warm the cache for the immediate neighbors so arrow-key stepping is instant. URL + rotation are
+    /// read on the main actor; each decode runs off-main. Bounded by the cache's own count/byte limits.
+    private func prefetchNeighbors() {
+        guard let i = index else { return }
+        for j in [i - 1, i + 1] where flatItems.indices.contains(j) {
+            let it = flatItems[j]
+            guard it.kind != MediaKind.video.rawValue else { continue }   // photos only
+            let rot = rotation(for: it)
+            let key = "\(it.instanceID)|\(rot)" as NSString
+            guard viewerImageCache.object(forKey: key) == nil,
+                  let url = state.fullResURL(for: it) else { continue }
+            Task.detached(priority: .utility) {
+                guard let img = FullResImage.decode(url: url, extraRotationCW: rot) else { return }
+                viewerImageCache.setObject(TileImageBox(img), forKey: key,
+                                           cost: img.width * img.height * 4)   // NSCache is thread-safe
+            }
         }
     }
 
@@ -291,16 +347,6 @@ struct ViewerView: View {
         return AVPlayer(playerItem: item)
     }
 
-    /// Rotate an NSImage 0/90/180/270 CW for display — the original file is never modified.
-    private static func rotated(_ image: NSImage, degrees: Int) -> NSImage {
-        let d = ((degrees % 360) + 360) % 360
-        guard d != 0,
-              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return image }
-        let orient: CGImagePropertyOrientation = d == 90 ? .right : (d == 180 ? .down : .left)
-        let ci = CIImage(cgImage: cg).oriented(orient)
-        guard let out = CIContext().createCGImage(ci, from: ci.extent) else { return image }
-        return NSImage(cgImage: out, size: NSSize(width: out.width, height: out.height))
-    }
 
     private func livePairURL(photo: TimelineItem, pairHash: String) -> URL? {
         guard let lib = state.library,
@@ -336,7 +382,7 @@ struct ViewerView: View {
 /// CALayer's contents; pinch/scroll/double-click only adjust the layer's frame
 /// (a GPU transform), so there is no per-frame rasterization or SwiftUI re-render.
 struct ZoomableImageView: NSViewRepresentable {
-    let image: NSImage
+    let image: CGImage
     func makeNSView(context: Context) -> ZoomPanLayerView {
         let v = ZoomPanLayerView()
         v.setImageIfChanged(image)
@@ -353,7 +399,7 @@ final class ZoomPanLayerView: NSView {
     private var zoom: CGFloat = 1
     private var pan = CGPoint.zero
     private var imageSize: CGSize = .zero
-    private var currentImage: NSImage?
+    private var currentImage: CGImage?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -366,12 +412,12 @@ final class ZoomPanLayerView: NSView {
 
     override var isFlipped: Bool { true }   // top-left origin → CGImage renders upright
 
-    func setImageIfChanged(_ image: NSImage) {
+    func setImageIfChanged(_ image: CGImage) {
         guard image !== currentImage else { return }
         currentImage = image
-        var rect = CGRect(origin: .zero, size: image.size)
-        imageLayer.contents = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
-        imageSize = image.size
+        // Already fully decoded (off-main) — just hand the CGImage to the layer. No main-thread decode.
+        imageLayer.contents = image
+        imageSize = CGSize(width: image.width, height: image.height)
         zoom = 1; pan = .zero
         relayout()
     }
