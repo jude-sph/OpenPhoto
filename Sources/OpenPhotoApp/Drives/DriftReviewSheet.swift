@@ -11,6 +11,7 @@ struct DriftReviewSheet: View {
 
     @State private var report: DriftReport?
     @State private var progress: DriftProgress?
+    @State private var busy: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,13 +19,40 @@ struct DriftReviewSheet: View {
                 Text((verify ? "Integrity check — " : "Drive changes — ") + drive.rootURL.lastPathComponent)
                     .font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done") { dismiss() }.disabled(busy != nil)
             }.padding(16)
             Divider().overlay(Theme.hairline)
             content
         }
         .frame(width: 620, height: 480)
+        .overlay { if let busy { busyOverlay(busy) } }
+        .animation(.default, value: busy)
         .task { await load() }
+    }
+
+    @ViewBuilder private func busyOverlay(_ message: String) -> some View {
+        ZStack {
+            Color.black.opacity(0.45)
+            VStack(spacing: 12) {
+                ProgressView().controlSize(.large)
+                Text(message).font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+            }
+            .padding(28).background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    /// Adopt drift files off-main with live progress, then show the fresh report.
+    private func adoptWithProgress(_ relPaths: [String]) {
+        Task {
+            busy = "Adopting \(relPaths.count) photo\(relPaths.count == 1 ? "" : "s")\u{2026}"
+            let r = await state.adoptAll(relPaths, on: drive) { done, total in
+                if done % 20 == 0 || done == total {
+                    Task { @MainActor in busy = "Adopting \(done) of \(total)\u{2026}" }
+                }
+            }
+            busy = nil
+            report = r
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -63,13 +91,13 @@ struct DriftReviewSheet: View {
                     ForEach(r.unknown, id: \.relPath) { f in
                         HStack {
                             Text(f.relPath).font(.system(size: 12)); Spacer()
-                            Button("Adopt") { report = state.adoptDriftFile(relPath: f.relPath, on: drive) }
+                            Button("Adopt") { adoptWithProgress([f.relPath]) }
                         }
                     }
                 } header: {
                     HStack {
                         Text("Unknown files (added outside OpenPhoto)"); Spacer()
-                        Button("Adopt all") { report = state.adoptAll(r.unknown.map(\.relPath), on: drive) }
+                        Button("Adopt all") { adoptWithProgress(r.unknown.map(\.relPath)) }
                             .font(.system(size: 11))
                     }
                 }

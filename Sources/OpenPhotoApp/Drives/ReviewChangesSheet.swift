@@ -11,6 +11,8 @@ struct ReviewChangesSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var payload: ReviewChanges?
+    /// Non-nil while an action is running — shows the busy overlay so the sheet never looks frozen.
+    @State private var busy: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,13 +20,29 @@ struct ReviewChangesSheet: View {
                 Text("Changes since last connect — \(drive.rootURL.lastPathComponent)")
                     .font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Button("Done") { dismiss() }
+                Button("Done") { dismiss() }.disabled(busy != nil)
             }.padding(16)
             Divider().overlay(Theme.hairline)
             content
         }
         .frame(width: 640, height: 520)
+        .overlay { if let busy { busyOverlay(busy) } }
+        .animation(.default, value: busy)
         .task { await load() }
+    }
+
+    /// Blocking progress overlay shown while an action runs. Propagating to a drive does real file I/O
+    /// (copies/moves), so a batch can take a while — this makes it visible instead of a frozen sheet.
+    @ViewBuilder private func busyOverlay(_ message: String) -> some View {
+        ZStack {
+            Color.black.opacity(0.45)                       // scrim also blocks taps on the controls below
+            VStack(spacing: 12) {
+                ProgressView().controlSize(.large)
+                Text(message).font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+            }
+            .padding(28)
+            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -64,16 +82,16 @@ struct ReviewChangesSheet: View {
                                 .font(.system(size: 10)).foregroundStyle(Theme.textFaint)
                         }
                         Spacer()
-                        Button("Undo") { act { await state.reviewUndo(op) } }.controlSize(.small)
-                        Button("Propagate") { act { await state.reviewPropagate(op) } }.controlSize(.small)
+                        Button("Undo") { act("Undoing") { await state.reviewUndo(op) } }.controlSize(.small)
+                        Button("Propagate") { act("Propagating") { await state.reviewPropagate(op) } }.controlSize(.small)
                     }
                 }
             } header: {
                 HStack {
                     Text("Moved here (\(ops.count))"); Spacer()
-                    Button("Propagate all") { act { for op in ops { await state.reviewPropagate(op) } } }
+                    Button("Propagate all") { propagateAllWithProgress("Propagating", ops) }
                         .font(.system(size: 11))
-                    Button("Undo all") { act { for op in ops { await state.reviewUndo(op) } } }
+                    Button("Undo all") { runBatch("Undoing", ops) { await state.reviewUndo($0) } }
                         .font(.system(size: 11))
                 }
             }
@@ -87,13 +105,13 @@ struct ReviewChangesSheet: View {
                     HStack {
                         Text(folderOpLabel(op)).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
                         Spacer()
-                        Button("Apply") { act { await state.reviewPropagate(op) } }.controlSize(.small)
+                        Button("Apply") { act("Applying") { await state.reviewPropagate(op) } }.controlSize(.small)
                     }
                 }
             } header: {
                 HStack {
                     Text("Folder changes (\(ops.count))"); Spacer()
-                    Button("Apply all") { act { for op in ops { await state.reviewPropagate(op) } } }
+                    Button("Apply all") { propagateAllWithProgress("Applying", ops) }
                         .font(.system(size: 11))
                 }
             }
@@ -107,9 +125,9 @@ struct ReviewChangesSheet: View {
                     HStack {
                         Text(e.relPath).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
                         Spacer()
-                        Button("Restore") { act { await state.restorePending(e) } }.controlSize(.small)
+                        Button("Restore") { act("Restoring") { await state.restorePending(e) } }.controlSize(.small)
                         Button("Bin on drive") {
-                            act { _ = await state.propagateDeletions(drive: drive, selected: [e]) }
+                            act("Removing from drive") { _ = await state.propagateDeletions(drive: drive, selected: [e]) }
                         }.controlSize(.small)
                     }
                 }
@@ -117,9 +135,11 @@ struct ReviewChangesSheet: View {
                 HStack {
                     Text("Deleted here (\(entries.count))"); Spacer()
                     Button("Bin all on drive") {
-                        act { _ = await state.propagateDeletions(drive: drive, selected: entries) }
+                        act("Removing \(entries.count) from drive") {
+                            _ = await state.propagateDeletions(drive: drive, selected: entries)
+                        }
                     }.font(.system(size: 11))
-                    Button("Restore all") { act { for e in entries { await state.restorePending(e) } } }
+                    Button("Restore all") { runBatch("Restoring", entries) { await state.restorePending($0) } }
                         .font(.system(size: 11))
                 }
             }
@@ -134,13 +154,13 @@ struct ReviewChangesSheet: View {
                 ForEach(r.unknown, id: \.relPath) { f in
                     HStack {
                         Text(f.relPath).font(.system(size: 12)); Spacer()
-                        Button("Adopt") { setDrift(state.adoptDriftFile(relPath: f.relPath, on: drive)) }
+                        Button("Adopt") { adoptWithProgress([f.relPath]) }
                     }
                 }
             } header: {
                 HStack {
                     Text("Found on the drive (added outside OpenPhoto)"); Spacer()
-                    Button("Adopt all") { setDrift(state.adoptAll(r.unknown.map(\.relPath), on: drive)) }
+                    Button("Adopt all") { adoptWithProgress(r.unknown.map(\.relPath)) }
                         .font(.system(size: 11))
                 }
             }
@@ -191,7 +211,48 @@ struct ReviewChangesSheet: View {
     private func reload() { payload = state.reviewPayload(forDrive: drive) }
 
     /// Run an async action, then refresh the payload from the catalog (ops/deletions drop out as resolved).
-    private func act(_ body: @escaping () async -> Void) { Task { await body(); reload() } }
+    /// Run one async action behind the busy overlay, then refresh.
+    private func act(_ label: String = "Working", _ body: @escaping () async -> Void) {
+        Task { busy = "\(label)…"; await body(); busy = nil; reload() }
+    }
+
+    /// Run a batch of async actions one at a time, showing "label i of n" progress, then refresh once.
+    private func runBatch<T>(_ label: String, _ items: [T], _ body: @escaping (T) async -> Void) {
+        Task {
+            let n = items.count
+            for (i, it) in items.enumerated() {
+                busy = "\(label) \(i + 1) of \(n)\u{2026}"
+                await body(it)
+            }
+            busy = nil
+            reload()
+        }
+    }
+
+    /// Propagate ALL queued ops with progress, reconciling once at the end (not per op).
+    private func propagateAllWithProgress(_ label: String, _ ops: [PendingFolderOp]) {
+        Task {
+            busy = "\(label) \(ops.count)\u{2026}"
+            await state.reviewPropagateAll(ops) { done, total in busy = "\(label) \(done) of \(total)\u{2026}" }
+            busy = nil
+            reload()
+        }
+    }
+
+    /// Adopt drift files off-main with live progress ("Adopting 1500 of 3000…"), then merge the fresh
+    /// report. The heavy work is batched + off the main actor, so the sheet stays responsive.
+    private func adoptWithProgress(_ relPaths: [String]) {
+        Task {
+            busy = "Adopting \(relPaths.count) photo\(relPaths.count == 1 ? "" : "s")\u{2026}"
+            let report = await state.adoptAll(relPaths, on: drive) { done, total in
+                if done % 20 == 0 || done == total {
+                    Task { @MainActor in busy = "Adopting \(done) of \(total)\u{2026}" }
+                }
+            }
+            busy = nil
+            setDrift(report)
+        }
+    }
 
     /// A drift action returns the updated report; merge it into the payload without a full re-scan.
     private func setDrift(_ r: DriftReport) {

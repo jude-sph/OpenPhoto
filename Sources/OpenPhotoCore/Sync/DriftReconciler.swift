@@ -89,6 +89,37 @@ public struct DriftReconciler: Sendable {
         return hash
     }
 
+    /// Batch form of `adopt`: record MANY on-disk files in ONE manifest read + write, instead of one
+    /// whole-manifest rewrite per file (which made "Adopt all" O(files × manifest) and froze the UI).
+    /// Read-only on the media — each file is hashed, never moved/deleted. Files that vanished are
+    /// skipped. Returns relPath → hash for the files actually adopted.
+    @discardableResult
+    public func adoptMany(relPaths: [String], on drive: Vault) throws -> [String: String] {
+        guard !relPaths.isEmpty else { return [:] }
+        let fm = FileManager.default
+        var newEntries: [ManifestEntry] = []
+        var adopted: [String: String] = [:]
+        for relPath in relPaths {
+            let url = drive.absoluteURL(forRelativePath: relPath)
+            guard fm.fileExists(atPath: url.path),
+                  let hash = try? ContentHash.ofFile(at: url).stringValue else { continue }  // read-only
+            let a = try? fm.attributesOfItem(atPath: url.path)
+            newEntries.append(ManifestEntry(
+                hash: ContentHash(stringValue: hash), path: relPath,
+                size: (a?[.size] as? Int64) ?? 0,
+                mtime: ISO8601Millis.string(from: (a?[.modificationDate] as? Date) ?? Date())))
+            adopted[relPath] = hash
+        }
+        guard !newEntries.isEmpty else { return [:] }
+        // ONE read + ONE atomic write for the whole batch. Replace any stale line per adopted path.
+        var entries = try Manifest.read(from: drive.manifestURL)
+        let adoptedPaths = Set(adopted.keys)
+        entries.removeAll { adoptedPaths.contains($0.path) }
+        entries.append(contentsOf: newEntries)
+        try Manifest.write(entries, to: drive.manifestURL)
+        return adopted
+    }
+
     /// Copy a verified-good copy back into a missing slot, then record it. Never overwrites.
     public func restore(relPath: String, expectedHash: String, from source: URL, on drive: Vault) throws {
         let dest = drive.absoluteURL(forRelativePath: relPath)

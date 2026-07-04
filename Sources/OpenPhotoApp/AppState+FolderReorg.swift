@@ -443,6 +443,29 @@ extension AppState {
         try? refreshQueries()
     }
 
+    /// Propagate MANY queued ops with the O(whole-library) reconcile done ONCE at the end, not per op
+    /// (the per-op `refreshQueries` was why "Propagate all" of thousands of moves froze for minutes).
+    /// Each op's file work is still off-main and per-op-atomic (so failures stay queued for retry);
+    /// only the expensive main-actor rebuild is hoisted out of the loop. `progress(done, total)` fires
+    /// per op — the callback runs on the main actor.
+    @MainActor func reviewPropagateAll(_ ops: [PendingFolderOp],
+                                       progress: (Int, Int) -> Void = { _, _ in }) async {
+        guard let library, let basename = driveBasename() else { return }
+        let connected = connectedDurableDrives()
+        var touched: Set<String> = []          // drive IDs whose presence needs a refresh
+        for (i, op) in ops.enumerated() {
+            progress(i + 1, ops.count)
+            guard let drive = connected.first(where: { $0.id == op.vaultID })?.vault else { continue }
+            if await propagateFolderOp(op, to: drive, basename: basename) {
+                try? library.catalog.clearFolderOp(id: op.id)
+                touched.insert(op.vaultID)
+            }
+        }
+        guard !touched.isEmpty else { return }
+        for d in connected where touched.contains(d.id) { try? refreshCanonicalPresence(driveVault: d.vault) }
+        try? refreshQueries()                  // ONCE, not per op
+    }
+
     /// Review "Undo" (drive = ground truth): cancel a file move. Revert the Mac (file + instance) once,
     /// then re-path presence back and clear the matching op on EVERY drive that queued it. The drive's
     /// files are never touched. Folder-structure ops are propagate-only in v1 (no per-op undo).

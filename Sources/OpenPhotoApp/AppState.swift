@@ -1884,10 +1884,8 @@ final class AppState {
     }
 
     @discardableResult
-    func adoptDriftFile(relPath: String, on driveVault: Vault) -> DriftReport {
-        _ = try? DriftReconciler().adopt(relPath: relPath, on: driveVault)
-        Task { await ingestAdopted([relPath], on: driveVault) }
-        return driftScan(driveVault)
+    func adoptDriftFile(relPath: String, on driveVault: Vault) async -> DriftReport {
+        await adoptAll([relPath], on: driveVault)
     }
 
     @discardableResult
@@ -1903,21 +1901,31 @@ final class AppState {
         return driftScan(driveVault)
     }
 
-    /// Adopt every unknown file in one pass, then a single re-scan.
+    /// Adopt many drive files OFF the main actor with progress. Batches the manifest write
+    /// (`adoptMany`, one rewrite) and the catalog ingest (`ingestDriveFiles`, one presence rewrite +
+    /// one asset upsert) — the old per-file path rewrote the whole manifest AND the whole presence
+    /// table once per file, which froze the UI on a big "Adopt all". `progress(done, total)` reports
+    /// the ingest phase (thumbnailing dominates). Reconciles + returns the fresh drift on the main actor.
     @discardableResult
-    func adoptAll(_ relPaths: [String], on driveVault: Vault) -> DriftReport {
-        for p in relPaths { _ = try? DriftReconciler().adopt(relPath: p, on: driveVault) }
-        Task { await ingestAdopted(relPaths, on: driveVault) }
-        return driftScan(driveVault)
-    }
-
-    private func ingestAdopted(_ relPaths: [String], on driveVault: Vault) async {
-        guard let lib = library else { return }
-        let ingest = CatalogIngest(catalog: lib.catalog, thumbnails: lib.thumbnails)
+    func adoptAll(_ relPaths: [String], on driveVault: Vault,
+                  progress: @escaping @Sendable (Int, Int) -> Void = { _, _ in }) async -> DriftReport {
+        guard let lib = library, !relPaths.isEmpty else { return driftScan(driveVault) }
+        let cat = lib.catalog, thumbs = lib.thumbnails
         let bases = lib.vaults.map { $0.rootURL.lastPathComponent }
-        for p in relPaths { try? await ingest.ingestDriveFile(relPath: p, on: driveVault, sourceBasenames: bases) }
-        try? refreshQueries()    // bring the new drive-only item into the timeline/folders
+        // 1. Record in the manifest — batched, off-main. Read-only on the media.
+        _ = await Task.detached(priority: .userInitiated) {
+            try? DriftReconciler().adoptMany(relPaths: relPaths, on: driveVault)
+        }.value
+        // 2. Catalog + thumbnail — batched, off-main, with progress.
+        await Task.detached(priority: .userInitiated) {
+            let ingest = CatalogIngest(catalog: cat, thumbnails: thumbs)
+            try? await ingest.ingestDriveFiles(relPaths: relPaths, on: driveVault,
+                                               sourceBasenames: bases, progress: progress)
+        }.value
+        // 3. Reconcile on the main actor.
+        try? refreshQueries()
         pokeDerivation()
+        return driftScan(driveVault)
     }
 
     /// Restore every recoverable missing file in one pass, then a single re-scan.
