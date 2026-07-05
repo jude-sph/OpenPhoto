@@ -48,6 +48,20 @@ echo "Using generate_appcast: $GENAPPCAST"
   --download-url-prefix "https://github.com/jude-sph/OpenPhoto/releases/download/${TAG}/" \
   "$RELDIR"
 
+# 2b. Prune the generate_appcast delta cache so it can't balloon. It extracts a full ~360 MB app
+#     bundle per processed version to diff against; over many releases that reached 15 GB. Keep the
+#     few most-recently-used (enough for deltas between recent versions) and drop the rest — purely
+#     regenerable, worst case a pruned version just gets a full-file update instead of a binary delta.
+CACHE="$HOME/Library/Caches/Sparkle_generate_appcast"
+KEEP=3
+if [[ -d "$CACHE" ]]; then
+  before="$(du -sh "$CACHE" 2>/dev/null | cut -f1)"
+  find "$CACHE" -mindepth 1 -maxdepth 1 -type d -print0 \
+    | xargs -0 stat -f '%m %N' 2>/dev/null | sort -rn | tail -n +$((KEEP + 1)) \
+    | cut -d' ' -f2- | while IFS= read -r d; do rm -rf "$d"; done
+  echo "Pruned Sparkle appcast cache (kept ${KEEP} newest): ${before:-?} -> $(du -sh "$CACHE" 2>/dev/null | cut -f1)"
+fi
+
 # 3. Create the GitHub Release with the zip + dmg.
 gh release create "$TAG" \
   "$RELDIR/OpenPhoto-${VERSION}.zip" "build/OpenPhoto-${VERSION}.dmg" \
