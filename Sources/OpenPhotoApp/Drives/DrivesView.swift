@@ -15,6 +15,7 @@ struct DrivesView: View {
     @State private var forgetTarget: VaultRecord?
     @State private var deletionDrive: Vault?
     @State private var cloningDriveIDs: Set<String> = []
+    @State private var reconcilingIDs: Set<String> = []
     @State private var adoptTarget: VaultRecord?
     @State private var adoptDismissed: Set<String> = []
     // Promotion / recovery
@@ -232,6 +233,16 @@ struct DrivesView: View {
                 .controlSize(.small)
                 .disabled((vr.role == "backup" && behind == 0) || cloning || !present || syncing)
             }
+            if reconcilingIDs.contains(vr.id) { ProgressView().controlSize(.small).scaleEffect(0.6) }
+            Button(reconcilingIDs.contains(vr.id) ? "Reconciling\u{2026}" : "Reconcile") {
+                reconcilingIDs.insert(vr.id)
+                Task {
+                    _ = await state.reconcileDrive(vr)
+                    reconcilingIDs.remove(vr.id)
+                }
+            }
+            .controlSize(.small).disabled(!present || syncing || reconcilingIDs.contains(vr.id))
+            .help("Make this drive an exact mirror of your library: bring in new photos, clean up stale copies, and remove ones you deleted. Evicted originals are kept.")
             Button("Sync\u{2026}") { state.jobSheetDrive = state.openVault(for: vr) }
                 .controlSize(.small).disabled(!present || syncing)
                 .help("Copy new photos and edits from this Mac to the drive.")

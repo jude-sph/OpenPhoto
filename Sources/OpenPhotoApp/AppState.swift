@@ -1930,6 +1930,31 @@ final class AppState {
         }
     }
 
+    /// State-based reconcile of one drive — the replacement for op-replay. Makes the drive an EXACT
+    /// mirror of the library by content: copy in what's missing, relocate what moved, remove stale
+    /// duplicates, and honor deletions (a delete on the Mac is propagated). Evicted originals are never
+    /// touched. Runs off-main behind the caller's progress indicator; ReconcileService projects presence
+    /// from the reconciled manifest, then the derived UI state is refreshed and this drive's now-moot
+    /// op-queue is cleared. Safe by construction: every destructive step verifies on disk and bins
+    /// recoverably, and a genuine-deletion blast-radius blocks the run.
+    @discardableResult
+    func reconcileDrive(_ vr: VaultRecord) async -> ReconcileExecutor.Result? {
+        guard let lib = library, let drive = openVault(for: vr), let local = lib.vaults.first else { return nil }
+        let bases = lib.vaults.map { $0.rootURL.lastPathComponent }
+        let macID = local.descriptor.vaultID
+        let cat = lib.catalog
+        let result = await Task.detached(priority: .userInitiated) {
+            try? ReconcileService.reconcile(drive: drive, localVault: local, catalog: cat,
+                                            sourceBasenames: bases, macVaultID: macID)
+        }.value
+        try? cat.clearFolderOps(forVault: vr.id)   // op-queue superseded — reconcile made the drive match
+        driveDrift[vr.id] = DriftReport()
+        reloadCanonicalPresence()
+        refreshPendingDeletions()
+        try? refreshQueries()
+        return result
+    }
+
     @discardableResult
     func adoptDriftFile(relPath: String, on driveVault: Vault) async -> DriftReport {
         await adoptAll([relPath], on: driveVault)
