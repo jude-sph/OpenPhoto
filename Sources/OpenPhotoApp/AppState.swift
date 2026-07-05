@@ -2038,6 +2038,27 @@ final class AppState {
         return nil
     }
 
+    /// Off-main sibling of `goodCopyURL`: resolve a readable copy of `hash` using only Sendable
+    /// snapshots (catalog + pre-opened vaults), so derivation can find each file on a background
+    /// thread instead of hitting the main actor's DB + filesystem once per item.
+    nonisolated static func resolveGoodCopyURL(hash: String, excluding driveID: String,
+                                               catalog: Catalog, localVaults: [Vault],
+                                               driveVaults: [Vault]) -> URL? {
+        let fm = FileManager.default
+        if let inst = (try? catalog.instances(forHash: hash))?.first(where: { $0.vaultID != driveID }),
+           let vault = localVaults.first(where: { $0.descriptor.vaultID == inst.vaultID }) {
+            let url = vault.absoluteURL(forRelativePath: inst.relPath)
+            if fm.fileExists(atPath: url.path) { return url }
+        }
+        for drive in driveVaults {
+            guard let entry = (try? Manifest.read(from: drive.manifestURL))?
+                      .first(where: { $0.hash.stringValue == hash }) else { continue }
+            let url = drive.absoluteURL(forRelativePath: entry.path)
+            if fm.fileExists(atPath: url.path) { return url }
+        }
+        return nil
+    }
+
     var configuredRoots: [URL] {
         (UserDefaults.standard.stringArray(forKey: Self.rootsDefaultsKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
@@ -2216,7 +2237,7 @@ final class AppState {
                 try await library.scanAll { [weak self] p in
                     Task { @MainActor in if p.total > 50 { self?.scanProgress = p } }
                 }
-                try refreshQueries()
+                await refreshQueriesAsync()   // off-main DB reads → no beachball after a big scan
                 pokeDerivation()
             } catch {
                 NSAlert(error: error).runModal()
@@ -2297,31 +2318,39 @@ final class AppState {
             derivationStageName = Self.analysisActivity(forStageID: stage.id)
             derivationProgress = combinedProgress()
             var index = 0, completed = 0
+            // Sendable snapshots so per-item file resolution runs OFF the main actor (below), instead
+            // of hitting the main-actor DB + filesystem once per item — the old cause of the beachball.
+            let localVaults = lib.vaults
+            let driveVaults = durableVaults.filter { driveIsPresent($0) }.compactMap { openVault(for: $0) }
             await boundedDrain(limit: maxConcurrent, next: {
-                // Resolve the next reachable item just-in-time on the main actor (cheaper than
-                // resolving the whole pending set up front, which would stall the main thread). Items
-                // whose bytes are currently unreachable (e.g. a drive is ejected) are skipped and left
-                // pending for a later poke; GeocodeStage needsFile == false, so a drive-only asset
-                // still gets geocoded.
-                while index < pending.count {
-                    let hash = pending[index]; index += 1
-                    let url = self.goodCopyURL(forHash: hash, excluding: "")   // "" excludes no vault
-                    if url == nil && needsFile { continue }
-                    let runURL = url ?? URL(fileURLWithPath: "/")              // geocode ignores url
-                    return { @Sendable in
-                        let ok = await stage.run(hash: hash, url: runURL, catalog: catalog)
-                        if ok { try? catalog.markDerived(hash: hash, stage: stageID) }
-                        else { try? catalog.markDerivationFailed(hash: hash, stage: stageID) }
+                // Cheap on the main actor: just hand the next hash to a background op. All DB/filesystem
+                // work happens inside that op, off-main.
+                guard index < pending.count else { return nil }
+                let hash = pending[index]; index += 1
+                return { @Sendable in
+                    // Resolve the readable copy off-main only when the stage needs the bytes. Items
+                    // whose bytes are unreachable (e.g. a drive is ejected) no-op and stay pending for a
+                    // later poke; a stage with needsFile == false (e.g. geocode) skips resolution and
+                    // still runs, so a drive-only asset is still geocoded.
+                    var runURL = URL(fileURLWithPath: "/")
+                    if needsFile {
+                        guard let url = AppState.resolveGoodCopyURL(
+                            hash: hash, excluding: "", catalog: catalog,
+                            localVaults: localVaults, driveVaults: driveVaults) else { return }
+                        runURL = url
                     }
+                    let ok = await stage.run(hash: hash, url: runURL, catalog: catalog)
+                    if ok { try? catalog.markDerived(hash: hash, stage: stageID) }
+                    else { try? catalog.markDerivationFailed(hash: hash, stage: stageID) }
                 }
-                return nil
             }, onComplete: {
                 completed += 1
                 // Progressive People refresh while faces re-derive so unassigned faces appear as
                 // they're found; the !facesLoading guard self-throttles the O(n²) clustering.
                 if stageID == FaceStage.id, completed % 200 == 0, !self.facesLoading { self.loadPeople() }
-                // Refresh the progress line periodically (combinedProgress reads the DB).
-                if completed % 4 == 0 { self.derivationProgress = self.combinedProgress() }
+                // Refresh the progress line sparingly — each combinedProgress() reads the DB on the
+                // main actor, so keep it off the per-item hot path (was every 4 items).
+                if completed % 48 == 0 { self.derivationProgress = self.combinedProgress() }
             })
             derivationProgress = combinedProgress()
         }
@@ -2426,6 +2455,34 @@ final class AppState {
             expandedFolders = paths
         }
         binEntries = try library.binItems()
+        refreshPendingDeletions()
+        refreshToken += 1
+    }
+
+    /// Off-main variant of `refreshQueries`: run the heavy timeline / folder-tree / bin DB reads on a
+    /// background thread, then assign the (Sendable) results on the main actor. Used by the scan loop
+    /// so re-indexing a large library doesn't beachball the UI.
+    func refreshQueriesAsync() async {
+        guard let library else { return }
+        let grouping = self.grouping, videoOnly = self.videoOnly
+        let result: (sections: [TimelineSection], folders: [FolderNode], bin: [LibraryService.BinEntry])? =
+            await Task.detached(priority: .userInitiated) {
+                guard let s = try? library.timelineSections(grouping: grouping, videoOnly: videoOnly),
+                      let f = try? library.folderTree(videoOnly: videoOnly),
+                      let b = try? library.binItems() else { return nil }
+                return (s, f, b)
+            }.value
+        guard let result else { return }
+        sections = result.sections
+        flatItems = result.sections.flatMap(\.items)
+        folderTree = result.folders
+        if expandedFolders.isEmpty && !folderTree.isEmpty {
+            var paths: Set<String> = []
+            func collect(_ nodes: [FolderNode]) { for n in nodes { paths.insert(n.path); collect(n.children) } }
+            collect(folderTree)
+            expandedFolders = paths
+        }
+        binEntries = result.bin
         refreshPendingDeletions()
         refreshToken += 1
     }
