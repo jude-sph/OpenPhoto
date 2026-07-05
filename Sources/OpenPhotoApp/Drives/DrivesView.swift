@@ -15,7 +15,6 @@ struct DrivesView: View {
     @State private var forgetTarget: VaultRecord?
     @State private var deletionDrive: Vault?
     @State private var cloningDriveIDs: Set<String> = []
-    @State private var reconcilingIDs: Set<String> = []
     @State private var adoptTarget: VaultRecord?
     @State private var adoptDismissed: Set<String> = []
     // Promotion / recovery
@@ -33,6 +32,7 @@ struct DrivesView: View {
     @State private var evictAllItems: [TimelineItem] = []
     @State private var plugInPrompt: String?      // drive name to prompt the user to connect
     @State private var storageNote: String?       // "nothing to do" feedback for the global buttons
+    @State private var showButtonHelp = false      // "i" popover explaining each drive action
 
     /// A backup sync (including its slow "finishing" snapshot write) is in flight. While it runs,
     /// other drive operations are disabled — they'd contend with the same files/manifest.
@@ -127,6 +127,12 @@ struct DrivesView: View {
         VStack(spacing: 0) {
             HStack {
                 Text("Drives").font(.system(size: 15, weight: .semibold))
+                Button { showButtonHelp = true } label: {
+                    Image(systemName: "info.circle").font(.system(size: 13))
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.textDim)
+                .help("What do these buttons do?")
+                .popover(isPresented: $showButtonHelp, arrowEdge: .bottom) { buttonHelpPopover }
                 Spacer()
                 Menu("Add Drive\u{2026}") {
                     if state.canonicalVault != nil {
@@ -157,6 +163,37 @@ struct DrivesView: View {
             } else {
                 List(state.durableVaults, id: \.id) { vr in row(vr) }.listStyle(.inset)
             }
+        }
+    }
+
+    // MARK: - Button help popover
+
+    @ViewBuilder private var buttonHelpPopover: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("What each control does").font(.system(size: 13, weight: .semibold))
+                helpRow("Automatic on connect", "Plugging in a drive reconciles it — it quietly becomes an exact mirror of your library: new photos copied on, moved photos relocated, leftover duplicates and photos you deleted removed. Photos you evicted to free Mac space are left untouched.")
+                Divider()
+                helpRow("Sync\u{2026}", "Push new photos and metadata edits (captions, ratings) from this Mac to the drive on demand.")
+                helpRow("Update backup / Make backup", "Bring a backup drive up to date with, or clone it from, the canonical.")
+                helpRow("Make this the canonical", "Promote a backup to become your primary library drive.")
+                helpRow("Verify Integrity", "Re-hash every file on the drive to catch silent corruption. Slow — for occasional deep checks.")
+                helpRow("Quick View", "Browse the drive's own catalogue without importing it.")
+                helpRow("\u{22ef} menu", "Reconcile Now (force a mirror immediately), Reconnect / Eject, and Forget Drive.")
+                Divider()
+                helpRow("Verify All Drives", "Cross-check every connected drive against the others for consensus.")
+                helpRow("Free Up Mac Space / Download All to Mac", "Evict originals onto a drive to reclaim space, or download drive-only photos back to this Mac.")
+            }
+            .padding(16)
+        }
+        .frame(width: 380, height: 420)
+    }
+
+    private func helpRow(_ title: String, _ body: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 12, weight: .medium))
+            Text(body).font(.system(size: 11)).foregroundStyle(Theme.textDim)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -233,16 +270,13 @@ struct DrivesView: View {
                 .controlSize(.small)
                 .disabled((vr.role == "backup" && behind == 0) || cloning || !present || syncing)
             }
-            if reconcilingIDs.contains(vr.id) { ProgressView().controlSize(.small).scaleEffect(0.6) }
-            Button(reconcilingIDs.contains(vr.id) ? "Reconciling\u{2026}" : "Reconcile") {
-                reconcilingIDs.insert(vr.id)
-                Task {
-                    _ = await state.reconcileDrive(vr)
-                    reconcilingIDs.remove(vr.id)
+            if state.reconcilingDriveIDs.contains(vr.id) {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.small).scaleEffect(0.6)
+                    Text("Reconciling\u{2026}").font(.system(size: 11)).foregroundStyle(Theme.textDim)
                 }
+                .help("Making this drive an exact mirror of your library.")
             }
-            .controlSize(.small).disabled(!present || syncing || reconcilingIDs.contains(vr.id))
-            .help("Make this drive an exact mirror of your library: bring in new photos, clean up stale copies, and remove ones you deleted. Evicted originals are kept.")
             Button("Sync\u{2026}") { state.jobSheetDrive = state.openVault(for: vr) }
                 .controlSize(.small).disabled(!present || syncing)
                 .help("Copy new photos and edits from this Mac to the drive.")
@@ -273,6 +307,13 @@ struct DrivesView: View {
 
     @ViewBuilder private func driveMenu(_ vr: VaultRecord) -> some View {
         Menu {
+            if state.driveIsPresent(vr) {
+                Button { Task { await state.reconcileDrive(vr) } } label: {
+                    Label("Reconcile Now", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(syncing || state.reconcilingDriveIDs.contains(vr.id))
+                Divider()
+            }
             if state.driveIsEjected(vr) {
                 Button { state.reconnectDrive(vr) } label: { Label("Reconnect", systemImage: "externaldrive.fill") }
             } else if state.driveFolderExists(vr) {

@@ -1674,6 +1674,9 @@ final class AppState {
     /// Last drift report per drive (vaultID → report) — drives the row status line. Populated by
     /// auto-scan on connect and by every scan/verify/repair.
     private(set) var driveDrift: [String: DriftReport] = [:]
+    /// Drives currently being reconciled (auto-on-connect or manual) — DrivesView shows a progress
+    /// indicator for these.
+    var reconcilingDriveIDs: Set<String> = []
     /// Set after a reconnect/mount scan finds pending changes → DrivesView auto-presents the review.
     var reviewDrive: ReviewPresentation?
 
@@ -1905,9 +1908,12 @@ final class AppState {
         for vr in durableVaults where driveIsPresent(vr) {
             cacheDriveKind(vr)
             guard let drive = openVault(for: vr) else { continue }
-            // Do NOT auto-apply queued offline ops — they're surfaced in the reconnect review for the
-            // user to approve/undo. Pending moves aren't drift (the drive is self-consistent), so the
-            // scan stays clean; reapply keeps the optimistic moves after the presence rebuild.
+            // Reconcile FIRST — make the drive mirror the library by content (copy in / relocate /
+            // remove stale / honor deletions; evictions untouched). This is the state-based replacement
+            // for op-replay + the reconnect review, and it projects presence from the reconciled
+            // manifest. Then scan the reconciled state for corruption / unadopted files (which reconcile
+            // doesn't detect) so those still surface in the row.
+            await reconcileDrive(vr)
             let scanned = await Task.detached(priority: .utility) {
                 (try? DriftReconciler().scan(drive: drive)) ?? DriftReport()
             }.value
@@ -1915,19 +1921,10 @@ final class AppState {
             if let p = presenceService() {
                 DriftReconciler().annotateRecoverability(&report, driveID: vr.id, presence: p)
             }
-            try? library?.catalog.replaceVaultPresence(vaultID: vr.id,
-                                                       entries: presenceEntries(forDrive: drive,
-                                                                                limitedTo: report.presentHashes))
-            try? library?.catalog.reapplyPendingOpsToPresence(vaultID: vr.id)
             driveDrift[vr.id] = report
         }
         reloadCanonicalPresence()
         refreshPendingDeletions()
-        // Plugging a drive in is a "connect": surface its changes-since-last-connect for review.
-        for vr in durableVaults where driveIsPresent(vr) {
-            guard let drive = openVault(for: vr) else { continue }
-            if !reviewPayload(forDrive: drive).isEmpty { presentReviewIfNeeded(drive); break }
-        }
     }
 
     /// State-based reconcile of one drive — the replacement for op-replay. Makes the drive an EXACT
@@ -1943,12 +1940,15 @@ final class AppState {
         let bases = lib.vaults.map { $0.rootURL.lastPathComponent }
         let macID = local.descriptor.vaultID
         let cat = lib.catalog
+        reconcilingDriveIDs.insert(vr.id)
+        defer { reconcilingDriveIDs.remove(vr.id) }
         let result = await Task.detached(priority: .userInitiated) {
             try? ReconcileService.reconcile(drive: drive, localVault: local, catalog: cat,
                                             sourceBasenames: bases, macVaultID: macID)
         }.value
         try? cat.clearFolderOps(forVault: vr.id)   // op-queue superseded — reconcile made the drive match
-        driveDrift[vr.id] = DriftReport()
+        // NB: leave driveDrift as the scan found it — reconcile fixes sync state (moves/copies/deletes),
+        // not corruption/unadopted drift, so those must keep surfacing in the row.
         reloadCanonicalPresence()
         refreshPendingDeletions()
         try? refreshQueries()
