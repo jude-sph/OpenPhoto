@@ -188,38 +188,35 @@ private func P(_ h: String, _ p: String) -> Placement { Placement(hash: h, path:
                                           actualCount: 3, macVaultID: "mac", maxDeletionFraction: 0.25)
 
     #expect(res.blockedByBlastRadius)
-    #expect(res.staleRemoved == 0)
-    #expect(res.deletionsForReview == [P(dgone, "Pics/x/gone.jpg")])
+    #expect(res.staleRemoved == 0 && res.deletionsApplied == 0)
+    #expect(res.blockedDeletions == [P(dgone, "Pics/x/gone.jpg")])
     #expect(r.onDrive("Pics/stale/a.jpg"))                                            // nothing touched
 }
 
-// apply() runs stale-removals when the blast-radius is fine, and surfaces deletions for review
-// (never auto-deleting them) plus counts relocations/copies as pending.
-@Test func applyRunsStaleRemovalsAndSurfacesDeletionsForReview() throws {
+// apply() runs stale-removals AND honors genuine deletions (bins the drive copy) when the blast-radius
+// is fine — a delete on the Mac propagates to the drive.
+@Test func applyRunsStaleRemovalsAndHonorsDeletions() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let r = try Rig(t)
     let h = try put(r.drive, "Pics/stale/a.jpg", "SHARED")
     _ = try put(r.drive, "Pics/keep/a.jpg", "SHARED")
     _ = try put(r.local, "album/a.jpg", "SHARED")
     try r.cat.upsert(instances: [inst(r.local.id, "album/a.jpg", h)])
-    let dgone = "sha256:" + String(repeating: "f", count: 64)
-    _ = try put(r.drive, "Pics/x/gone.jpg", "GONE")
+    let dgone = try put(r.drive, "Pics/x/gone.jpg", "GONE")     // real hash of the deleted file
     try Manifest.write([mEntry("Pics/stale/a.jpg", h), mEntry("Pics/keep/a.jpg", h), mEntry("Pics/x/gone.jpg", dgone)], to: r.drive.manifestURL)
     try r.cat.replaceVaultPresence(vaultID: r.drive.id, entries: [pres(h, "Pics/stale/a.jpg"), pres(h, "Pics/keep/a.jpg"), pres(dgone, "Pics/x/gone.jpg")])
 
-    let plan = ReconcilePlan(copies: [P("hc", "Pics/need.jpg")],
-                             relocations: [ReconcilePlan.Relocation(hash: "hr", from: "Pics/f.jpg", to: "Pics/g.jpg")],
+    let plan = ReconcilePlan(copies: [], relocations: [],
                              staleRemovals: [P(h, "Pics/stale/a.jpg")],
                              reviewDeletions: [P(dgone, "Pics/x/gone.jpg")])
     let res = try ReconcileExecutor.apply(plan: plan, drive: r.drive, localVault: r.local, catalog: r.cat,
                                           actualCount: 100, macVaultID: "mac")   // 1/100 deletions → fine
 
     #expect(!res.blockedByBlastRadius)
-    #expect(res.staleRemoved == 1)
-    #expect(res.deletionsForReview == [P(dgone, "Pics/x/gone.jpg")])
-    #expect(res.relocationsPending == 1 && res.copiesPending == 1)
+    #expect(res.staleRemoved == 1 && res.deletionsApplied == 1)
     #expect(!r.onDrive("Pics/stale/a.jpg"))                     // stale removed
-    #expect(r.onDrive("Pics/x/gone.jpg"))                       // genuine deletion NOT auto-applied
+    #expect(!r.onDrive("Pics/x/gone.jpg"))                      // deletion honored → binned (recoverable)
+    #expect(FileManager.default.fileExists(atPath: r.drive.binDirURL.appendingPathComponent("Pics/x/gone.jpg").path))
 }
 
 // After removals empty a folder, its husk is pruned — but a non-empty ancestor (still holding other

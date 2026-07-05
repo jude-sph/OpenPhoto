@@ -103,3 +103,19 @@ private struct Rig {
     let plan = try ReconcilePlanner.plan(drive: r.drive, localVault: r.local, catalog: r.cat)
     #expect(plan.isEmpty)   // evicted original desired-and-present → no-op; NOT a deletion
 }
+
+// A genuine deletion (drive-only content queued in pending_deletions) is EXCLUDED from DESIRED, so the
+// plan proposes removing it from the drive — a delete on the Mac propagates.
+@Test func plannerHonorsQueuedDeletion() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.local, "a/1.jpg", "one")
+    try r.cat.upsert(instances: [inst(r.local.id, "a/1.jpg", h)])
+    let del = "sha256:" + String(repeating: "d", count: 64)     // deleted photo, still on drive
+    try r.cat.enqueuePendingDeletion(hash: del, relPath: "gone/x.jpg", deletedAtMs: 1)
+    try Manifest.write([mEntry(r.d("a/1.jpg"), h), mEntry(r.d("gone/x.jpg"), del)], to: r.drive.manifestURL)
+
+    let plan = try ReconcilePlanner.plan(drive: r.drive, localVault: r.local, catalog: r.cat)
+    #expect(plan.reviewDeletions == [Placement(hash: del, path: r.d("gone/x.jpg"))])
+    #expect(plan.staleRemovals.isEmpty && plan.copies.isEmpty && plan.relocations.isEmpty)
+}

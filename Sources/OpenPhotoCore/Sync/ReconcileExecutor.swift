@@ -21,22 +21,27 @@ public enum ReconcileExecutor {
         public var staleRemoved: Int
         public var staleSkipped: Int
         public var staleAlreadyGone: Int
-        public var relocationsPending: Int
-        public var copiesPending: Int
-        public var deletionsForReview: [Placement]
+        public var relocated: Int
+        public var copied: Int
+        public var copySkipped: Int
+        public var deletionsApplied: Int
         public var blockedByBlastRadius: Bool
+        public var blockedDeletions: [Placement]   // populated only when blast-radius blocks the run
         public init(staleRemoved: Int = 0, staleSkipped: Int = 0, staleAlreadyGone: Int = 0,
-                    relocationsPending: Int = 0, copiesPending: Int = 0,
-                    deletionsForReview: [Placement] = [], blockedByBlastRadius: Bool = false) {
+                    relocated: Int = 0, copied: Int = 0, copySkipped: Int = 0, deletionsApplied: Int = 0,
+                    blockedByBlastRadius: Bool = false, blockedDeletions: [Placement] = []) {
             self.staleRemoved = staleRemoved; self.staleSkipped = staleSkipped
-            self.staleAlreadyGone = staleAlreadyGone; self.relocationsPending = relocationsPending
-            self.copiesPending = copiesPending; self.deletionsForReview = deletionsForReview
-            self.blockedByBlastRadius = blockedByBlastRadius
+            self.staleAlreadyGone = staleAlreadyGone; self.relocated = relocated
+            self.copied = copied; self.copySkipped = copySkipped; self.deletionsApplied = deletionsApplied
+            self.blockedByBlastRadius = blockedByBlastRadius; self.blockedDeletions = blockedDeletions
         }
     }
 
-    /// Apply the verified-safe parts of `plan`. Genuine deletions are surfaced, never executed. If they
-    /// exceed `maxDeletionFraction` of the drive, nothing destructive runs (the plan is untrustworthy).
+    /// Apply a full `plan` to make the drive mirror the library: copy in, relocate, remove stale, then
+    /// honor genuine deletions (bin the drive copy — a delete on the Mac propagates to the drive). Every
+    /// destructive step verifies on disk first and bins recoverably. If genuine deletions exceed
+    /// `maxDeletionFraction` of the drive, NOTHING runs — that scale of "disappeared" content means the
+    /// catalog (hence the plan) can't be trusted; the blocked deletions are returned for a human to see.
     @discardableResult
     public static func apply(plan: ReconcilePlan, drive: Vault, localVault: Vault?, catalog: Catalog,
                              actualCount: Int, macVaultID: String,
@@ -44,13 +49,55 @@ public enum ReconcileExecutor {
         let deletionFraction = actualCount > 0
             ? Double(plan.reviewDeletions.count) / Double(actualCount) : 0
         if deletionFraction > maxDeletionFraction {
-            return Result(deletionsForReview: plan.reviewDeletions, blockedByBlastRadius: true)
+            return Result(blockedByBlastRadius: true, blockedDeletions: plan.reviewDeletions)
         }
-        let rr = try applyStaleRemovals(plan.staleRemovals, drive: drive, localVault: localVault,
+        // Order (design Decision 5): copy in → relocate → remove stale → delete. Each atomic + verified.
+        let cp = try applyCopies(plan.copies, drive: drive, localVault: localVault,
+                                 catalog: catalog, macVaultID: macVaultID)
+        let rel = try applyRelocations(plan.relocations, drive: drive, macVaultID: macVaultID)
+        let sr = try applyStaleRemovals(plan.staleRemovals, drive: drive, localVault: localVault,
                                         catalog: catalog, macVaultID: macVaultID)
-        return Result(staleRemoved: rr.removed, staleSkipped: rr.skipped, staleAlreadyGone: rr.alreadyGone,
-                      relocationsPending: plan.relocations.count, copiesPending: plan.copies.count,
-                      deletionsForReview: plan.reviewDeletions, blockedByBlastRadius: false)
+        let del = try applyDeletions(plan.reviewDeletions, drive: drive, catalog: catalog, macVaultID: macVaultID)
+        return Result(staleRemoved: sr.removed, staleSkipped: sr.skipped, staleAlreadyGone: sr.alreadyGone,
+                      relocated: rel, copied: cp.copied, copySkipped: cp.skipped, deletionsApplied: del)
+    }
+
+    /// Honor genuine deletions on the drive: bin each deleted photo's drive copy (origin `.propagated`,
+    /// recoverable), verifying on disk that the file is the content we mean to remove first. One atomic
+    /// manifest rewrite + by-path presence removal + husk prune, then clear the pending-deletion intent
+    /// for hashes no drive holds anymore. (Eviction never reaches here — it's excluded from the plan.)
+    @discardableResult
+    public static func applyDeletions(_ deletions: [Placement], drive: Vault, catalog: Catalog,
+                                      macVaultID: String) throws -> Int {
+        guard !deletions.isEmpty else { return 0 }
+        let fm = FileManager.default
+        let bin = BinStore(vault: drive)
+        var clearedPaths = Set<String>()
+        var clearedHashes: [String] = []
+        var binned = 0
+        for d in deletions {
+            let url = drive.absoluteURL(forRelativePath: d.path)
+            if !fm.fileExists(atPath: url.path) {
+                clearedPaths.insert(d.path); clearedHashes.append(d.hash); continue
+            }
+            guard (try? ContentHash.ofFile(at: url).stringValue) == d.hash else { continue }  // drift → skip
+            do {
+                try bin.moveToBin(relPath: d.path, hash: ContentHash(stringValue: d.hash), origin: .propagated)
+                binned += 1; clearedPaths.insert(d.path); clearedHashes.append(d.hash)
+            } catch { /* leave; not cleared */ }
+        }
+        if !clearedPaths.isEmpty {
+            let remaining = try Manifest.read(from: drive.manifestURL).filter { !clearedPaths.contains($0.path) }
+            try Manifest.write(remaining, to: drive.manifestURL)
+            try catalog.removeVaultPresence(vaultID: drive.id, driveRelPaths: Array(clearedPaths))
+            pruneEmptyAncestors(of: clearedPaths, in: drive)
+            try catalog.clearPendingDeletionsWithoutPresence(hashes: clearedHashes)
+        }
+        if binned > 0 {
+            SyncLog.append(event: "reconcile", summary: "removed \(binned) deleted photos from drive",
+                           counterparty: macVaultID, to: drive.syncLogURL)
+        }
+        return binned
     }
 
     /// Bin the plan's stale copies, each proven redundant ON DISK first: the file must hash to the

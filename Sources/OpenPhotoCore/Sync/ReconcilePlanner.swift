@@ -4,10 +4,13 @@ import Foundation
 /// pure `computeReconcilePlan` and any caller (a dry-run preview, the reconnect flow). Read-only.
 ///
 /// DESIRED (what the drive should hold) = every LOCAL instance mapped to its drive path the same way
-/// sync places files (`SyncEngine.driveRelPath`), PLUS any drive placement with no local instance,
-/// kept as a retained evicted original. That last rule is deliberately CONSERVATIVE: reconcile here
-/// never proposes deleting drive-only content — genuine-deletion detection stays with the existing
-/// deletion path — so a plan from this planner only ever copies, relocates, or removes stale duplicates.
+/// sync places files (`SyncEngine.driveRelPath`), PLUS any drive-only content (no local instance) kept
+/// as a retained evicted original — UNLESS it's a genuine deletion queued in `pending_deletions`.
+///
+/// This encodes the two rules exactly: a **delete** on the Mac (queued) is excluded from DESIRED, so
+/// the plan removes it from the drive; an **eviction** (drive-only, never queued) stays in DESIRED, so
+/// the drive copy is never touched. Genuine deletions surface as the plan's `reviewDeletions`, which
+/// `ReconcileExecutor.apply` honors (bin, recoverable) behind the blast-radius guard.
 public enum ReconcilePlanner {
 
     /// The library's placements as drive paths.
@@ -18,9 +21,13 @@ public enum ReconcilePlanner {
             localHashes.insert(h)
             out.insert(Placement(hash: h, path: SyncEngine.driveRelPath(forSourceVault: localVault, relPath: rel)))
         }
-        // Evicted originals (no local instance) are still wanted — keep them at their current drive path.
-        for p in try catalog.vaultPresenceRows(forVault: drive.id) where !localHashes.contains(p.hash) {
-            out.insert(Placement(hash: p.hash, path: p.driveRelPath))
+        // Drive-only content: keep (evicted original) unless it's a queued deletion (honor it). Read
+        // from the manifest — the faithful multi-path record (vault_presence is deduped per hash).
+        let deleted = Set(try catalog.pendingDeletions().map(\.hash))
+        for e in try Manifest.read(from: drive.manifestURL) {
+            let h = e.hash.stringValue
+            if localHashes.contains(h) || deleted.contains(h) { continue }
+            out.insert(Placement(hash: h, path: e.path))
         }
         return out
     }
