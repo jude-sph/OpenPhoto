@@ -3,6 +3,7 @@ import OpenPhotoCore
 
 struct BinView: View {
     @Bindable var state: AppState
+    @State private var restoring = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11,6 +12,9 @@ struct BinView: View {
                 Text("\(state.binEntries.count) items")
                     .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)
                 Spacer()
+                Button("Restore All") { restoreAll() }
+                    .disabled(state.binEntries.isEmpty || restoring)
+                    .help("Move every photo in the bin back to where it was.")
                 Button("Clear Drive Bins…", role: .destructive) { confirmEmptyDriveBins() }
                     .help("Reclaim space by clearing the deleted-photo bin on each connected drive.")
                 Button("Empty Bin…", role: .destructive) { confirmEmpty() }
@@ -57,6 +61,19 @@ struct BinView: View {
                     .padding(12)
                 }
             }
+        }
+    }
+
+    /// Restore every binned photo to where it was. Non-destructive (you can re-delete). Snapshots the
+    /// list up front since each restore removes its entry, and refreshes once at the end.
+    private func restoreAll() {
+        let entries = state.binEntries
+        guard !entries.isEmpty else { return }
+        restoring = true
+        Task {
+            for entry in entries { try? await state.library?.restore(entry) }
+            try? state.refreshQueries()
+            restoring = false
         }
     }
 
