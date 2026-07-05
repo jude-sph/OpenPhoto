@@ -4,14 +4,28 @@ import OpenPhotoCore
 struct BinView: View {
     @Bindable var state: AppState
     @State private var restoring = false
+    @State private var showUniqueOnly = false
+    @State private var uniqueComputing = false
+    @State private var liveHashes: Set<String> = []   // live-library hashes, snapshotted when filtering
+
+    /// Bin entries with no other copy anywhere in the live library — the only-copies. Snapshot-based:
+    /// `liveHashes` is captured when the filter turns on.
+    private var shownEntries: [LibraryService.BinEntry] {
+        showUniqueOnly ? state.binEntries.filter { !liveHashes.contains($0.item.hash) } : state.binEntries
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Bin").font(.system(size: 15, weight: .semibold))
-                Text("\(state.binEntries.count) items")
+                Text(showUniqueOnly ? "\(shownEntries.count) unique of \(state.binEntries.count)"
+                                    : "\(state.binEntries.count) items")
                     .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textDim)
                 Spacer()
+                Button(showUniqueOnly ? "Show All" : "Only Unique") { toggleUniqueOnly() }
+                    .disabled(state.binEntries.isEmpty || uniqueComputing)
+                    .help("Show only binned photos that have no other copy anywhere in your library "
+                          + "(this Mac or your drives) — the ones lost for good if you empty the bin.")
                 Button("Restore All") { restoreAll() }
                     .disabled(state.binEntries.isEmpty || restoring)
                     .help("Move every photo in the bin back to where it was.")
@@ -30,10 +44,17 @@ struct BinView: View {
                     Text("Deleted photos rest here until you empty the bin.\nNothing leaves your drives until then.")
                 }
                 .frame(maxHeight: .infinity)
+            } else if showUniqueOnly && shownEntries.isEmpty {
+                ContentUnavailableView {
+                    Label("Nothing unique", systemImage: "checkmark.circle")
+                } description: {
+                    Text("Every photo in the bin also exists elsewhere in your library —\nnothing here is the only copy.")
+                }
+                .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)], spacing: 8) {
-                        ForEach(state.binEntries) { entry in
+                        ForEach(shownEntries) { entry in
                             VStack(spacing: 6) {
                                 if let lib = state.library {
                                     // Same square/rounded chrome as every other grid in the app.
@@ -61,6 +82,18 @@ struct BinView: View {
                     .padding(12)
                 }
             }
+        }
+    }
+
+    /// Toggle the "only unique" filter. Turning it on snapshots the live-library hash set off-main
+    /// (a DB read), so the button stays responsive.
+    private func toggleUniqueOnly() {
+        if showUniqueOnly { showUniqueOnly = false; return }
+        uniqueComputing = true
+        Task {
+            liveHashes = await state.liveLibraryHashesAsync()
+            showUniqueOnly = true
+            uniqueComputing = false
         }
     }
 

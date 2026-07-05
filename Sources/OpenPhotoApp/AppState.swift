@@ -2487,6 +2487,19 @@ final class AppState {
         refreshToken += 1
     }
 
+    /// Content hashes present in the NON-binned library — live local instances plus every drive's
+    /// presence (connected or last-known). A binned item whose hash is absent here has no other copy
+    /// anywhere, so it's gone for good if the bin is emptied. Off-main (the instances read hits the DB).
+    func liveLibraryHashesAsync() async -> Set<String> {
+        guard let lib = library else { return [] }
+        let cat = lib.catalog
+        let presence = canonicalPresence
+        let instances = await Task.detached(priority: .userInitiated) {
+            (try? cat.instanceHashes()) ?? []
+        }.value
+        return instances.union(presence)
+    }
+
     /// PresenceService over the current registries, if a library is open.
     private func presenceService() -> PresenceService? {
         guard let library, let imports = importRegistry,
