@@ -100,6 +100,97 @@ public enum ReconcileExecutor {
         return RemovalResult(removed: removed, skipped: skipped, alreadyGone: alreadyGone)
     }
 
+    public struct CopyResult: Equatable, Sendable {
+        public var copied: Int
+        public var skipped: Int
+        public init(copied: Int = 0, skipped: Int = 0) { self.copied = copied; self.skipped = skipped }
+    }
+
+    /// Apply the plan's relocations: a same-hash move already on the drive. Verify each source on disk
+    /// hashes to the expected value (a content-preserving rename follows), then relocate file + sidecar
+    /// via `moveFilesExact` (collision-safe, one atomic manifest rewrite). Returns the count moved.
+    @discardableResult
+    public static func applyRelocations(_ relocations: [ReconcilePlan.Relocation], drive: Vault,
+                                        macVaultID: String) throws -> Int {
+        guard !relocations.isEmpty else { return 0 }
+        let fm = FileManager.default
+        var moves: [(from: String, to: String)] = []
+        for r in relocations {
+            let fromURL = drive.absoluteURL(forRelativePath: r.from)
+            guard fm.fileExists(atPath: fromURL.path),
+                  (try? ContentHash.ofFile(at: fromURL).stringValue) == r.hash else { continue }
+            moves.append((from: r.from, to: r.to))
+        }
+        guard !moves.isEmpty else { return 0 }
+        let mapping = try VaultReorganizer.moveFilesExact(in: drive, moves: moves)
+        pruneEmptyAncestors(of: Set(moves.map(\.from)), in: drive)
+        if !mapping.isEmpty {
+            SyncLog.append(event: "reconcile", summary: "relocated \(mapping.count) files",
+                           counterparty: macVaultID, to: drive.syncLogURL)
+        }
+        return mapping.count
+    }
+
+    /// Apply the plan's copies: bring missing content onto the drive from a verified LOCAL source (an
+    /// on-Mac instance whose bytes re-hash to the target). Stream-copies hash-verified + atomically
+    /// (`VerifiedCopy`), carries the XMP sidecar, and adds the manifest rows in one write. A copy with
+    /// no local source (or an occupied destination) is skipped — never overwritten.
+    @discardableResult
+    public static func applyCopies(_ copies: [Placement], drive: Vault, localVault: Vault?,
+                                   catalog: Catalog, macVaultID: String) throws -> CopyResult {
+        guard !copies.isEmpty, let localVault else { return CopyResult(copied: 0, skipped: copies.count) }
+        let fm = FileManager.default
+        var added: [ManifestEntry] = []
+        var copied = 0, skipped = 0
+
+        for c in copies {
+            let destURL = drive.absoluteURL(forRelativePath: c.path)
+            if fm.fileExists(atPath: destURL.path) { skipped += 1; continue }
+            guard let srcRel = try firstVerifiedLocalSource(hash: c.hash, localVault: localVault, catalog: catalog) else {
+                skipped += 1; continue
+            }
+            let srcURL = localVault.absoluteURL(forRelativePath: srcRel)
+            guard VerifiedCopy.copy(from: srcURL, to: destURL, expectedHash: c.hash) == .copied else {
+                skipped += 1; continue
+            }
+            // Sidecar (human metadata) travels with the media.
+            let srcSidecar = localVault.sidecarURL(forMediaAt: srcURL)
+            if fm.fileExists(atPath: srcSidecar.path) {
+                let dstSidecar = drive.sidecarURL(forMediaAt: destURL)
+                try? fm.createDirectory(at: dstSidecar.deletingLastPathComponent(), withIntermediateDirectories: true)
+                _ = VerifiedCopy.copy(from: srcSidecar, to: dstSidecar,
+                                      expectedHash: (try? ContentHash.ofFile(at: srcSidecar).stringValue) ?? "")
+            }
+            let attrs = try? fm.attributesOfItem(atPath: destURL.path)
+            let size = (attrs?[.size] as? Int64) ?? Int64((attrs?[.size] as? Int) ?? 0)
+            let mtime = (attrs?[.modificationDate] as? Date) ?? Date(timeIntervalSince1970: 0)
+            added.append(ManifestEntry(hash: ContentHash(stringValue: c.hash), path: c.path,
+                                       size: size, mtime: ISO8601Millis.string(from: mtime)))
+            copied += 1
+        }
+
+        if !added.isEmpty {
+            var entries = try Manifest.read(from: drive.manifestURL)
+            entries.append(contentsOf: added)
+            try Manifest.write(entries, to: drive.manifestURL)
+            SyncLog.append(event: "reconcile", summary: "copied \(copied) files onto drive",
+                           counterparty: macVaultID, to: drive.syncLogURL)
+        }
+        return CopyResult(copied: copied, skipped: skipped)
+    }
+
+    /// A local relPath whose file physically exists and re-hashes to `hash`, or nil.
+    private static func firstVerifiedLocalSource(hash: String, localVault: Vault,
+                                                 catalog: Catalog) throws -> String? {
+        let fm = FileManager.default
+        for rel in try catalog.instanceRelPaths(vaultID: localVault.id, hash: hash) {
+            let url = localVault.absoluteURL(forRelativePath: rel)
+            if fm.fileExists(atPath: url.path),
+               (try? ContentHash.ofFile(at: url).stringValue) == hash { return rel }
+        }
+        return nil
+    }
+
     /// Remove husk directories the removals emptied, deepest-first. `deleteEmptyFolder` refuses any dir
     /// still holding media (ignoring `.openphoto`/dotfiles), so a shared ancestor like the library root
     /// is never touched — only genuinely-empty leftovers are cleaned.

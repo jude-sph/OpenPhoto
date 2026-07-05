@@ -244,3 +244,101 @@ private func P(_ h: String, _ p: String) -> Placement { Placement(hash: h, path:
     #expect(fm.fileExists(atPath: r.drive.absoluteURL(forRelativePath: "Pics").path))              // ancestor kept
     #expect(r.onDrive("Pics/keep/only.jpg"))
 }
+
+// RELOCATION: a same-hash move on the drive, verified on disk first, updates the manifest.
+@Test func relocatesVerifiedFileAndUpdatesManifest() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.drive, "Pics/old/1.jpg", "one")
+    try Manifest.write([mEntry("Pics/old/1.jpg", h)], to: r.drive.manifestURL)
+
+    let n = try ReconcileExecutor.applyRelocations(
+        [ReconcilePlan.Relocation(hash: h, from: "Pics/old/1.jpg", to: "Pics/new/1.jpg")],
+        drive: r.drive, macVaultID: "mac")
+
+    #expect(n == 1)
+    #expect(!r.onDrive("Pics/old/1.jpg") && r.onDrive("Pics/new/1.jpg"))
+    #expect(try Manifest.read(from: r.drive.manifestURL).map(\.path) == ["Pics/new/1.jpg"])
+}
+
+// SAFETY: if the source file isn't the content the plan expects, don't move it.
+@Test func skipsRelocationOnHashMismatch() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    _ = try put(r.drive, "Pics/old/1.jpg", "actual")
+    let wrong = "sha256:" + String(repeating: "9", count: 64)
+    try Manifest.write([mEntry("Pics/old/1.jpg", wrong)], to: r.drive.manifestURL)
+
+    let n = try ReconcileExecutor.applyRelocations(
+        [ReconcilePlan.Relocation(hash: wrong, from: "Pics/old/1.jpg", to: "Pics/new/1.jpg")],
+        drive: r.drive, macVaultID: "mac")
+
+    #expect(n == 0)
+    #expect(r.onDrive("Pics/old/1.jpg") && !r.onDrive("Pics/new/1.jpg"))
+}
+
+// COPY: bring missing content in from a verified LOCAL source, hash-checked, adding the manifest row.
+@Test func copiesFromVerifiedLocalSourceAndAddsManifest() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.local, "album/1.jpg", "payload")
+    try r.cat.upsert(instances: [inst(r.local.id, "album/1.jpg", h)])
+    try Manifest.write([], to: r.drive.manifestURL)
+
+    let res = try ReconcileExecutor.applyCopies([P(h, "Pics/dest/1.jpg")],
+        drive: r.drive, localVault: r.local, catalog: r.cat, macVaultID: "mac")
+
+    #expect(res == ReconcileExecutor.CopyResult(copied: 1, skipped: 0))
+    #expect(r.onDrive("Pics/dest/1.jpg"))
+    #expect(try ContentHash.ofFile(at: r.drive.absoluteURL(forRelativePath: "Pics/dest/1.jpg")).stringValue == h)
+    #expect(try Manifest.read(from: r.drive.manifestURL).map(\.path) == ["Pics/dest/1.jpg"])
+    #expect(r.onLocal("album/1.jpg"))   // source untouched
+}
+
+// COPY carries the XMP sidecar (human metadata) alongside the media.
+@Test func copyAlsoCopiesSidecar() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.local, "album/1.jpg", "payload")
+    let srcSidecar = r.local.sidecarURL(forMediaAt: r.local.absoluteURL(forRelativePath: "album/1.jpg"))
+    try FileManager.default.createDirectory(at: srcSidecar.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("<xmp/>".utf8).write(to: srcSidecar)
+    try r.cat.upsert(instances: [inst(r.local.id, "album/1.jpg", h)])
+    try Manifest.write([], to: r.drive.manifestURL)
+
+    _ = try ReconcileExecutor.applyCopies([P(h, "Pics/dest/1.jpg")],
+        drive: r.drive, localVault: r.local, catalog: r.cat, macVaultID: "mac")
+
+    let destSidecar = r.drive.sidecarURL(forMediaAt: r.drive.absoluteURL(forRelativePath: "Pics/dest/1.jpg"))
+    #expect(FileManager.default.fileExists(atPath: destSidecar.path))
+}
+
+// COPY skips when no local source has the content (leave it for another drive/source), touching nothing.
+@Test func skipsCopyWhenNoLocalSource() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = "sha256:" + String(repeating: "a", count: 64)
+    try Manifest.write([], to: r.drive.manifestURL)
+
+    let res = try ReconcileExecutor.applyCopies([P(h, "Pics/dest/1.jpg")],
+        drive: r.drive, localVault: r.local, catalog: r.cat, macVaultID: "mac")
+
+    #expect(res == ReconcileExecutor.CopyResult(copied: 0, skipped: 1))
+    #expect(!r.onDrive("Pics/dest/1.jpg"))
+    #expect(try Manifest.read(from: r.drive.manifestURL).isEmpty)
+}
+
+// COPY skips a destination that's already present (drift), never overwriting.
+@Test func skipsCopyWhenAlreadyPresent() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.local, "album/1.jpg", "payload")
+    _ = try put(r.drive, "Pics/dest/1.jpg", "payload")
+    try r.cat.upsert(instances: [inst(r.local.id, "album/1.jpg", h)])
+    try Manifest.write([mEntry("Pics/dest/1.jpg", h)], to: r.drive.manifestURL)
+
+    let res = try ReconcileExecutor.applyCopies([P(h, "Pics/dest/1.jpg")],
+        drive: r.drive, localVault: r.local, catalog: r.cat, macVaultID: "mac")
+
+    #expect(res == ReconcileExecutor.CopyResult(copied: 0, skipped: 1))
+}
