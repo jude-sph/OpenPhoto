@@ -250,8 +250,20 @@ private struct FolderRow: View {
                 Button("Download This Folder to Mac\u{2026}") { prepareRehydrateFolder(node) }
             }
             if expanded {
-                ForEach(node.children) { child in
-                    FolderRow(node: child, state: state, depth: depth + 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(node.children) { child in
+                        FolderRow(node: child, state: state, depth: depth + 1)
+                    }
+                }
+                // One continuous guide line down this folder's whole subtree, under its chevron
+                // (centre at depth*14+17). Nested folders each draw their own, so a deep row shows a
+                // line per ancestor level — continuous, not per-row segments.
+                .background(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(Theme.textFaint.opacity(0.35))
+                        .frame(width: 1)
+                        .offset(x: CGFloat(depth) * 14 + 17)
+                        .allowsHitTesting(false)
                 }
             }
         }
