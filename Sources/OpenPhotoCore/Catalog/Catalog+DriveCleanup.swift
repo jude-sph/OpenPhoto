@@ -5,6 +5,15 @@ import GRDB
 /// The theme: locate *candidate surviving copies* of a hash so the caller can physically re-verify
 /// them, and drop presence rows BY EXACT PATH so a shared hash's other placements are never touched.
 extension Catalog {
+    /// Every (hash, relPath) instance in one vault — the raw material for building the reconcile
+    /// DESIRED set (each local placement maps to a drive path).
+    public func instanceHashPaths(vaultID: String) throws -> [(hash: String, relPath: String)] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT hash, relPath FROM instances WHERE vaultID = ?", arguments: [vaultID])
+                .map { (hash: $0["hash"], relPath: $0["relPath"]) }
+        }
+    }
+
     /// Local relPaths holding `hash` in one (local) vault — candidate survivors on the Mac to verify
     /// by re-hashing the actual file.
     public func instanceRelPaths(vaultID: String, hash: String) throws -> [String] {
