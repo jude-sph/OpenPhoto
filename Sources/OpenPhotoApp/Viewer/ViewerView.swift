@@ -63,7 +63,17 @@ struct ViewerView: View {
         // (not the AVPlayerView) holds focus initially, so Space "donks" until you click the player.
         .onKeyPress(.space) {
             guard !state.isEditingText, let player else { return .ignored }
-            if player.rate == 0 { player.play() } else { player.pause() }
+            if player.rate == 0 {
+                // A finished video parks at the end with rate 0, where play() would no-op — so replay
+                // from the start. Otherwise (paused mid-video, or freshly opened) just resume.
+                if let item = player.currentItem, item.duration.isNumeric, item.duration.seconds > 0,
+                   player.currentTime().seconds >= item.duration.seconds - 0.25 {
+                    player.seek(to: .zero)
+                }
+                player.play()
+            } else {
+                player.pause()
+            }
             return .handled
         }
         .onKeyPress(.deleteForward) { if state.isEditingText { return .ignored }; deleteCurrent(); return .handled }
