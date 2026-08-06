@@ -983,7 +983,7 @@ struct FacePhotoTile: View {
             badges: { confidenceBadge },
             onTap: onTap
         )
-        .modifier(FaceTileMenu(face: face, allPeople: allPeople,
+        .modifier(FaceTileMenu(state: state, item: item, face: face, allPeople: allPeople,
                                onReassign: onReassign, onUseAsThumbnail: onUseAsThumbnail))
     }
 
@@ -1003,16 +1003,22 @@ struct FacePhotoTile: View {
     }
 }
 
-/// Adds the per-face management context menu only in the person grid (onReassign set).
+/// The tile's context menu: Copy always (the whole photo, never the face crop — a person grid still
+/// shows real photos), plus the per-face management items in the person grid (onReassign set).
 private struct FaceTileMenu: ViewModifier {
+    let state: AppState
+    let item: TimelineItem
     let face: FaceRow
     let allPeople: [PersonRow]
     let onReassign: ((PersonRow?) -> Void)?
     let onUseAsThumbnail: (() -> Void)?
 
     @ViewBuilder func body(content: Content) -> some View {
-        if let onReassign {
-            content.contextMenu {
+        content.contextMenu {
+            // Selection here is face-centric, so Copy always acts on the right-clicked photo alone.
+            CopyMenuButton(state: state, items: [item])
+            if let onReassign {
+                Divider()
                 if let onUseAsThumbnail {
                     Button { onUseAsThumbnail() } label: {
                         Label("Use as Thumbnail", systemImage: "person.crop.circle")
@@ -1030,8 +1036,6 @@ private struct FaceTileMenu: ViewModifier {
                     Label("Remove from person", systemImage: "person.badge.minus")
                 }
             }
-        } else {
-            content
         }
     }
 }

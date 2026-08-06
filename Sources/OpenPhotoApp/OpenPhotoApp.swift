@@ -101,6 +101,10 @@ struct RootView: View {
                 if state.openedItem != nil {
                     ViewerView(state: state)   // full-window overlay
                 }
+                // One window-wide ⌘C for every surface (see CopyToClipboard.swift). Mounted once at
+                // the root rather than per grid, so the shortcut is never registered twice — the
+                // viewer overlays the grids rather than replacing them.
+                CopyKeyCommand(state: state)
             }
             // Stack the traffic lights vertically when the sidebar is collapsed so they fit the
             // narrow 38px strip; keep them horizontal when it's shown OR when the full-window viewer

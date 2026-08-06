@@ -52,6 +52,8 @@ struct SearchView: View {
             }
             resultGrid
         }
+        .copyTargets(selectMode ? selectedItems : [], owner: "search", state: state,
+                     changeKey: SelectionKey(selectMode: selectMode, selected: selection.selected))
         .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
@@ -268,6 +270,9 @@ struct SearchView: View {
                                 }
                             }
                         )
+                        .copyContextMenu(state: state,
+                                         items: selectMode && selection.contains(item.hash)
+                                             ? selectedItems : [item])
                     }
                 }
                 .padding(Theme.gridGap)

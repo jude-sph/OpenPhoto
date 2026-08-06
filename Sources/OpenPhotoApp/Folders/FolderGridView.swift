@@ -29,6 +29,8 @@ struct FolderGridView: View {
             Divider().overlay(Theme.hairline)
             content
         }
+        .copyTargets(selectMode ? selectedItems : [], owner: "folders", state: state,
+                     changeKey: SelectionKey(selectMode: selectMode, selected: selection.selected))
         .task(id: state.selectedFolder) {
             selection.clear(); selectMode = false; dragToMove = false       // leaving a folder ends select mode
             reload()
@@ -140,7 +142,14 @@ struct FolderGridView: View {
                     }
                 })
             .equatable()
+            .copyContextMenu(state: state, items: copyTargets(for: item))
         }
+    }
+
+    /// Right-clicking a tile inside the selection copies the whole selection; anywhere else, just
+    /// that tile.
+    private func copyTargets(for item: TimelineItem) -> [TimelineItem] {
+        selectMode && selection.contains(item.instanceID) ? selectedItems : [item]
     }
 
     private func reload() {

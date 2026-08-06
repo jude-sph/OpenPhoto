@@ -23,6 +23,8 @@ struct AlbumGridView: View {
         }
         .task(id: state.selectedAlbumID) { selection.clear(); selectMode = false; reload() }
         .task(id: state.refreshToken) { reload() }
+        .copyTargets(selectMode ? selectedItems : [], owner: "albums", state: state,
+                     changeKey: SelectionKey(selectMode: selectMode, selected: selection.selected))
     }
 
     private func reload() {
@@ -160,6 +162,10 @@ struct AlbumGridView: View {
                     }
                 })
             .contextMenu {
+                CopyMenuButton(state: state,
+                               items: selectMode && selection.contains(item.instanceID)
+                                   ? selectedItems : [item])
+                Divider()
                 Button("Set as Album Cover", systemImage: "photo") {
                     if let id = state.selectedAlbumID { state.setAlbumCover(id: id, hash: item.hash) }
                 }

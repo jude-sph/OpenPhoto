@@ -65,6 +65,10 @@ final class AppState {
     /// True while a text field in the Inspector (caption / tag) is focused — the Viewer's key
     /// shortcuts (i, arrows, Delete) check this and yield, so typing doesn't navigate/delete/toggle.
     var isEditingText = false
+    /// ⌘C targets published by the on-screen grid, with the surface that owns them (see
+    /// CopyToClipboard.swift — use `publishCopyTargets`/`clearCopyTargets`, not these directly).
+    var copyTargetsStorage: [TimelineItem] = []
+    var copyTargetsOwner: String?
     // One shared grid-size value across Timeline + Folders, persisted across launches.
     var gridMinSize: CGFloat = {
         let v = UserDefaults.standard.double(forKey: "gridMinSize")

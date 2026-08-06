@@ -308,6 +308,7 @@ struct MapView: View {
                                     state.openViewer(item, within: sheetItems)
                                 }
                             )
+                            .copyContextMenu(state: state, items: [item])   // no selection in this sheet
                         }
                     }
                     .padding(Theme.gridGap)

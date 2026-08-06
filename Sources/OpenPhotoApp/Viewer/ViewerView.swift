@@ -469,4 +469,24 @@ final class ZoomPanLayerView: NSView {
         pan = .zero
         relayout()
     }
+
+    // Right-click the photo → "Copy Image". Self-contained in AppKit (the view already owns the
+    // decoded full-res CGImage), so it works regardless of SwiftUI's context-menu quirks over an
+    // NSViewRepresentable.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard currentImage != nil else { return nil }
+        let menu = NSMenu()
+        let copyItem = NSMenuItem(title: "Copy Image",
+                                  action: #selector(copyImage(_:)), keyEquivalent: "")
+        copyItem.target = self
+        menu.addItem(copyItem)
+        return menu
+    }
+
+    @objc private func copyImage(_ sender: Any?) {
+        guard let cg = currentImage else { return }
+        // The displayed CGImage is already the full-res decode with any display-rotation baked in,
+        // so the pasted image is full-resolution and upright. Same writer ⌘C uses.
+        ImageClipboard.copyDecoded(cg)
+    }
 }

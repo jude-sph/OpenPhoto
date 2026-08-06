@@ -76,3 +76,16 @@ against the shipped UI — listed above for a final pass.
 - [ ] **No second "Open Anyway" after update.** After the Sparkle-installed update relaunches, macOS must not show a Gatekeeper warning. (Sparkle strips the quarantine attribute from updates it installs.)
 - [ ] **"Check for Updates…" works on demand.** When already on the latest version, the item opens Sparkle's dialog reporting that the app is up to date.
 - [ ] **Tampered archive rejected.** Modify a byte in a `.zip` release archive (locally) and point a test appcast at it. Confirm Sparkle refuses to install it with a signature error rather than silently installing the corrupt file.
+
+## Copy to clipboard
+
+- [ ] **Right-click a grid tile → Copy Image.** In the timeline, right-click a photo and choose **Copy Image**; paste into Preview (⌘N) or a chat app. The pasted image is the full resolution shown in the Inspector's Dimensions row — not a thumbnail.
+- [ ] **Rotated photo pastes upright.** Rotate a photo in the Inspector, then copy it from the grid. The pasted image carries the rotation.
+- [ ] **Viewer right-click.** Open a photo and right-click it in the viewer → **Copy Image**. Same result, instantly (no re-decode).
+- [ ] **⌘C in the viewer.** With a photo open, press ⌘C and paste. Works without clicking the photo first.
+- [ ] **⌘C on a grid selection.** Enter Select, choose 3 photos, press ⌘C. All three land on the clipboard (paste into Finder/Keynote to see more than one).
+- [ ] **⌘C still copies text.** Type in the Inspector's caption field, select some text, press ⌘C, paste. The text copies — the photo shortcut yields to the field.
+- [ ] **Video → Copy File.** Right-click a video: the item reads **Copy File**. Paste into a Finder window; the video file is pasted.
+- [ ] **Large selection falls back to files.** Select more than 12 photos and right-click one: the menu reads **Copy N Files**, not "Images". Paste into Finder → the files appear (and memory doesn't spike).
+- [ ] **Drive-only with drive ejected.** Right-click a photo that lives only on an ejected drive: Copy is greyed out rather than silently doing nothing.
+- [ ] **Menus in other grids.** Confirm Copy appears in Folders, Albums (above Set as Album Cover), Search, Map's cluster sheet, and a person's photo grid.

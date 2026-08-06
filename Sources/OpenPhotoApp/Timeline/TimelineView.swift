@@ -32,6 +32,8 @@ struct TimelineView: View {
             VideosOnlyBanner(state: state)
             grid
         }
+        .copyTargets(selectMode ? selectedItems : [], owner: "timeline", state: state,
+                     changeKey: SelectionKey(selectMode: selectMode, selected: selection.selected))
         .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
@@ -126,7 +128,14 @@ struct TimelineView: View {
                     }
                 })
             .equatable()
+            .copyContextMenu(state: state, items: copyTargets(for: item))
         }
+    }
+
+    /// Right-clicking a tile inside the selection copies the whole selection; anywhere else, just
+    /// that tile.
+    private func copyTargets(for item: TimelineItem) -> [TimelineItem] {
+        selectMode && selection.contains(item.hash) ? selectedItems : [item]
     }
 
     @ViewBuilder private func sectionHeader(_ section: TimelineSection) -> some View {
