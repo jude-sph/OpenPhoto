@@ -252,6 +252,14 @@ struct InspectorView: View {
                             .font(.system(size: 11).monospacedDigit())
                             .foregroundStyle(Theme.textFaint)
                         Spacer()
+                        // Share the file itself (same system share sheet as the multi-select bar).
+                        // Uses fullResURL so it resolves a connected-drive copy too, matching Reveal.
+                        if let url = state.fullResURL(for: item) {
+                            ShareLink(item: url) {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }
+                            .controlSize(.small)
+                        }
                         Button("Reveal in Finder") {
                             if let url = state.fullResURL(for: item) {
                                 NSWorkspace.shared.activateFileViewerSelecting([url])
