@@ -52,8 +52,10 @@ echo "Using generate_appcast: $GENAPPCAST"
 #     bundle per processed version to diff against; over many releases that reached 15 GB. Keep the
 #     few most-recently-used (enough for deltas between recent versions) and drop the rest — purely
 #     regenerable, worst case a pruned version just gets a full-file update instead of a binary delta.
+#     Each entry is ~365 MB, so KEEP is what actually sets the ceiling: 2 keeps one delta path
+#     (previous -> current, the only one users take) and caps the cache at ~730 MB.
 CACHE="$HOME/Library/Caches/Sparkle_generate_appcast"
-KEEP=3
+KEEP=2
 if [[ -d "$CACHE" ]]; then
   before="$(du -sh "$CACHE" 2>/dev/null | cut -f1)"
   find "$CACHE" -mindepth 1 -maxdepth 1 -type d -print0 \
@@ -66,6 +68,17 @@ fi
 gh release create "$TAG" \
   "$RELDIR/OpenPhoto-${VERSION}.zip" "build/OpenPhoto-${VERSION}.dmg" \
   --title "OpenPhoto ${VERSION}" --notes "OpenPhoto ${VERSION}"
+
+# 3b. Prune old DMGs. make-dmg.sh only clears the SAME version's file, so each release used to leave
+#     another ~310 MB behind forever. Runs after the upload above, so the current version's DMG is
+#     already on the GitHub Release before anything local is deleted — every pruned file stays
+#     downloadable from its release page. RELDIR needs no equivalent: step 1 wipes it each run.
+KEEP_DMG=2
+before_dmg="$(du -sh build 2>/dev/null | cut -f1)"
+find build -mindepth 1 -maxdepth 1 -type f -name 'OpenPhoto-*.dmg' -print0 \
+  | xargs -0 stat -f '%m %N' 2>/dev/null | sort -rn | tail -n +$((KEEP_DMG + 1)) \
+  | cut -d' ' -f2- | while IFS= read -r f; do rm -f "$f"; done
+echo "Pruned old DMGs (kept ${KEEP_DMG} newest): ${before_dmg:-?} -> $(du -sh build 2>/dev/null | cut -f1)"
 
 # 4. Publish appcast.xml to the gh-pages branch (served at the SUFeedURL). Done in a throwaway clone
 #    so it's portable across git versions (avoids `git worktree add --orphan`, which needs git ≥ 2.42)

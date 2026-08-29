@@ -148,10 +148,11 @@ The script does the following in order:
 1. **Reads `VERSION`** to derive the release tag (e.g., `v0.1.1`).
 2. **Calls `make-dmg.sh`**, which calls `make-app.sh` (builds the release binary, injects the version + build number + Sparkle keys into `Info.plist`, builds the multi-size icon, embeds `Sparkle.framework`, ad-hoc signs the bundle), then packages it as `build/OpenPhoto-<version>.dmg`.
 3. **Zips the `.app`** with `ditto` into `build/release-archives/OpenPhoto-<version>.zip` — this is what Sparkle downloads and installs.
-4. **Copies the DMG** into `build/release-archives/`.
-5. **Runs `generate_appcast`** over the `build/release-archives/` folder. `generate_appcast` reads the EdDSA private key from your Keychain, signs each archive, and writes `appcast.xml` into `build/release-archives/`. The `--download-url-prefix` flag points the URLs at the GitHub Releases asset links.
+4. **Runs `generate_appcast`** over the `build/release-archives/` folder — which holds the `.zip` only. The DMG is deliberately kept out: it's a human download, not a Sparkle update channel, so excluding it leaves the feed with one clean enclosure. `generate_appcast` reads the EdDSA private key from your Keychain, signs the archive, and writes `appcast.xml` into `build/release-archives/`. The `--download-url-prefix` flag points the URLs at the GitHub Releases asset links.
+5. **Prunes the `generate_appcast` delta cache** (`~/Library/Caches/Sparkle_generate_appcast`) to the 2 most recently used entries. It extracts a full ~365 MB app bundle per processed version to diff against, so this is what keeps it from ballooning — it once reached 15 GB. Purely regenerable: worst case a pruned version gets a full-file update instead of a binary delta.
 6. **Creates a GitHub Release** (`gh release create`) named `v<VERSION>`, uploading both the `.zip` and the `.dmg` as release assets.
-7. **Publishes `appcast.xml`** to the `gh-pages` branch via a temporary `git worktree`, then pushes it to `origin`. This is the file that running apps download to check for updates.
+7. **Prunes old local DMGs** in `build/` to the 2 newest (~310 MB each). Runs *after* the upload, so every pruned file is already downloadable from its release page. `build/release-archives/` needs no equivalent — step 3 wipes it on each run.
+8. **Publishes `appcast.xml`** to the `gh-pages` branch via a throwaway `git clone` into a temp dir (portable across git versions, and it never disturbs your checkout), then pushes it to `origin`. This is the file that running apps download to check for updates.
 
 ### Universal binary (Intel + Apple Silicon)
 
