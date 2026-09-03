@@ -11,10 +11,18 @@ private func date(year: Int, month: Int = 6, day: Int = 1) -> Date {
 
 @Test func plausibleYearsBracketRealCaptureDates() {
     #expect(CaptureDate.isPlausible(date(year: 2016)))
-    #expect(CaptureDate.isPlausible(date(year: 1990)))
     #expect(CaptureDate.isPlausible(date(year: 2099)))
-    #expect(!CaptureDate.isPlausible(date(year: 1989)))
     #expect(!CaptureDate.isPlausible(date(year: 2100)))
+}
+
+// A scanned family photo carries a real archive date and MUST survive — rejecting it would replace
+// history with the scan's mtime. Consumer digital video has no such excuse: a 1947 .mp4 is a broken
+// clock, and the library holds 8 of exactly that.
+@Test func archivePhotoDatesSurviveButOldVideoDatesDoNot() {
+    #expect(CaptureDate.isPlausible(date(year: 1947), kind: .photo))
+    #expect(CaptureDate.isPlausible(date(year: 1900), kind: .photo))
+    #expect(!CaptureDate.isPlausible(date(year: 1947), kind: .video))
+    #expect(!CaptureDate.isPlausible(date(year: 1825), kind: .photo))   // predates photography
 }
 
 // The two real-world failures: QuickTime creation dates read out of the .mp4 headers as years
@@ -49,5 +57,6 @@ private func date(year: Int, month: Int = 6, day: Int = 1) -> Date {
 @Test func fromEpochRejectsValuesImplausibleUnderEitherUnit() {
     // 6714466205584 is one of the real corrupt values: year 214742 as seconds, 2182 as millis.
     #expect(CaptureDate.fromEpoch(6714466205584) == nil)
-    #expect(CaptureDate.fromEpoch(0) == nil)                                 // 1970, pre-digital
+    // Far future under both readings.
+    #expect(CaptureDate.fromEpoch(999999999999999) == nil)
 }

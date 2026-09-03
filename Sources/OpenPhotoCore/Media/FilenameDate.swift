@@ -20,9 +20,10 @@ public enum FilenameDate {
                 guard r.location != NSNotFound else { return nil }
                 return Int(ns.substring(with: r))
             }
+            // Tighter than CaptureDate's floor on purpose: this is pattern-matching digit runs in a
+            // name, where an old-looking year is far likelier to be a sequence id than a real stamp.
             guard let y = grp("y"), let mo = grp("mo"), let d = grp("d"),
-                  CaptureDate.plausibleYears.contains(y),
-                  (1...12).contains(mo), (1...31).contains(d)
+                  (1990...2099).contains(y), (1...12).contains(mo), (1...31).contains(d)
             else { continue }
             var c = DateComponents()
             c.year = y; c.month = mo; c.day = d

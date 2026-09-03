@@ -30,7 +30,7 @@ public enum MetadataExtractor {
         // milliseconds written into QuickTime's seconds-wide creation field). Reject those here, in
         // the one place both paths meet, so the provisional stands: a filename stamp, already
         // range-validated, else the mtime.
-        m.takenAt = CaptureDate.resolve(embedded: m.takenAt, provisional: provisional)
+        m.takenAt = CaptureDate.resolve(embedded: m.takenAt, provisional: provisional, kind: kind)
         return m
     }
 
