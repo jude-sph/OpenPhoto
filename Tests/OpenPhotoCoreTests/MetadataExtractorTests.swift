@@ -73,6 +73,29 @@ func makeMOV(at url: URL) async throws {
     #expect(comps.year == 2022 && comps.month == 10 && comps.day == 7)
 }
 
+// A file can carry an embedded capture date that parses cleanly but is thousands of years out (a
+// dead camera clock, or milliseconds written into QuickTime's seconds-wide creation field). It must
+// not win over the filename stamp — two real .mp4s landed the timeline in years 51562 and 214742.
+@Test func implausibleEmbeddedDateLosesToTheFilenameStamp() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let url = t.root.appendingPathComponent("VID_20161119_193754.jpg")
+    try makeJPEG(at: url, dateTimeOriginal: "2778:10:07 16:11:10", lat: nil, lon: nil)
+    let m = await MetadataExtractor.extract(from: url, kind: .photo)
+    let c = Calendar.current.dateComponents([.year, .month, .day], from: m.takenAt)
+    #expect((c.year, c.month, c.day) == (2016, 11, 19))
+}
+
+// …and with no filename stamp either, it falls back to the file's mtime rather than keeping the
+// absurd embedded date. (The other real file, VID_27781007_161110.mp4, whose name parses to nothing.)
+@Test func implausibleEmbeddedDateWithNoFilenameStampFallsBackToMtime() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let url = t.root.appendingPathComponent("VID_27781007_161110.jpg")
+    try makeJPEG(at: url, dateTimeOriginal: "2778:10:07 16:11:10", lat: nil, lon: nil)
+    let m = await MetadataExtractor.extract(from: url, kind: .photo)
+    let mtime = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as! Date
+    #expect(abs(m.takenAt.timeIntervalSince(mtime)) < 2)
+}
+
 @Test func fallsBackToFileMtimeWhenNoExif() async throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let url = t.root.appendingPathComponent("noexif.jpg")

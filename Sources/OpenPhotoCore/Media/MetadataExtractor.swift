@@ -19,11 +19,18 @@ public enum MetadataExtractor {
         // names like 20190101_000146.mp4 carry the real time, and a copy/move resets the file's
         // mtime), else the file's modified date. Embedded EXIF/QuickTime dates below override this
         // whenever the file actually carries one.
-        var m = MediaMetadata(takenAt: FilenameDate.parse(url.lastPathComponent) ?? mtime)
+        let provisional = FilenameDate.parse(url.lastPathComponent) ?? mtime
+        var m = MediaMetadata(takenAt: provisional)
         switch kind {
         case .photo: extractImage(url, into: &m)
         case .video: await extractVideo(url, into: &m)
         }
+        // Both paths above replace takenAt whenever the file carries an embedded date — and a file
+        // can carry one that parses cleanly yet is thousands of years out (a dead camera clock, or
+        // milliseconds written into QuickTime's seconds-wide creation field). Reject those here, in
+        // the one place both paths meet, so the provisional stands: a filename stamp, already
+        // range-validated, else the mtime.
+        m.takenAt = CaptureDate.resolve(embedded: m.takenAt, provisional: provisional)
         return m
     }
 

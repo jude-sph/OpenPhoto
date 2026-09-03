@@ -21,7 +21,8 @@ public enum FilenameDate {
                 return Int(ns.substring(with: r))
             }
             guard let y = grp("y"), let mo = grp("mo"), let d = grp("d"),
-                  (1990...2099).contains(y), (1...12).contains(mo), (1...31).contains(d)
+                  CaptureDate.plausibleYears.contains(y),
+                  (1...12).contains(mo), (1...31).contains(d)
             else { continue }
             var c = DateComponents()
             c.year = y; c.month = mo; c.day = d

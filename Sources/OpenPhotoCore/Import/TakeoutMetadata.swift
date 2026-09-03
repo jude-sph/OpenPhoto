@@ -14,9 +14,13 @@ public struct TakeoutMetadata: Sendable, Equatable {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
 
         var takenAt: Date?
+        // Google documents this as epoch SECONDS, but some exports emit MILLISECONDS — and read as
+        // seconds a millisecond value lands tens of thousands of years out. CaptureDate picks the
+        // unit by magnitude and rejects a timestamp implausible either way, leaving takenAt nil so
+        // the caller keeps whatever date it already had.
         if let pt = obj["photoTakenTime"] as? [String: Any],
-           let ts = pt["timestamp"] as? String, let secs = TimeInterval(ts) {
-            takenAt = Date(timeIntervalSince1970: secs)
+           let ts = pt["timestamp"] as? String, let raw = TimeInterval(ts) {
+            takenAt = CaptureDate.fromEpoch(raw)
         }
 
         var lat: Double?, lon: Double?
