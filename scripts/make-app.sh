@@ -129,6 +129,18 @@ else
   echo "note: $MODELS_SRC absent — shipping without semantic-search models (search degrades)"
 fi
 
+# Third-party notices. MIT/BSD components OpenPhoto bundles (GRDB, Sparkle and its BSD parts, the
+# CLIP vocab) require their licence text to travel with the binary, so this is a compliance
+# artefact, not documentation — hard-fail rather than ship a build whose Settings → About shows
+# nothing. Regenerate with scripts/gen-notices.sh after any dependency change.
+if [[ -f THIRD-PARTY-NOTICES.md ]]; then
+  cp THIRD-PARTY-NOTICES.md "$APP/Contents/Resources/"
+  echo "Injected THIRD-PARTY-NOTICES.md into $APP/Contents/Resources/"
+else
+  echo "error: THIRD-PARTY-NOTICES.md missing — run ./scripts/gen-notices.sh" >&2
+  exit 1
+fi
+
 # AdaFace face model (committed at Sources/OpenPhotoCore/Resources/). FaceEmbedder loads it from the
 # app bundle's Contents/Resources at runtime. We place it here rather than relying on the SwiftPM
 # `Bundle.module` resource bundle (which a hand-assembled .app does NOT carry) — that generated

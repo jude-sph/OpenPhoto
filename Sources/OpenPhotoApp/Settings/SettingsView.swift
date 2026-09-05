@@ -6,6 +6,7 @@ import OpenPhotoCore
 struct SettingsView: View {
     @Bindable var state: AppState
     @State private var libStats: (count: Int, bytes: Int64)?
+    @State private var showNotices = false
 
     var body: some View {
         TabView {
@@ -137,9 +138,47 @@ struct SettingsView: View {
             Link("Place data © GeoNames (geonames.org), CC BY 4.0.",
                  destination: URL(string: "https://www.geonames.org")!)
                 .font(.system(size: 12))
+            Spacer().frame(height: 4)
+            Button("Third-Party Notices\u{2026}") { showNotices = true }
+                .controlSize(.small)
         }
         .multilineTextAlignment(.center)
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showNotices) { ThirdPartyNoticesSheet() }
+    }
+}
+
+/// The bundled THIRD-PARTY-NOTICES.md, verbatim. Several of the licences OpenPhoto ships under
+/// (MIT, BSD) require their text to travel with the binary, so this is a compliance surface, not a
+/// nicety — it must show the real file rather than a summary.
+struct ThirdPartyNoticesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Third-Party Notices").font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+            .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
+            Divider().overlay(Theme.hairline)
+            ScrollView {
+                Text(text ?? "Notices file is missing from this build.")
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
+        }
+        .frame(width: 680, height: 520)
+        .background(Theme.bg2)
+        .task {
+            guard let url = Bundle.main.url(forResource: "THIRD-PARTY-NOTICES", withExtension: "md")
+            else { return }
+            text = try? String(contentsOf: url, encoding: .utf8)
+        }
     }
 }
