@@ -98,9 +98,9 @@ carry no stated licence in the upstream repository, and were trained on datasets
 (MS1MV2 and related) with their own restrictions. Absence of stated terms is not
 a grant.
 
-> **Public builds do not ship these weights** (`OPENPHOTO_PUBLIC=1`). Face
-> detection still runs; recognition and grouping report as unavailable. Only
-> local builds carry them.
+> These weights ship in every build. Face recognition and grouping depend on
+> them, and the absent-terms question is a known, accepted risk rather than an
+> oversight. See `docs/model-licensing.md`.
 
 ```
 C

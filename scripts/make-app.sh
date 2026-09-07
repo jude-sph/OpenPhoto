@@ -158,17 +158,12 @@ fi
 # accessor calls fatalError when its bundle is absent, which hard-crashes the packaged app the first
 # time face derivation runs. REQUIRED: refuse to ship a face-less, crash-prone build.
 #
-# OPENPHOTO_PUBLIC=1 omits it. The AdaFace source is MIT, but its pretrained WEIGHTS carry no
-# stated licence at all (see docs/model-licensing.md), and absence of terms is not a grant — so a
-# build intended for anyone else must not carry them. Face detection still runs; only recognition
-# and grouping go unavailable, which MLAvailability already reports and MLUnavailableBanner already
-# surfaces. Local builds are unaffected: leave the variable unset.
+# Ships in EVERY build, public included. The AdaFace source is MIT but its pretrained weights carry
+# no stated licence (docs/model-licensing.md), so this is a known, deliberately accepted risk rather
+# than an oversight: face recognition and grouping are core to the app and are not worth dropping
+# over an absent-terms question. Revisit if a permissively-licensed face embedder appears.
 ADAFACE_SRC="Sources/OpenPhotoCore/Resources/AdaFaceIR101.mlpackage"
-if [[ "${OPENPHOTO_PUBLIC:-0}" == "1" ]]; then
-  echo "PUBLIC build: omitting AdaFace weights (unlicensed for redistribution)"
-  # SwiftPM also embeds it via Bundle.module, so clear that copy too or it ships regardless.
-  find "$APP/Contents" -name 'AdaFaceIR101.mlpackage' -maxdepth 4 -exec rm -rf {} + 2>/dev/null || true
-elif [[ -d "$ADAFACE_SRC" ]]; then
+if [[ -d "$ADAFACE_SRC" ]]; then
   cp -R "$ADAFACE_SRC" "$APP/Contents/Resources/"
   echo "Injected AdaFace face model into $APP/Contents/Resources/"
 else

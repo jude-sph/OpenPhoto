@@ -14,7 +14,7 @@ whose terms have ever constrained what can be shared.
 | CLIP tokenizer vocabulary | MIT | Yes — notice required |
 | GeoNames place data | CC BY 4.0 | Yes — attribution in Settings → About |
 | OpenCLIP ViT-B/32 weights | MIT | **Yes** |
-| AdaFace weights | None stated | **No — omitted** |
+| AdaFace weights | None stated | **Yes — accepted risk** |
 | MobileCLIP weights | Apple ML Research Model License | **No — removed** |
 
 ## Semantic search: MobileCLIP → OpenCLIP ViT-B/32
@@ -69,10 +69,13 @@ licence**, and were trained on MS1MV2 and related datasets with their own
 restrictions — MS1MV2 derives from MS-Celeb-1M, which Microsoft withdrew in 2019.
 Silence is not a grant.
 
-Public builds therefore omit the weights (`OPENPHOTO_PUBLIC=1` in
-`scripts/make-app.sh`). Face *detection* still runs; recognition and grouping
-report as unavailable through the existing `MLAvailability` path. Local builds
-are unaffected.
+These weights ship in every build. Face recognition and grouping are core to
+the app, and dropping them was judged not worth it over a question of absent
+rather than restrictive terms. This is a deliberate, accepted risk — recorded
+here so it stays a decision rather than drifting into an assumption.
+
+(1.5.1 briefly shipped without them. That was a unilateral call made while
+resolving the MobileCLIP licence and was reverted in 1.5.2.)
 
 Resolving this properly would need either a permissively-licensed face-embedding
 model, or a first-run download from the authors' own distribution — defensible
@@ -81,8 +84,9 @@ restrictive.
 
 ## Distribution status
 
-A build produced with `OPENPHOTO_PUBLIC=1` contains no component whose licence
-forbids redistribution. Two obligations still travel with it:
+Everything shipped is redistributable except the AdaFace weights, whose terms
+are simply unstated — an accepted risk, above. Two obligations travel with any
+build:
 
 1. `THIRD-PARTY-NOTICES.md` must ship in the bundle — `make-app.sh` hard-fails
    without it.
