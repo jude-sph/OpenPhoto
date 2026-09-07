@@ -40,21 +40,21 @@ import Foundation
 
 @Test func semanticSearchUnavailableIfEitherModelFails() {
     // Image failed, text not yet tried → loud unavailable wins.
-    let m: [String: MLStatus] = [MLModelKey.mobileclipImage: .unavailable("boom"),
-                                 MLModelKey.mobileclipText: .unknown]
+    let m: [String: MLStatus] = [MLModelKey.clipImage: .unavailable("boom"),
+                                 MLModelKey.clipText: .unknown]
     if case .unavailable = mlCapabilityStatus(.semanticSearch, from: m) {} else {
         Issue.record("expected .unavailable when the image model fails")
     }
     // Both available → available.
     #expect(mlCapabilityStatus(.semanticSearch,
-        from: [MLModelKey.mobileclipImage: .available,
-               MLModelKey.mobileclipText: .available]) == .available)
+        from: [MLModelKey.clipImage: .available,
+               MLModelKey.clipText: .available]) == .available)
 }
 
 @Test func semanticSearchAbsentWhenOneModelAbsentRestAvailable() {
     #expect(mlCapabilityStatus(.semanticSearch,
-        from: [MLModelKey.mobileclipImage: .absent,
-               MLModelKey.mobileclipText: .available]) == .absent)
+        from: [MLModelKey.clipImage: .absent,
+               MLModelKey.clipText: .available]) == .absent)
 }
 
 @Test func embedStageReportsAbsentWhenModelMissing() throws {
@@ -66,7 +66,7 @@ import Foundation
     let reg = MLAvailability()
     let stage = EmbedStage(modelDirectory: tmp, availability: reg)
     #expect(stage.embedImage(at: tmp.appendingPathComponent("nope.jpg")) == nil)
-    #expect(reg.status(model: MLModelKey.mobileclipImage) == .absent)
+    #expect(reg.status(model: MLModelKey.clipImage) == .absent)
 }
 
 @Test func embedStageReportsUnavailableWhenModelBroken() throws {
@@ -77,12 +77,12 @@ import Foundation
     // A present-but-invalid model package: a plain file where a .mlpackage dir is expected makes
     // MLModel.compileModel throw → loud .unavailable (distinct from the .absent file-missing case).
     try Data("not a real model".utf8)
-        .write(to: tmp.appendingPathComponent("mobileclip_s2_image.mlpackage"))
+        .write(to: tmp.appendingPathComponent("openclip_b32_image.mlpackage"))
 
     let reg = MLAvailability()
     let stage = EmbedStage(modelDirectory: tmp, availability: reg)
     #expect(stage.embedImage(at: tmp.appendingPathComponent("nope.jpg")) == nil)
-    if case .unavailable = reg.status(model: MLModelKey.mobileclipImage) {} else {
+    if case .unavailable = reg.status(model: MLModelKey.clipImage) {} else {
         Issue.record("expected .unavailable for a present-but-broken model")
     }
 }

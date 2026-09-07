@@ -1,82 +1,102 @@
 # Model licensing — current position
 
-OpenPhoto bundles two machine-learning models. Their licences are the only thing
-standing between the current build and being freely shareable, so this document
-records exactly where each one stands and what the options are. Update it when
-the position changes.
-
-Licence texts and attributions for everything OpenPhoto ships live in
-`THIRD-PARTY-NOTICES.md` (regenerate with `scripts/gen-notices.sh`).
+OpenPhoto's third-party licence texts live in `THIRD-PARTY-NOTICES.md`
+(regenerate with `scripts/gen-notices.sh`). This document records the position on
+the machine-learning models specifically, because they are the only components
+whose terms have ever constrained what can be shared.
 
 ## Summary
 
-| Component | Licence | Redistributable in a shared build? |
+| Component | Licence | In a public build? |
 |---|---|---|
 | GRDB.swift | MIT | Yes — notice required |
 | Sparkle (+ bsdiff, sais-lite, Ed25519) | MIT + BSD | Yes — notices required |
 | CLIP tokenizer vocabulary | MIT | Yes — notice required |
-| GeoNames place data | CC BY 4.0 | Yes — attribution required, already in Settings → About |
-| **MobileCLIP weights** | Apple ML Research Model License | **No** |
-| **AdaFace weights** | None stated | **Unclear** |
+| GeoNames place data | CC BY 4.0 | Yes — attribution in Settings → About |
+| OpenCLIP ViT-B/32 weights | MIT | **Yes** |
+| AdaFace weights | None stated | **No — omitted** |
+| MobileCLIP weights | Apple ML Research Model License | **No — removed** |
 
-## MobileCLIP — the blocker
+## Semantic search: MobileCLIP → OpenCLIP ViT-B/32
 
-Semantic search uses `mobileclip_s2`, fetched from Apple's Core ML export at
-<https://huggingface.co/apple/coreml-mobileclip>.
+Semantic search previously used `mobileclip_s2` from Apple's Core ML export. That
+model card is labelled `apple-ascl`, suggesting the permissive Apple Sample Code
+License, but the label is misleading: its `license_link` points at
+`LICENSE_weights_data` in <https://github.com/apple/ml-mobileclip>, **a file that
+does not exist there**. The document actually governing the weights is
+`LICENSE_MODELS` — the Apple Machine Learning Research Model License, limited to
+non-commercial scientific research and academic development, explicitly excluding
+product use.
 
-That model card is labelled `apple-ascl`, which reads as the permissive Apple
-Sample Code License — but the label is misleading. Its `license_link` points at
-`LICENSE_weights_data` in <https://github.com/apple/ml-mobileclip>, **and that
-file does not exist**; the repository contains only `LICENSE`, `LICENSE_DATA`,
-`LICENSE_MODELS` and `ACKNOWLEDGEMENTS`. The document that actually governs the
-weights is `LICENSE_MODELS`: the Apple Machine Learning Research Model License,
-which limits use to non-commercial scientific research and academic development
-and explicitly excludes product development or use in any product.
+Bundling those weights in a build handed to someone else is outside that licence.
+So is a first-run download behind a click-to-agree screen: moving the download to
+the user changes who obtains the file, not what it is used for. Sorting family
+photos is not scientific research, whoever pressed Agree.
 
-Two consequences worth being precise about:
+The replacement is `laion/CLIP-ViT-B-32-laion2B-s34B-b79K` — **MIT**, so the
+weights are redistributable. It was chosen by measurement, not assumption:
+`tools/embed-bench/` compares candidates on this Mac for both retrieval quality
+and real ANE latency.
 
-1. **Bundling the weights in a build we hand to someone is outside that licence.**
-2. **So is a first-run download with a click-to-agree screen.** Moving the
-   download to the user changes who obtains the file, not what it is used for.
-   Sorting family photos is not scientific research, whoever pressed Agree.
-   Consent to terms is not the same as conforming to them.
+| Model | Licence | ms/image | Size | Full 19,473-photo pass |
+|---|---|---|---|---|
+| mobileclip_s2 | Research only | 2.48 | 68 MB | ~0.8 min |
+| **openclip_b32** | **MIT** | **6.10** | **168 MB** | **~2 min** |
+| openclip_l14 | MIT | 31.20 | 580 MB | ~10 min |
 
-The only change that resolves it is a differently-licensed model.
+The permissive option costs roughly 2.5x per image — under two minutes for a full
+re-embed — which is a cheap price for a redistributable build.
 
-## AdaFace — unclear rather than restricted
+SigLIP (Apache-2.0) was the intended third candidate and remains worth revisiting:
+its `MultiheadAttentionPoolingHead` fails Core ML conversion under both SDPA and
+eager attention. Its licence is fine; only the conversion is blocked.
 
-Face grouping uses AdaFace IR-101. The upstream source is MIT (reproduced in
-`THIRD-PARTY-NOTICES.md`), but the pretrained weights carry **no stated licence**,
-and were trained on MS1MV2 and related datasets that have their own restrictions —
-MS1MV2 derives from MS-Celeb-1M, which Microsoft withdrew in 2019.
+### Consequences of the swap
 
-Silence is not a grant. But because the terms are absent rather than
-restrictive, a first-run download from the authors' own distribution is far more
-defensible here than for MobileCLIP: the user obtains the file from the source on
-whatever terms the authors extend, and OpenPhoto redistributes nothing.
+`modelID` is stored per embedding row, so changing it from `mobileclip_s2` to
+`openclip_b32` invalidates every existing embedding. They are recomputed on the
+next derivation pass (~2 minutes for ~19k photos); semantic search is degraded
+until that completes. Nothing else is affected — embeddings are machine-derived
+catalog data, never authored metadata.
 
-## Options
+The tokenizer needed no change: laion's B/32 uses the same CLIP BPE vocabulary
+already shipped (49408 tokens, BOS 49406, EOS 49407, 77-token context).
 
-**A. First-run download instead of bundling.** Ship no weights; fetch on first
-launch with the licence shown and accepted. The build already tolerates missing
-models (`scripts/make-app.sh:116`, and `MLUnavailableBanner` covers the degraded
-state), and it cuts the DMG from ~311 MB to roughly 10 MB. This resolves AdaFace
-and GeoNames. **It does not resolve MobileCLIP** — see above.
+## Face recognition: AdaFace stays local
 
-**B. Replace MobileCLIP with a permissively-licensed encoder.** The only route to
-a genuinely shareable build with semantic search intact. Costs a re-embed of the
-whole library. Candidate evaluation: `tools/embed-bench/`.
+AdaFace IR-101's source is MIT, but its pretrained weights carry **no stated
+licence**, and were trained on MS1MV2 and related datasets with their own
+restrictions — MS1MV2 derives from MS-Celeb-1M, which Microsoft withdrew in 2019.
+Silence is not a grant.
 
-**C. Keep the app private.** Bundle whatever performs best and never distribute.
-Note that GitHub Releases are public: the 1.4.0 assets currently ship both models,
-so "private" would mean removing those assets too.
+Public builds therefore omit the weights (`OPENPHOTO_PUBLIC=1` in
+`scripts/make-app.sh`). Face *detection* still runs; recognition and grouping
+report as unavailable through the existing `MLAvailability` path. Local builds
+are unaffected.
 
-## Why this was not caught earlier
+Resolving this properly would need either a permissively-licensed face-embedding
+model, or a first-run download from the authors' own distribution — defensible
+here in a way it is not for MobileCLIP, because the terms are absent rather than
+restrictive.
+
+## Distribution status
+
+A build produced with `OPENPHOTO_PUBLIC=1` contains no component whose licence
+forbids redistribution. Two obligations still travel with it:
+
+1. `THIRD-PARTY-NOTICES.md` must ship in the bundle — `make-app.sh` hard-fails
+   without it.
+2. GeoNames attribution must remain visible (Settings → About).
+
+**OpenPhoto's own licence is still unset**, which by default means all rights
+reserved. That is a deliberate open decision, not an oversight.
+
+## Why this went unnoticed for so long
 
 The Phase 4.2 plan required a decision record at
 `docs/spikes/2026-06-11-mobileclip-coreml.md` capturing the chosen variant and
-why. That file was never written — it is absent from the working tree and from
-git history — and `EmbedStage`'s `modelID` comment still points readers to it.
+why. It was never written — absent from both the working tree and git history —
+and `EmbedStage`'s comment still pointed readers to it.
 
 The plan's goal line also named MobileCLIP before any evaluation, so its Task 1
 compared *variants* (s0/s1/s2), never *families*. The licence question therefore

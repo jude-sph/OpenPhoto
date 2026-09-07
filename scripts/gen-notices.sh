@@ -16,7 +16,7 @@ Generated from the licence files shipped with each dependency — see
 - [Sparkle](#sparkle) — MIT, plus external BSD-licensed components
 - [CLIP tokenizer vocabulary](#clip-tokenizer-vocabulary) — MIT
 - [GeoNames place data](#geonames-place-data) — CC BY 4.0
-- [MobileCLIP models](#mobileclip-models) — Apple ML Research Model Licence
+- [OpenCLIP ViT-B/32](#openclip-vit-b32) — MIT
 - [AdaFace](#adaface) — MIT (code); weights carry no stated terms
 
 ---
@@ -72,19 +72,19 @@ surfaced in the app under Settings → About.
 
 ---
 
-## MobileCLIP models
+## OpenCLIP ViT-B/32
 
 Image and text encoders used for semantic search.
-<https://github.com/apple/ml-mobileclip> · <https://huggingface.co/apple/coreml-mobileclip>
+<https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K>
 
-The MobileCLIP **code** is MIT-licensed, but the **model weights** are governed
-separately by the Apple Machine Learning Research Model License
-(`LICENSE_MODELS` in the repository above), which limits use to non-commercial
-scientific research and academic development and excludes product use.
+Released under the MIT licence, which permits redistribution of the weights as
+part of this application. Trained by LAION on the LAION-2B dataset; the
+architecture and training code originate from OpenCLIP
+(<https://github.com/mlfoundations/open_clip>).
 
-> **Redistribution status: unresolved.** These weights are not redistributable
-> under that licence as part of a general-purpose application. See
-> `docs/model-licensing.md` for the current position and options.
+The model files shipped in `Resources/` are Core ML conversions of those
+weights, produced by `tools/embed-bench/export_app_model.py` and numerically
+verified against the PyTorch reference. They are unmodified in substance.
 
 ---
 
@@ -97,6 +97,10 @@ The AdaFace source is MIT-licensed, reproduced below. The **pretrained weights**
 carry no stated licence in the upstream repository, and were trained on datasets
 (MS1MV2 and related) with their own restrictions. Absence of stated terms is not
 a grant.
+
+> **Public builds do not ship these weights** (`OPENPHOTO_PUBLIC=1`). Face
+> detection still runs; recognition and grouping report as unavailable. Only
+> local builds carry them.
 
 ```
 C

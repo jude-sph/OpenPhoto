@@ -9,8 +9,8 @@ import Compression
 ///
 /// The merges file is gitignored (downloaded artifact); we read the gzipped form from the model
 /// directory so the tokenizer and the encoders ship together.
-final class CLIPTokenizer {
-    static let contextLength = 77
+public final class CLIPTokenizer {
+    public static let contextLength = 77
     static let bos: Int32 = 49406
     static let eos: Int32 = 49407
 
@@ -26,7 +26,7 @@ final class CLIPTokenizer {
 
     /// Build from the gzipped (or plain) `bpe_simple_vocab_16e6.txt[.gz]` in `directory`.
     /// Returns nil if the file is absent or unreadable — callers degrade gracefully.
-    init?(vocabDirectory directory: URL) {
+    public init?(vocabDirectory directory: URL) {
         let gz = directory.appendingPathComponent("bpe_simple_vocab_16e6.txt.gz")
         let plain = directory.appendingPathComponent("bpe_simple_vocab_16e6.txt")
         let text: String
@@ -93,7 +93,7 @@ final class CLIPTokenizer {
     }
 
     /// Tokenize `text` → exactly `contextLength` Int32 ids (BOS … EOS, zero-padded, truncated).
-    func encode(_ text: String) -> [Int32] {
+    public func encode(_ text: String) -> [Int32] {
         var ids: [Int32] = [Self.bos]
         let cleaned = Self.whitespaceClean(Self.basicClean(text)).lowercased()
         let ns = cleaned as NSString

@@ -23,6 +23,10 @@ let package = Package(
             name: "ICCSpike",
             linkerSettings: [.linkedFramework("ImageCaptureCore")]
         ),
+        // Dev-only: compares candidate image encoders on this Mac. See tools/embed-bench/.
+        // Depends on Core purely to reuse CLIPTokenizer, so the MobileCLIP baseline can be scored
+        // for quality too rather than only timed.
+        .executableTarget(name: "EmbedBench", dependencies: ["OpenPhotoCore"]),
         .testTarget(
             name: "OpenPhotoCoreTests",
             dependencies: ["OpenPhotoCore"]

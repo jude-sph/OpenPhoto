@@ -4,8 +4,8 @@ import CoreML
 /// Stable keys for the on-device CoreML models, used by the availability registry.
 public enum MLModelKey {
     public static let adaface = "adaface_ir101"
-    public static let mobileclipImage = "mobileclip_s2_image"
-    public static let mobileclipText = "mobileclip_s2_text"
+    public static let clipImage = "openclip_b32_image"
+    public static let clipText = "openclip_b32_text"
 }
 
 /// Per-model load outcome on *this* machine.
@@ -65,7 +65,7 @@ public func mlCapabilityStatus(_ capability: MLCapability,
     let keys: [String]
     switch capability {
     case .faceRecognition: keys = [MLModelKey.adaface]
-    case .semanticSearch:  keys = [MLModelKey.mobileclipImage, MLModelKey.mobileclipText]
+    case .semanticSearch:  keys = [MLModelKey.clipImage, MLModelKey.clipText]
     }
     let statuses = keys.map { byModel[$0] ?? .unknown }
     for s in statuses { if case .unavailable = s { return s } }

@@ -14,17 +14,17 @@ import ImageIO
 /// rather than crashing. Semantic search simply stays unpopulated. This keeps the build free of any
 /// SwiftPM resource dependency on the model.
 public final class EmbedStage: @unchecked Sendable {
-    public let modelID = "mobileclip_s2"
-    /// Embedding dimensionality (MobileCLIP-S2 `final_emb_1` is [1, 512]).
+    public let modelID = "openclip_b32"
+    /// Embedding dimensionality (OpenCLIP ViT-B/32 `final_emb_1` is [1, 512]).
     public let dim = 512
 
     // Exact feature names + geometry discovered from the model descriptions:
-    //   image encoder: input "image" (Image, 256x256, 32BGRA) → output "final_emb_1" [1,512] f32
+    //   image encoder: input "image" (Image, 224x224, 32BGRA) → output "final_emb_1" [1,512] f32
     //   text  encoder: input "text"  (MLMultiArray [1,77] Int32) → output "final_emb_1" [1,512] f32
     private static let imageInputName = "image"
     private static let textInputName = "text"
     private static let outputName = "final_emb_1"
-    private static let imageSide = 256
+    private static let imageSide = 224
 
     private let modelDirectory: URL?
     private let availability: MLAvailability
@@ -39,8 +39,8 @@ public final class EmbedStage: @unchecked Sendable {
     private var tokenizer: CLIPTokenizer?
     private var triedTokenizerLoad = false
 
-    /// - Parameter modelDirectory: directory containing `mobileclip_s2_image.mlpackage`,
-    ///   `mobileclip_s2_text.mlpackage`, and `bpe_simple_vocab_16e6.txt.gz`. When nil, defaults to
+    /// - Parameter modelDirectory: directory containing `openclip_b32_image.mlpackage`,
+    ///   `openclip_b32_text.mlpackage`, and `bpe_simple_vocab_16e6.txt.gz`. When nil, defaults to
     ///   the running app bundle's resource directory (where `make-app.sh` injects them).
     public init(modelDirectory: URL? = nil, availability: MLAvailability = .shared) {
         self.modelDirectory = modelDirectory ?? Bundle.main.resourceURL
@@ -95,8 +95,8 @@ public final class EmbedStage: @unchecked Sendable {
         if !triedImageLoad {
             triedImageLoad = true
             imageModel = compileAndLoad(
-                modelDirectory?.appendingPathComponent("mobileclip_s2_image.mlpackage"),
-                key: MLModelKey.mobileclipImage)
+                modelDirectory?.appendingPathComponent("openclip_b32_image.mlpackage"),
+                key: MLModelKey.clipImage)
         }
         return imageModel
     }
@@ -106,8 +106,8 @@ public final class EmbedStage: @unchecked Sendable {
         if !triedTextLoad {
             triedTextLoad = true
             textModel = compileAndLoad(
-                modelDirectory?.appendingPathComponent("mobileclip_s2_text.mlpackage"),
-                key: MLModelKey.mobileclipText)
+                modelDirectory?.appendingPathComponent("openclip_b32_text.mlpackage"),
+                key: MLModelKey.clipText)
         }
         return textModel
     }
@@ -224,7 +224,7 @@ extension EmbedStage: DerivationStage {
     public var isAvailable: Bool {
         guard let dir = modelDirectory else { return false }
         return FileManager.default.fileExists(
-            atPath: dir.appendingPathComponent("mobileclip_s2_image.mlpackage").path)
+            atPath: dir.appendingPathComponent("openclip_b32_image.mlpackage").path)
     }
     public func run(hash: String, url: URL, catalog: Catalog) async -> Bool {
         guard let v = embedImage(at: url) else { return false }

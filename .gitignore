@@ -23,3 +23,9 @@ Sources/OpenPhotoCore/Resources/*.mlpackage/
 
 # face-recognition spike (scratch: venv, downloaded weights, converted model)
 tools/face-spike/
+
+# embed-bench working files: converted model weights (hundreds of MB) and its venv.
+# Regenerate with tools/embed-bench/convert.py and export_app_model.py.
+tools/embed-bench/.venv/
+tools/embed-bench/models/
+tools/embed-bench/app-models/
