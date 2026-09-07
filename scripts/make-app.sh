@@ -117,12 +117,23 @@ fi
 # copy is best-effort — skip silently if the models haven't been fetched on this machine.
 MODELS_SRC=".models/Resources"
 if [[ -d "$MODELS_SRC" ]]; then
-  for f in "$MODELS_SRC"/mobileclip_s2_image.mlpackage \
-           "$MODELS_SRC"/mobileclip_s2_text.mlpackage \
+  # Named explicitly, and verified after copying. This list previously held the MobileCLIP names and
+  # was documented as "best-effort — skip silently"; when the models were renamed, every file simply
+  # failed the existence test and 1.5.0 shipped with no semantic search at all while still printing
+  # a success line. Silence is the wrong default for a payload the app cannot work without.
+  for f in "$MODELS_SRC"/openclip_b32_image.mlpackage \
+           "$MODELS_SRC"/openclip_b32_text.mlpackage \
            "$MODELS_SRC"/bpe_simple_vocab_16e6.txt.gz; do
     [[ -e "$f" ]] && cp -R "$f" "$APP/Contents/Resources/"
   done
-  echo "Injected MobileCLIP models + vocab into $APP/Contents/Resources/"
+  for required in openclip_b32_image.mlpackage openclip_b32_text.mlpackage bpe_simple_vocab_16e6.txt.gz; do
+    if [[ ! -e "$APP/Contents/Resources/$required" ]]; then
+      echo "error: $required missing from the bundle — semantic search would be dead." >&2
+      echo "       Expected it at $MODELS_SRC/$required" >&2
+      exit 1
+    fi
+  done
+  echo "Injected OpenCLIP models + vocab into $APP/Contents/Resources/"
   [[ -d "$MODELS_SRC/geonames" ]] && cp -R "$MODELS_SRC/geonames" "$APP/Contents/Resources/" \
     && echo "Injected GeoNames dataset into $APP/Contents/Resources/geonames/"
 else
