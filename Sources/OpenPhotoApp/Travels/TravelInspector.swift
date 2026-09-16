@@ -11,8 +11,6 @@ struct TravelInspector: View {
     @State private var start = Date()
     @State private var end = Date()
     @State private var derived: TravelStats?        // what the photos themselves say
-    @State private var items: [TimelineItem] = []   // the cover grid's page, never the whole trip
-    @State private var itemCount = 0
     @State private var nameTripID: String?          // the trip `name` was typed for
     @State private var showAddFolder = false
     @FocusState private var field: TravelTextField?
@@ -36,7 +34,6 @@ struct TravelInspector: View {
         }
         .background(Theme.bg2)
         .task(id: trip.id) { loadTrip() }
-        .task(id: trip.folders) { loadItems() }
         .task(id: state.refreshToken) { refresh() }
         // "Done" doesn't necessarily move focus, so an in-flight name edit has to be committed on
         // the way out; a field can also still hold the keyboard here, and the ring would then never
@@ -150,37 +147,18 @@ struct TravelInspector: View {
     private var coverSection: some View {
         section("Cover", reset: trip.coverOverridden ? ("Automatic", { state.setTravelCover(id: trip.id, nil) }) : nil) {
             if let lib = state.library {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 4), spacing: 5) {
-                    // The app's one grid tile (square, clipped on the OUTER rounded frame), so a
-                    // portrait cover is not stretched into a 3:4 box like it was here.
-                    ForEach(items, id: \.instanceID) { item in
-                        let on = item.hash == trip.coverHash
-                        MediaTile(
-                            id: item.instanceID,
-                            thumbnail: ThumbnailImage(timelineItem: item, library: lib, targetPixel: 160),
-                            badges: { EmptyView() },
-                            onTap: { state.setTravelCover(id: trip.id, item.hash) })
-                            .overlay {
-                                if on {
-                                    RoundedRectangle(cornerRadius: Theme.cellRadius)
-                                        .strokeBorder(Theme.accent, lineWidth: 3)
-                                }
-                            }
-                            .overlay(alignment: .topTrailing) {
-                                if on {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.system(size: 17, weight: .bold))
-                                        .symbolRenderingMode(.palette)
-                                        .foregroundStyle(.white, Theme.accent)
-                                        .shadow(radius: 2).padding(5)
-                                }
-                            }
-                    }
+                HStack(alignment: .top, spacing: 10) {
+                    TravelRingView.coverThumbnail(for: trip, library: lib, targetPixel: 256)
+                        .frame(width: 96, height: 128)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    Text(trip.coverOverridden ? "Set by hand" : "Automatic · earliest photo")
+                        .font(.system(size: 11.5)).foregroundStyle(Theme.textFaint)
+                    Spacer()
                 }
-                if itemCount > 48 {
-                    Text("Showing the first 48 photos.")
-                        .font(.system(size: 11.5)).foregroundStyle(Theme.textFaint).padding(.top, 6)
-                }
+                Text("To choose a cover, open the trip and right-click any photo → Set as Trip Cover.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.textFaint).padding(.top, 6)
+                Button("Open trip") { state.openedTravelID = trip.id; state.travelEditing = false }
+                    .controlSize(.small).padding(.top, 6)
             }
         }
     }
@@ -196,15 +174,6 @@ struct TravelInspector: View {
         nameTripID = trip.id
         loadDates()
         derived = stats()
-    }
-
-    /// The only path that fetches photos, keyed on the folders rather than `refreshToken`: this is
-    /// the trip's whole item list, and every date step, chip and cover click bumps that token. The
-    /// folders change on a trip switch too (no two trips share a folder), so the grid still follows.
-    private func loadItems() {
-        let all = state.travelItems(trip)
-        itemCount = all.count
-        items = Array(all.prefix(48))
     }
 
     /// Something changed under the same trip (an edit here, or a background rescan). Cheap reads

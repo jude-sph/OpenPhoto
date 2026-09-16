@@ -94,7 +94,13 @@ struct TravelDetailView: View {
                       thumbnail: ThumbnailImage(timelineItem: item, library: lib, targetPixel: thumbPixels),
                       badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
                       onTap: { state.openViewer(item, within: all) })
-                .contextMenu { Button("Set as Trip Cover", systemImage: "photo") { state.setTravelCover(id: trip.id, item.hash) } }
+                .contextMenu {
+                    if item.hash == trip.coverHash {
+                        Button("Current Cover", systemImage: "photo") {}.disabled(true)
+                    } else {
+                        Button("Set as Trip Cover", systemImage: "photo") { state.setTravelCover(id: trip.id, item.hash) }
+                    }
+                }
         }
     }
 
