@@ -33,7 +33,7 @@ public struct RingGeometry: Sendable, Equatable {
 
     /// Smallest zoom that pushes the edge-on point past the stage edges (1 on a very wide stage).
     public func zoom(forStageWidth w: Double) -> Double {
-        max(1, 4 * edgeX / w)
+        max(1, (w / 2 + edgeMargin) / edgeX)
     }
 
     public func placement(index: Int, count: Int, angle: Double, stageWidth: Double) -> CardPlacement {
@@ -48,7 +48,7 @@ public struct RingGeometry: Sendable, Equatable {
         let proj = perspective / max(dist, 1)
         let zoom = zoom(forStageWidth: stageWidth)
         let halfW = cardWidth / 2 * s * proj
-        let off = (abs(x * proj) + halfW) * zoom > stageWidth / 2 + edgeMargin || dist < 220
+        let off = (abs(x * proj) - halfW) * zoom > stageWidth / 2 + 8 || dist < 220
         return CardPlacement(angle: th, x: x * proj, scale: s * proj, depth: d / 180, hidden: off)
     }
 }

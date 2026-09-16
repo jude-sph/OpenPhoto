@@ -17,13 +17,16 @@ private let g = RingGeometry()
 }
 
 @Test func edgeOnCardIsHiddenOnceOutsideStage() {
-    // At 90° the projected centre is R·P/(P+pull) ≈ 427 pt; with zoom applied it must sit past the edge.
+    // Zoom grows with stage width so the 90° edge-on point is always pushed past the edges.
     let zoom = g.zoom(forStageWidth: 1000)
-    #expect(zoom > 1)
-    let edge = g.placement(index: 3, count: 12, angle: 0, stageWidth: 1000)   // 90°
-    #expect(edge.hidden)
-    let wide = g.placement(index: 3, count: 12, angle: 0, stageWidth: 3000)   // huge stage: still on screen
-    #expect(!wide.hidden && g.zoom(forStageWidth: 3000) == 1)
+    #expect(zoom > 1 && abs(zoom - (500 + g.edgeMargin) / g.edgeX) < 1e-9)
+    #expect(g.placement(index: 3, count: 12, angle: 0, stageWidth: 1000).hidden)   // 90°
+    #expect(g.placement(index: 3, count: 12, angle: 0, stageWidth: 3000).hidden)   // still hidden on a huge stage
+    #expect(g.zoom(forStageWidth: 3000) > g.zoom(forStageWidth: 1000))
+    // A stage narrower than the ring needs no zoom at all.
+    #expect(g.zoom(forStageWidth: 600) == 1)
+    // A card just off the front (30°) is fully visible on a 1000-pt stage.
+    #expect(!g.placement(index: 1, count: 12, angle: 0, stageWidth: 1000).hidden)
 }
 
 @Test func angleWrapsAndSteps() {
