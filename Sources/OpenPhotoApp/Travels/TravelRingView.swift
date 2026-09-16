@@ -70,7 +70,6 @@ struct TravelRingView: View {
         .onKeyPress(.rightArrow) { guard ringTakesKeys else { return .ignored }; stepTo((focusedIndex + 1) % max(count, 1)); return .handled }
         .onKeyPress(.leftArrow) { guard ringTakesKeys else { return .ignored }; stepTo((focusedIndex - 1 + count) % max(count, 1)); return .handled }
         .onKeyPress(.return) { guard ringTakesKeys, let f = focused else { return .ignored }; state.openedTravelID = f.id; return .handled }
-        .onKeyPress(.init("e")) { guard ringTakesKeys, focused != nil else { return .ignored }; state.travelEditing = true; return .handled }
         .onKeyPress(.escape) { guard ringTakesKeys, state.travelEditing else { return .ignored }; state.travelEditing = false; return .handled }
         .onKeyPress(.home) { guard ringTakesKeys else { return .ignored }; stepTo(0); return .handled }
         .onKeyPress(.end) { guard ringTakesKeys else { return .ignored }; stepTo(max(count - 1, 0)); return .handled }

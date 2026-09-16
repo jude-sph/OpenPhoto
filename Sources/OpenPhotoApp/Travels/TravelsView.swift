@@ -64,7 +64,6 @@ struct TravelsView: View {
             .help("Every folder directly inside the Travels folder becomes a trip automatically")
             Button { showNewTripPicker = true } label: { Label("New trip", systemImage: "plus") }
                 .buttonStyle(.borderedProminent).tint(Theme.accent)
-            Text("Scroll, drag or ← → spin · ↩ opens · E edits").font(.system(size: 11.5)).foregroundStyle(Theme.textFaint)
         }
         .controlSize(.small)
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)

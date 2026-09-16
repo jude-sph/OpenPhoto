@@ -139,7 +139,7 @@ struct TravelInspector: View {
             PlaceChipsField(state: state, places: trip.places, overridden: trip.placesOverridden, focus: $field) {
                 state.setTravelPlaces(id: trip.id, $0)
             }
-            Text("Detected from photo locations. Type a place and press Return; suggestions are real map places.")
+            Text("Detected from photo locations. Type a place and press Return.")
                 .font(.system(size: 11.5)).foregroundStyle(Theme.textFaint).padding(.top, 6)
         }
     }
