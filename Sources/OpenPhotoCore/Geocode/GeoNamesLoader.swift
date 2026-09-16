@@ -18,10 +18,16 @@ import Foundation
 ///   (lines beginning with '#' are comments)
 public enum GeoNamesLoader {
     public static func load(directory: URL?) -> ReverseGeocoder {
-        guard let dir = directory else { return ReverseGeocoder(cities: []) }
+        loadAll(directory: directory).geocoder
+    }
+
+    /// Parses the three files exactly as `load(directory:)`, building both the reverse-geocoder
+    /// and the forward `PlaceSearch` index in one pass over `cities15000.txt`.
+    public static func loadAll(directory: URL?) -> (geocoder: ReverseGeocoder, search: PlaceSearch) {
+        guard let dir = directory else { return (ReverseGeocoder(cities: []), .empty) }
         let citiesURL = dir.appendingPathComponent("cities15000.txt")
         guard let citiesText = try? String(contentsOf: citiesURL, encoding: .utf8) else {
-            return ReverseGeocoder(cities: [])
+            return (ReverseGeocoder(cities: []), .empty)
         }
         // admin1: "<cc>.<admin1>" → region name (col 1, 0-based). Best-effort.
         // Use .newlines character set to tolerate both LF and CRLF line endings.
@@ -45,6 +51,8 @@ public enum GeoNamesLoader {
         }
         var out: [ReverseGeocoder.City] = []
         out.reserveCapacity(30_000)
+        var searchEntries: [PlaceSearch.Entry] = []
+        searchEntries.reserveCapacity(30_000)
         for line in citiesText.components(separatedBy: .newlines) where !line.isEmpty {
             let f = line.components(separatedBy: "\t")
             // name=1, lat=4, lon=5, country=8, admin1=10
@@ -54,7 +62,13 @@ public enum GeoNamesLoader {
                 name: f[1], lat: lat, lon: lon, countryCode: cc,
                 region: admin1["\(cc).\(f[10])"] ?? "",
                 country: countries[cc] ?? ""))
+            searchEntries.append(PlaceSearch.Entry(
+                geonameID: Int(f[0]) ?? 0, name: f[1], asciiName: f[2],
+                alternateNames: f[3].isEmpty ? [] : f[3].components(separatedBy: ","),
+                lat: lat, lon: lon, countryCode: cc,
+                region: admin1["\(cc).\(f[10])"] ?? "", country: countries[cc] ?? "",
+                population: f.count > 14 ? (Int(f[14]) ?? 0) : 0))
         }
-        return ReverseGeocoder(cities: out)
+        return (ReverseGeocoder(cities: out), PlaceSearch(entries: searchEntries))
     }
 }
