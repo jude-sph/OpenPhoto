@@ -41,13 +41,17 @@ struct FolderPickerSheet: View {
 
     private var confirmLabel: String { if case .travelsFolder = mode { "Use folder" } else { "Add" } }
 
-    /// Greyed out: a folder that already belongs to a trip (new trip), or one the trip already
-    /// covers — in either direction, since a parent and its child can't both be listed.
+    /// Greyed out: a folder that overlaps an existing trip (new trip), or one this trip already
+    /// covers. Both tests look in BOTH directions — an ancestor of a trip's folder would make two
+    /// trips share photos just as surely as a descendant does.
     private func disabled(_ path: String) -> Bool {
+        func overlaps(_ folders: [String]) -> Bool {
+            folders.contains { path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/") }
+        }
         switch mode {
         case .travelsFolder: return false
-        case .newTrip: return state.travelID(forFolder: path) != nil
-        case .addFolder(let ex): return ex.contains { path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/") }
+        case .newTrip: return state.travels.contains { overlaps($0.folders) }
+        case .addFolder(let ex): return overlaps(ex)
         }
     }
 

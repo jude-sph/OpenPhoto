@@ -11,7 +11,9 @@ struct TravelInspector: View {
     @State private var start = Date()
     @State private var end = Date()
     @State private var derived: TravelStats?        // what the photos themselves say
-    @State private var items: [TimelineItem] = []
+    @State private var items: [TimelineItem] = []   // the cover grid's page, never the whole trip
+    @State private var itemCount = 0
+    @State private var nameTripID: String?          // the trip `name` was typed for
     @State private var showAddFolder = false
     @FocusState private var field: TravelTextField?
 
@@ -33,8 +35,9 @@ struct TravelInspector: View {
             footer
         }
         .background(Theme.bg2)
-        .task(id: trip.id) { load() }
-        .task(id: state.refreshToken) { load() }
+        .task(id: trip.id) { loadTrip() }
+        .task(id: trip.folders) { loadItems() }
+        .task(id: state.refreshToken) { refresh() }
         // "Done" doesn't necessarily move focus, so an in-flight name edit has to be committed on
         // the way out; a field can also still hold the keyboard here, and the ring would then never
         // get its shortcuts back.
@@ -145,7 +148,7 @@ struct TravelInspector: View {
         section("Cover", reset: trip.coverOverridden ? ("Automatic", { state.setTravelCover(id: trip.id, nil) }) : nil) {
             if let lib = state.library {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 4), spacing: 5) {
-                    ForEach(items.prefix(48), id: \.instanceID) { item in
+                    ForEach(items, id: \.instanceID) { item in
                         let on = item.hash == trip.coverHash
                         Button { state.setTravelCover(id: trip.id, item.hash) } label: {
                             ThumbnailImage(timelineItem: item, library: lib, targetPixel: 160)
@@ -163,7 +166,7 @@ struct TravelInspector: View {
                         .buttonStyle(.plain)
                     }
                 }
-                if items.count > 48 {
+                if itemCount > 48 {
                     Text("Showing the first 48 photos.")
                         .font(.system(size: 11.5)).foregroundStyle(Theme.textFaint).padding(.top, 6)
                 }
@@ -173,21 +176,55 @@ struct TravelInspector: View {
 
     // MARK: - Data
 
-    private func load() {
-        // Never clobber what the user is typing: a background rescan bumps `refreshToken` too.
-        if field != .name { name = trip.name }
+    /// A different trip is in front (another card clicked, or `mutateTravel` materialised this one
+    /// under a fresh id). Unsaved text in the field belongs to the trip it was typed for, so it goes
+    /// there first — never to the trip that just arrived.
+    private func loadTrip() {
+        if field == .name, let old = nameTripID, old != trip.id { write(name, to: old) }
+        name = trip.name
+        nameTripID = trip.id
+        loadDates()
+        derived = stats()
+    }
+
+    /// The only path that fetches photos, keyed on the folders rather than `refreshToken`: this is
+    /// the trip's whole item list, and every date step, chip and cover click bumps that token. The
+    /// folders change on a trip switch too (no two trips share a folder), so the grid still follows.
+    private func loadItems() {
+        let all = state.travelItems(trip)
+        itemCount = all.count
+        items = Array(all.prefix(48))
+    }
+
+    /// Something changed under the same trip (an edit here, or a background rescan). Cheap reads
+    /// only — no `travelItems` fetch, which would materialise every row of the trip on every bump.
+    private func refresh() {
+        // Never clobber what the user is typing.
+        if field != .name { name = trip.name; nameTripID = trip.id }
+        loadDates()
+        derived = stats()
+    }
+
+    private func loadDates() {
         start = trip.startDate.flatMap(TravelFormat.date) ?? Date()
         end = trip.endDate.flatMap(TravelFormat.date) ?? start
-        derived = try? state.library?.catalog.travelStats(dirPaths: trip.folders)
-        items = state.travelItems(trip)
+    }
+
+    private func stats() -> TravelStats? {
+        try? state.library?.catalog.travelStats(dirPaths: trip.folders)
     }
 
     private func commitName() {
-        let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Only a real change writes: focusing and leaving the field must not materialise a record
-        // (nor pin a name that is still just the folder's).
-        guard t != trip.name else { return }
-        state.setTravelName(id: trip.id, t)
+        guard let id = nameTripID, id == trip.id else { return }
+        write(name, to: id)
+    }
+
+    /// Only a real change writes: focusing and leaving the field must not materialise a record (nor
+    /// pin a name that is still just the folder's). A trip that has since gone writes nothing.
+    private func write(_ text: String, to id: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let current = state.travels.first(where: { $0.id == id })?.name, t != current else { return }
+        state.setTravelName(id: id, t)
     }
 
     private func commitDates(_ s: Date, _ e: Date) {

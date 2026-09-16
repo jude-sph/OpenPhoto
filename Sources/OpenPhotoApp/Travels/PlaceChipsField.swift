@@ -37,10 +37,15 @@ struct PlaceChipsField: View {
                         highlighted = 0
                     }
                     .onSubmit { commit() }
+                    // Only ours while a list is open; otherwise the arrows stay the text field's.
                     .onKeyPress(.downArrow) {
-                        highlighted = min(highlighted + 1, max(suggestions.count - 1, 0)); return .handled
+                        guard !suggestions.isEmpty else { return .ignored }
+                        highlighted = min(highlighted + 1, suggestions.count - 1); return .handled
                     }
-                    .onKeyPress(.upArrow) { highlighted = max(highlighted - 1, 0); return .handled }
+                    .onKeyPress(.upArrow) {
+                        guard !suggestions.isEmpty else { return .ignored }
+                        highlighted = max(highlighted - 1, 0); return .handled
+                    }
                     .onKeyPress(.escape) {
                         // Only ours to eat when there is something to dismiss.
                         guard !text.isEmpty || !suggestions.isEmpty else { return .ignored }
