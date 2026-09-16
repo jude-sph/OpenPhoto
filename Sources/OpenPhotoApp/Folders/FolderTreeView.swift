@@ -233,6 +233,27 @@ private struct FolderRow: View {
                     }
                 }
                 Divider()
+                if state.travelID(forFolder: node.path) != nil {
+                    Button("Show in Travels", systemImage: "globe.europe.africa") {
+                        state.showInTravels(folder: node.path)
+                    }
+                } else if !node.path.isEmpty {
+                    Button("Mark as Travel", systemImage: "globe.europe.africa") {
+                        if state.createTravel(folder: node.path) != nil {
+                            state.showInTravels(folder: node.path)
+                            state.travelEditing = true
+                        }
+                    }
+                }
+                if state.travelSettings.travelsFolder == node.path && state.travelSettings.autoDiscover {
+                    Button("Stop Using as Travels Folder") { state.setTravelsFolder(nil, auto: true) }
+                } else {
+                    Button("Use as Travels Folder", systemImage: "folder.badge.gearshape") {
+                        state.setTravelsFolder(node.path, auto: true)
+                        state.showInTravels(folder: node.path)
+                    }
+                }
+                Divider()
                 Button("Tag All in Folder\u{2026}", systemImage: "tag") {
                     tagAllName = ""; showTagAll = true
                 }

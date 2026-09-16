@@ -134,7 +134,10 @@ extension AppState {
                 let macRoot = lib.vaults.first?.rootURL
                 await Task.detached(priority: .utility) {
                     try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: syncedDrive)
-                    if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: syncedDrive.stateDirURL) }
+                    if let macRoot {
+                        try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: syncedDrive.stateDirURL)
+                        try? TravelStore.syncToDrive(libraryRoot: macRoot, driveStateDir: syncedDrive.stateDirURL)
+                    }
                 }.value
             }
         }

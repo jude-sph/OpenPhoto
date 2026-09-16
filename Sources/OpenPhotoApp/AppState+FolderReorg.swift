@@ -130,6 +130,7 @@ extension AppState {
         endReorg()                                           // release before the post-reorg scan
         await rescan()
         remapUIPaths(from: src, to: newPath)
+        rewriteTravelPaths(from: src, to: newPath)           // trips follow their folders
     }
 
     // MARK: - Merge (set union)
@@ -216,6 +217,7 @@ extension AppState {
         endReorg()                                           // release before the post-reorg scan
         await rescan()
         remapUIPaths(from: src, to: newPath)
+        rewriteTravelPaths(from: src, to: newPath)           // trips follow their folders
     }
 
     // MARK: - Move photos (file-grain)

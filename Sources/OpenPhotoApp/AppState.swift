@@ -4,12 +4,13 @@ import OpenPhotoCore
 typealias Scanner = OpenPhotoCore.Scanner   // Foundation.Scanner collision
 
 enum SidebarItem: String, Hashable, CaseIterable {
-    case timeline, folders, albums, people, faceMap, map, search, drives, tidyUp, bin
+    case timeline, folders, albums, travels, people, faceMap, map, search, drives, tidyUp, bin
     var label: String {
         switch self {
         case .timeline: "Timeline"
         case .folders: "Folders"
         case .albums: "Albums"
+        case .travels: "Travels"
         case .people: "People"
         case .faceMap: "Face Map"
         case .map: "Map"
@@ -24,6 +25,7 @@ enum SidebarItem: String, Hashable, CaseIterable {
         case .timeline: "photo.on.rectangle.angled"
         case .folders: "folder"
         case .albums: "rectangle.stack"
+        case .travels: "globe.europe.africa"
         case .people: "person.2"
         case .faceMap: "circle.hexagongrid"
         case .map: "map"
@@ -182,6 +184,49 @@ final class AppState {
     var albums: [AlbumSummary] = []
     /// The album currently open in the Albums detail view (its `id`/UUID), or nil for the empty state.
     var selectedAlbumID: String?
+
+    // MARK: — Travels (trips over folders)
+
+    /// Trip summaries for the Travels screen: stored records plus folders discovered under the
+    /// Travels folder, resolved against `folderTree` and the catalog. Source of truth is the
+    /// sovereign JSON under `.openphoto/travels/`; see `AppState+Travels`.
+    var travels: [TravelSummary] = []
+    /// The Travels folder + auto-discovery + hidden folders (`.openphoto/travels/settings.json`).
+    var travelSettings = TravelSettings.defaults
+    /// The trip focused in the Travels list, and the one opened into its photo grid.
+    var selectedTravelID: String?
+    var openedTravelID: String?
+    /// True when the Travels inspector should open straight into editing (set by "Mark as Travel").
+    var travelEditing = false
+
+    /// Forward place lookup for the Travels inspector; loaded once from the bundled GeoNames dataset
+    /// (absent dataset → `.empty`, typed places save as free text). `warmPlaceSearch()` normally
+    /// fills it off-main at library open; this getter is the synchronous fallback.
+    var placeSearch: PlaceSearch {
+        if let s = _placeSearch { return s }
+        let s = GeoNamesLoader.loadAll(directory: Self.geoNamesDirectory).search
+        _placeSearch = s
+        return s
+    }
+    @ObservationIgnored private var _placeSearch: PlaceSearch?
+
+    /// Nonisolated so the off-main warm-up can read it without hopping back to the main actor.
+    nonisolated private static var geoNamesDirectory: URL? {
+        Bundle.main.resourceURL?.appendingPathComponent("geonames")
+    }
+
+    /// Load the GeoNames index off-main (~1 s) so the first place lookup doesn't block the UI.
+    func warmPlaceSearch() {
+        guard _placeSearch == nil else { return }
+        Task { [weak self] in
+            let search = await Task.detached(priority: .utility) {
+                GeoNamesLoader.loadAll(directory: AppState.geoNamesDirectory).search
+            }.value
+            guard let self, self._placeSearch == nil else { return }
+            self._placeSearch = search
+        }
+    }
+
     /// Folder view: include photos from every descendant folder (the whole subtree), not just the
     /// selected folder.
     var foldersRecursive: Bool = UserDefaults.standard.bool(forKey: "foldersRecursive") {
@@ -1379,7 +1424,10 @@ final class AppState {
         let macRoot = lib.vaults.first?.rootURL
         await Task.detached(priority: .utility) {
             try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: newVault)
-            if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: newVault.stateDirURL) }
+            if let macRoot {
+                try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: newVault.stateDirURL)
+                try? TravelStore.syncToDrive(libraryRoot: macRoot, driveStateDir: newVault.stateDirURL)
+            }
         }.value
         reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
     }
@@ -1411,7 +1459,10 @@ final class AppState {
         let macRoot = lib.vaults.first?.rootURL
         await Task.detached(priority: .utility) {
             try? CatalogSnapshot.write(catalog: cat, thumbnails: thumbs, drive: target)
-            if let macRoot { try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: target.stateDirURL) }
+            if let macRoot {
+                try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: target.stateDirURL)
+                try? TravelStore.syncToDrive(libraryRoot: macRoot, driveStateDir: target.stateDirURL)
+            }
         }.value
         return result
     }
@@ -2135,6 +2186,8 @@ final class AppState {
             library?.catalog.revealLocked = false
             lockedRevealed = false
             refreshAlbums()
+            refreshTravels()      // settings + any trips visible before the first scan refresh
+            warmPlaceSearch()     // GeoNames index off-main, ready for the Travels inspector
             if finderTagSyncEnabled { syncFinderTagsNow() }   // initial Finder-tag reconcile pass
             deviceWatcher.onVolumesChanged = { [weak self] in
                 Task { @MainActor in
@@ -2196,6 +2249,11 @@ final class AppState {
         lockedRevealed = false
         albums = []
         selectedAlbumID = nil
+        travels = []
+        travelSettings = .defaults
+        selectedTravelID = nil
+        openedTravelID = nil
+        travelEditing = false
 
         // MUST-FIX: clear DeviceWatcher closures that close over the old library.
         deviceWatcher.knownVaultIDs = { [] }
@@ -2440,8 +2498,9 @@ final class AppState {
 
     /// Refresh every browse surface after the locked set / reveal state changes.
     private func refreshAfterLockChange() {
-        try? refreshQueries()   // timeline / folders / bin
+        try? refreshQueries()   // timeline / folders / bin (also re-derives trips)
         loadPeople()            // faces (catalog face queries also honour the locked gate)
+        refreshTravels()        // trip counts/covers honour the locked gate too (also if the above threw)
         refreshToken += 1       // nudge map markers, search results, inspector, dependent views
     }
 
@@ -2460,6 +2519,7 @@ final class AppState {
         }
         binEntries = try library.binItems()
         refreshPendingDeletions()
+        refreshTravels()   // trips resolve against the folder tree just rebuilt above
         refreshToken += 1
     }
 
@@ -2488,6 +2548,7 @@ final class AppState {
         }
         binEntries = result.bin
         refreshPendingDeletions()
+        refreshTravels()   // trips resolve against the folder tree just rebuilt above
         refreshToken += 1
     }
 
