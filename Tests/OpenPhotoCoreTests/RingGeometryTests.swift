@@ -35,3 +35,27 @@ private let g = RingGeometry()
     let p = g.placement(index: 0, count: 12, angle: 360, stageWidth: 1200)
     #expect(abs(p.x) < 0.001 && !p.hidden)
 }
+
+@Test func radiusGrowsWithTripCountAndFloorsAtTheTunedRing() {
+    // Few trips: the ring stays exactly as tuned by hand (the floor wins).
+    #expect(g.radius(forCount: 4) == g.radius)
+    #expect(g.radius(forCount: 11) == g.radius)
+    // A dozen trips sit right at the tuned ring's limit; beyond it the ring has to grow so the
+    // cards keep their distance. 21 trips (17.1° apart) need a much bigger ring.
+    #expect(g.radius(forCount: 12) >= g.radius && g.radius(forCount: 12) < g.radius * 1.06)
+    #expect(g.radius(forCount: 21) > 700)
+    #expect(g.radius(forCount: 30) > g.radius(forCount: 21))
+    #expect(g.edgeX(forCount: 21) > g.edgeX)
+    #expect(g.zoom(forStageWidth: 1400, count: 21) < g.zoom(forStageWidth: 1400, count: 8))
+}
+
+@Test func manyTripsDoNotOverlapHeavily() {
+    // The card beside the front one must clear (most of) the front card's projected width, or the
+    // ring becomes a heap of overlapping postcards — what 21 trips looked like on a fixed R = 400.
+    for n in [12, 21, 30, 48] {
+        let front = g.placement(index: 0, count: n, angle: 0, stageWidth: 1400)
+        let next = g.placement(index: 1, count: n, angle: 0, stageWidth: 1400)
+        let frontWidth = g.cardWidth * front.scale
+        #expect(abs(next.x - front.x) >= 0.95 * frontWidth, "count \(n)")
+    }
+}

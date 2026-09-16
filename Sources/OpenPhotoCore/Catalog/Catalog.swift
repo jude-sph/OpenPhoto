@@ -33,7 +33,14 @@ public final class Catalog: Sendable {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
-        dbQueue = try DatabaseQueue(path: url.path)
+        // A busy timeout, not the default fail-instantly: the catalog file can legitimately have a
+        // second writer on it — two copies of the app open on the same library (the installed build
+        // and a dev build), or a tool reading it — and SQLite then refuses a COMMIT outright
+        // ("database is locked", error 5) rather than waiting for the other writer's transaction to
+        // finish. Five seconds is far longer than any of our writes. Journal mode is left alone.
+        var config = Configuration()
+        config.busyMode = .timeout(5)
+        dbQueue = try DatabaseQueue(path: url.path, configuration: config)
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1") { db in
             try db.create(table: "vaults") { t in

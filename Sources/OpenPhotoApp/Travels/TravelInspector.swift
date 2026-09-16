@@ -151,22 +151,30 @@ struct TravelInspector: View {
         section("Cover", reset: trip.coverOverridden ? ("Automatic", { state.setTravelCover(id: trip.id, nil) }) : nil) {
             if let lib = state.library {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 4), spacing: 5) {
+                    // The app's one grid tile (square, clipped on the OUTER rounded frame), so a
+                    // portrait cover is not stretched into a 3:4 box like it was here.
                     ForEach(items, id: \.instanceID) { item in
                         let on = item.hash == trip.coverHash
-                        Button { state.setTravelCover(id: trip.id, item.hash) } label: {
-                            ThumbnailImage(timelineItem: item, library: lib, targetPixel: 160)
-                                .aspectRatio(3 / 4, contentMode: .fill)
-                                .clipShape(RoundedRectangle(cornerRadius: 5))
-                                .overlay(RoundedRectangle(cornerRadius: 5)
-                                    .strokeBorder(on ? Theme.accent : .clear, lineWidth: 2))
-                                .overlay(alignment: .topTrailing) {
-                                    if on {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(Theme.accent).padding(4)
-                                    }
+                        MediaTile(
+                            id: item.instanceID,
+                            thumbnail: ThumbnailImage(timelineItem: item, library: lib, targetPixel: 160),
+                            badges: { EmptyView() },
+                            onTap: { state.setTravelCover(id: trip.id, item.hash) })
+                            .overlay {
+                                if on {
+                                    RoundedRectangle(cornerRadius: Theme.cellRadius)
+                                        .strokeBorder(Theme.accent, lineWidth: 3)
                                 }
-                        }
-                        .buttonStyle(.plain)
+                            }
+                            .overlay(alignment: .topTrailing) {
+                                if on {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 17, weight: .bold))
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, Theme.accent)
+                                        .shadow(radius: 2).padding(5)
+                                }
+                            }
                     }
                 }
                 if itemCount > 48 {

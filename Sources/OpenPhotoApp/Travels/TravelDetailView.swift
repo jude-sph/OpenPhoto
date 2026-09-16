@@ -39,6 +39,9 @@ struct TravelDetailView: View {
                 }.padding(.horizontal, 28).padding(.vertical, 8)
             }
         }
+        // Opaque and filling the stage: the ring sits under this page, and a short page would
+        // otherwise let it show through.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.windowBG)
         .focusable()
         .focusEffectDisabled()

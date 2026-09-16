@@ -27,7 +27,9 @@ struct TravelRingView: View {
             let w = g.size.width
             ZStack {
                 Theme.windowBG
-                if trips.isEmpty { emptyState } else {
+                // Nothing of the ring is drawn while the trip page is over it — a card sliding past
+                // the stage edge would otherwise show beside the page.
+                if trips.isEmpty { emptyState } else if state.openedTravelID == nil {
                     ring(width: w, height: g.size.height)
                     yearNumeral
                     meta
@@ -117,13 +119,12 @@ struct TravelRingView: View {
     // MARK: ring
 
     private func ring(width: CGFloat, height: CGFloat) -> some View {
-        let zoom = geo.zoom(forStageWidth: Double(width))
+        let zoom = geo.zoom(forStageWidth: Double(width), count: count)
         return ZStack {
             ForEach(Array(trips.enumerated()), id: \.element.id) { i, trip in
                 let p = geo.placement(index: i, count: count, angle: angle, stageWidth: Double(width))
                 if !p.hidden {
                     card(trip, focused: i == focusedIndex)
-                        .frame(width: geo.cardWidth, height: geo.cardHeight)
                         .rotation3DEffect(.degrees(p.angle), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
                         .scaleEffect(p.scale)
                         .offset(x: p.x)
@@ -135,11 +136,23 @@ struct TravelRingView: View {
         .scaleEffect(zoom)
         .frame(width: width, height: height)
         .offset(y: -height * 0.04)
+        // The ring is wider than the stage by design (cards slide off the edges); without this they
+        // would draw over the sidebar, the toolbar and the trip page.
+        .clipped()
     }
 
+    /// Every card is exactly `cardWidth` × `cardHeight`, whatever the cover photo's aspect: the
+    /// thumbnail is given that frame and clipped INSIDE the card, so the rounded clip, the caption
+    /// and the border all land on one postcard shape rather than on the image's natural rectangle.
     private func card(_ trip: TravelSummary, focused: Bool) -> some View {
         ZStack(alignment: .bottomLeading) {
-            if let lib = state.library { Self.coverThumbnail(for: trip, library: lib, targetPixel: 512) }
+            if let lib = state.library {
+                Self.coverThumbnail(for: trip, library: lib, targetPixel: 512)
+                    .frame(width: geo.cardWidth, height: geo.cardHeight)
+                    .clipped()
+            } else {
+                Theme.tile.frame(width: geo.cardWidth, height: geo.cardHeight)
+            }
             LinearGradient(colors: [.black.opacity(0.72), .clear], startPoint: .bottom, endPoint: .center)
             VStack(alignment: .leading, spacing: 2) {
                 Text(trip.name).font(.system(size: 14, weight: .semibold)).lineLimit(1)
@@ -148,6 +161,7 @@ struct TravelRingView: View {
             }
             .foregroundStyle(.white).padding(14)
         }
+        .frame(width: geo.cardWidth, height: geo.cardHeight)
         .overlay(alignment: .topTrailing) {
             Text(trip.count.formatted()).font(.system(size: 10.5).monospacedDigit()).foregroundStyle(.white)
                 .padding(.horizontal, 7).padding(.vertical, 2).background(.black.opacity(0.5), in: Capsule()).padding(10)
