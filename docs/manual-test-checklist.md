@@ -89,3 +89,17 @@ against the shipped UI — listed above for a final pass.
 - [ ] **Large selection falls back to files.** Select more than 12 photos and right-click one: the menu reads **Copy N Files**, not "Images". Paste into Finder → the files appear (and memory doesn't spike).
 - [ ] **Drive-only with drive ejected.** Right-click a photo that lives only on an ejected drive: Copy is greyed out rather than silently doing nothing.
 - [ ] **Menus in other grids.** Confirm Copy appears in Folders, Albums (above Set as Album Cover), Search, Map's cluster sheet, and a person's photo grid.
+
+## Travels (2026-09-15)
+- [ ] Sidebar → Travels shows the ring; scroll, drag, ← → spin; a click sounds per card while spinning; snaps to a card.
+- [ ] "Use as Travels Folder" on a folder (Folders view) → its subfolders appear as trips; a new subfolder appears after rescan.
+- [ ] Edit trip: rename → card + meta update; `.openphoto/travels/<id>.json` appears with `"name"`.
+- [ ] Add a second folder to a trip → count grows; remove it → count shrinks; removing the last folder removes the trip.
+- [ ] Dates: set start/end by hand → amber dot on the meta line; ring re-sorts; "Use photo dates" restores.
+- [ ] Places: type "Kyo" → suggestions; Return → chip; free text → dashed "not on the map" chip; JSON carries lat/lon/geonameID.
+- [ ] Cover: pick a photo → card updates; "Automatic" restores the earliest photo.
+- [ ] Remove from Travels on a discovered trip → gone and stays gone after rescan (`hidden` in settings.json).
+- [ ] Open trip (↩ / button / click front card) → hero + day sections; tap a photo → viewer; Esc back.
+- [ ] Lock a trip folder → its photos leave the count until revealed.
+- [ ] Rename/move a trip folder in Folders → the trip follows (record folders rewritten).
+- [ ] Sync to a drive → `<drive>/.openphoto/travels/` mirrors settings + records.
