@@ -33,10 +33,13 @@ struct TravelRingView: View {
                     meta
                     yearStrip
                 }
-                ScrollWheelCatcher { dx, dy in
-                    target = nil
-                    let d = abs(dx) > abs(dy) ? dx : dy
-                    velocity += Double(d) * 0.045
+                // While the trip page covers the ring the catcher would eat its scrolling.
+                if state.openedTravelID == nil {
+                    ScrollWheelCatcher { dx, dy in
+                        target = nil
+                        let d = abs(dx) > abs(dy) ? dx : dy
+                        velocity += Double(d) * 0.045
+                    }
                 }
             }
             .contentShape(Rectangle())
@@ -47,6 +50,10 @@ struct TravelRingView: View {
             }.onEnded { _ in dragStartX = nil })
             .onReceive(clock) { now in tick(now) }
             .onChange(of: state.selectedTravelID) { _, id in
+                // Only follow selections from OUTSIDE the ring (folder context menu, etc.). While the
+                // ring is spinning it publishes the selection itself, and a delivery that lands after
+                // the angle has moved on would yank the physics into eased-target mode mid-flick.
+                guard dragStartX == nil, velocity == 0, target == nil else { return }
                 if let id, let i = trips.firstIndex(where: { $0.id == id }), i != focusedIndex { stepTo(i) }
             }
             .onChange(of: trips.map(\.id)) { _, _ in
@@ -58,18 +65,31 @@ struct TravelRingView: View {
         }
         .focusable()
         .focusEffectDisabled()
-        .onKeyPress(.rightArrow) { guard !state.isEditingText else { return .ignored }; stepTo((focusedIndex + 1) % max(count, 1)); return .handled }
-        .onKeyPress(.leftArrow) { guard !state.isEditingText else { return .ignored }; stepTo((focusedIndex - 1 + count) % max(count, 1)); return .handled }
-        .onKeyPress(.return) { guard !state.isEditingText, let f = focused else { return .ignored }; state.openedTravelID = f.id; return .handled }
-        .onKeyPress(.init("e")) { guard !state.isEditingText, focused != nil else { return .ignored }; state.travelEditing = true; return .handled }
-        .onKeyPress(.escape) { guard !state.isEditingText, state.travelEditing else { return .ignored }; state.travelEditing = false; return .handled }
-        .onKeyPress(.home) { stepTo(0); return .handled }
-        .onKeyPress(.end) { stepTo(max(count - 1, 0)); return .handled }
+        .onKeyPress(.rightArrow) { guard ringTakesKeys else { return .ignored }; stepTo((focusedIndex + 1) % max(count, 1)); return .handled }
+        .onKeyPress(.leftArrow) { guard ringTakesKeys else { return .ignored }; stepTo((focusedIndex - 1 + count) % max(count, 1)); return .handled }
+        .onKeyPress(.return) { guard ringTakesKeys, let f = focused else { return .ignored }; state.openedTravelID = f.id; return .handled }
+        .onKeyPress(.init("e")) { guard ringTakesKeys, focused != nil else { return .ignored }; state.travelEditing = true; return .handled }
+        .onKeyPress(.escape) { guard ringTakesKeys, state.travelEditing else { return .ignored }; state.travelEditing = false; return .handled }
+        .onKeyPress(.home) { guard ringTakesKeys else { return .ignored }; stepTo(0); return .handled }
+        .onKeyPress(.end) { guard ringTakesKeys else { return .ignored }; stepTo(max(count - 1, 0)); return .handled }
     }
 
     // MARK: physics
 
+    /// The ring keeps its keys (and its selection publishing) to itself while the trip page is over it.
+    private var ringTakesKeys: Bool { !state.isEditingText && state.openedTravelID == nil }
+
+    /// The ring publishes its focused trip as the app selection — unless the trip page is over it, or
+    /// the selection already names that trip.
+    private var wantsFocusPublish: Bool {
+        state.openedTravelID == nil && focused != nil && focused?.id != state.selectedTravelID
+    }
+
     private func tick(_ now: Date) {
+        // At rest with nothing to publish: return before touching any @State. Writing `lastTick` alone
+        // would invalidate the ring 60 times a second for a picture that never changes. `dt` is clamped
+        // below, so the first tick after an idle spell still steps by at most ~40 ms.
+        if velocity == 0, target == nil, count > 0, !wantsFocusPublish { return }
         let dt = min(40, now.timeIntervalSince(lastTick) * 1000) / 16.7; lastTick = now
         guard count > 0 else { return }
         if let t = target {
@@ -87,7 +107,7 @@ struct TravelRingView: View {
         let idx = Int((angle / step).rounded())
         if abs(velocity) > 0.3 && idx != lastClickIndex { lastClickIndex = idx; RatchetSound.shared.click() }
         // publish the focused trip
-        if let f = focused, state.selectedTravelID != f.id, target == nil || abs(RingGeometry.wrapDelta((target ?? angle) - angle)) < step / 2 {
+        if wantsFocusPublish, let f = focused, target == nil || abs(RingGeometry.wrapDelta((target ?? angle) - angle)) < step / 2 {
             state.selectedTravelID = f.id
         }
     }
