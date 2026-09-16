@@ -24,7 +24,7 @@ struct TravelsView: View {
                 ZStack {
                     TravelRingView(state: state)
                     if let id = state.openedTravelID, let trip = state.travels.first(where: { $0.id == id }) {
-                        TravelDetailView(state: state, trip: trip)     // Task 9 (placeholder until then)
+                        TravelDetailView(state: state, trip: trip)
                     }
                 }
                 if state.travelEditing, let id = state.selectedTravelID, let trip = state.travels.first(where: { $0.id == id }) {
