@@ -221,7 +221,8 @@ struct TravelRingView: View {
     }
 
     private var yearStrip: some View {
-        let years = Array(Set(trips.compactMap(\.year))).sorted(by: >)
+        // Oldest on the left, newest on the right — reads like a timeline.
+        let years = Array(Set(trips.compactMap(\.year))).sorted()
         return HStack(alignment: .bottom, spacing: 0) {
             ForEach(Array(years.enumerated()), id: \.element) { k, y in
                 let on = focused?.year == y
@@ -235,7 +236,7 @@ struct TravelRingView: View {
                     }.padding(.horizontal, 10)
                 }.buttonStyle(.plain)
                 if k < years.count - 1 {
-                    ForEach(0..<max(0, min(y - years[k + 1], 6) - 1), id: \.self) { _ in
+                    ForEach(0..<max(0, min(years[k + 1] - y, 6) - 1), id: \.self) { _ in
                         Rectangle().fill(Theme.hairline).frame(width: 1, height: 6).padding(.horizontal, 3).padding(.bottom, 15)
                     }
                 }
