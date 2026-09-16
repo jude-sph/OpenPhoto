@@ -14,6 +14,10 @@ public struct RingGeometry: Sendable, Equatable {
     public var cardWidth: Double = 250
     public var cardHeight: Double = 330
     public var edgeMargin: Double = 36
+    /// How much of the stage's height the front postcard should try to fill, and the pt band that
+    /// target is clamped into — a big ring (many trips) would otherwise leave it a stamp.
+    public var frontTargetFraction: Double = 0.38
+    public var frontTargetRange: ClosedRange<Double> = 280...420
     public init() {}
 
     public struct CardPlacement: Equatable, Sendable {
@@ -59,18 +63,35 @@ public struct RingGeometry: Sendable, Equatable {
         max(1, (w / 2 + edgeMargin) / edgeX(forCount: count))
     }
 
-    public func placement(index: Int, count: Int, angle: Double, stageWidth: Double) -> CardPlacement {
+    /// Height the front card (θ = 0: focus bump 1.08, z = −R − pull, so dist = P + R + pull) draws
+    /// at before the stage zoom is applied.
+    public func frontProjectedHeight(forCount count: Int) -> Double {
+        cardHeight * cardScale * 1.08 * perspective / (perspective + radius(forCount: count) + pull)
+    }
+
+    /// The zoom the stage actually uses: the wider of two rules — push the edge-on point past the
+    /// stage edges (above), and give the front card a decent share of the stage's height. With many
+    /// trips the ring grows and the first rule alone leaves the front postcard tiny and far away.
+    /// A stage of no height falls back to the width rule alone.
+    public func zoom(forStageWidth w: Double, stageHeight h: Double, count: Int) -> Double {
+        let edgeZoom = zoom(forStageWidth: w, count: count)
+        guard h > 0 else { return edgeZoom }
+        let targetH = min(max(h * frontTargetFraction, frontTargetRange.lowerBound), frontTargetRange.upperBound)
+        return max(edgeZoom, targetH / frontProjectedHeight(forCount: count))
+    }
+
+    public func placement(index: Int, count: Int, angle: Double, stageWidth: Double, stageHeight: Double = 0) -> CardPlacement {
         let step = Self.step(count: count)
         let th = Self.wrapDelta(Double(index) * step - angle)
         let d = abs(th), rad = th * .pi / 180
         let focus = 1 + max(0, 1 - d / step) * 0.08
         let s = focus * cardScale
-        let radius = radius(forCount: count)
-        let x = -sin(rad) * radius
-        let z = -cos(rad) * radius - pull
+        let r = radius(forCount: count)
+        let x = -sin(rad) * r
+        let z = -cos(rad) * r - pull
         let dist = perspective - z
         let proj = perspective / max(dist, 1)
-        let zoom = zoom(forStageWidth: stageWidth, count: count)
+        let zoom = zoom(forStageWidth: stageWidth, stageHeight: stageHeight, count: count)
         // Back-facing cards (past 90°) must be hidden explicitly — SwiftUI does not cull backfaces.
         // A turned card's projected half-width shrinks with cos θ; it is off-screen once its near
         // edge passes the stage edge, or when it is about to pass through the camera.

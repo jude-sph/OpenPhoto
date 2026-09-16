@@ -59,3 +59,31 @@ private let g = RingGeometry()
         #expect(abs(next.x - front.x) >= 0.95 * frontWidth, "count \(n)")
     }
 }
+
+@Test func frontCardReachesTargetHeightWhenRingIsWide() {
+    // 23 trips push the ring out to ~800, and the width rule alone leaves the front postcard a
+    // stamp. The second rule sizes the front card to a fraction of the stage height instead.
+    let z = g.zoom(forStageWidth: 1670, stageHeight: 1090, count: 23)
+    let target = 1090 * 0.38
+    #expect(abs(z * g.frontProjectedHeight(forCount: 23) - target) < 0.5)
+    // The view draws the card at `scale × cardHeight × zoom`; that must be the very same number.
+    let p = g.placement(index: 0, count: 23, angle: 0, stageWidth: 1670, stageHeight: 1090)
+    #expect(abs(p.scale * g.cardHeight * z - target) < 0.5)
+}
+
+@Test func frontTargetIsClampedAndNeverBelowEdgeRule() {
+    // A very tall stage stops asking for more at 420 pt, a short one never asks for less than 280.
+    #expect(abs(g.zoom(forStageWidth: 1670, stageHeight: 4000, count: 23) * g.frontProjectedHeight(forCount: 23) - 420) < 0.5)
+    #expect(abs(g.zoom(forStageWidth: 1670, stageHeight: 500, count: 23) * g.frontProjectedHeight(forCount: 23) - 280) < 0.5)
+    // The new rule only ever adds zoom: the width rule stays a floor.
+    #expect(g.zoom(forStageWidth: 1000, stageHeight: 300, count: 12) >= g.zoom(forStageWidth: 1000, count: 12))
+    // No stage height at all = the old width-only behaviour, exactly.
+    #expect(g.zoom(forStageWidth: 1000, stageHeight: 0, count: 12) == g.zoom(forStageWidth: 1000, count: 12))
+}
+
+@Test func edgeCardStillHiddenUnderFrontZoom() {
+    // 23 cards step 15.65°, so index 6 sits at 93.9° — past the turn, and hidden however far the
+    // front card is zoomed in; the front card itself stays on screen.
+    #expect(g.placement(index: 6, count: 23, angle: 0, stageWidth: 1670, stageHeight: 1090).hidden)
+    #expect(!g.placement(index: 0, count: 23, angle: 0, stageWidth: 1670, stageHeight: 1090).hidden)
+}

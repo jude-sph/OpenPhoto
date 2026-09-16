@@ -119,10 +119,10 @@ struct TravelRingView: View {
     // MARK: ring
 
     private func ring(width: CGFloat, height: CGFloat) -> some View {
-        let zoom = geo.zoom(forStageWidth: Double(width), count: count)
+        let zoom = geo.zoom(forStageWidth: Double(width), stageHeight: Double(height), count: count)
         return ZStack {
             ForEach(Array(trips.enumerated()), id: \.element.id) { i, trip in
-                let p = geo.placement(index: i, count: count, angle: angle, stageWidth: Double(width))
+                let p = geo.placement(index: i, count: count, angle: angle, stageWidth: Double(width), stageHeight: Double(height))
                 if !p.hidden {
                     card(trip, focused: i == focusedIndex)
                         .rotation3DEffect(.degrees(p.angle), axis: (x: 0, y: 1, z: 0), perspective: 0.6)
