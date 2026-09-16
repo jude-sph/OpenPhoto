@@ -18,13 +18,13 @@ extension AppState {
         let defs = TravelResolver.resolve(settings: travelSettings,
                                           records: TravelStore.loadAll(libraryRoot: root),
                                           folderTree: folderTree)
-        let search = placeSearch
+        let search = loadedPlaceSearch   // non-forcing: the warm-up fills it in a moment
         let sums = defs.compactMap { def -> TravelSummary? in
             let stats = (try? cat.travelStats(dirPaths: def.folders))
                 ?? TravelStats(count: 0, minTakenAtMs: nil, maxTakenAtMs: nil, earliestHash: nil)
             guard stats.count > 0 else { return nil }   // a trip with no visible photos isn't shown
             let detected = ((try? cat.travelPlaces(dirPaths: def.folders)) ?? []).map { d in
-                search.place(matching: d)
+                search?.place(matching: d)
                     ?? TravelPlace(name: d.city, region: d.region.isEmpty ? nil : d.region,
                                    country: d.country.isEmpty ? nil : d.country, countryCode: d.countryCode)
             }
@@ -37,9 +37,11 @@ extension AppState {
 
     /// The detected (derived) places for a trip, regardless of any override — for "Use detected".
     func travelDetectedPlaces(_ s: TravelSummary) -> [TravelPlace] {
-        let search = placeSearch
+        let search = loadedPlaceSearch   // non-forcing (see refreshTravels)
         return ((try? library?.catalog.travelPlaces(dirPaths: s.folders)) ?? []).map { d in
-            search.place(matching: d) ?? TravelPlace(name: d.city, countryCode: d.countryCode)
+            search?.place(matching: d)
+                ?? TravelPlace(name: d.city, region: d.region.isEmpty ? nil : d.region,
+                               country: d.country.isEmpty ? nil : d.country, countryCode: d.countryCode)
         }
     }
 
@@ -94,6 +96,18 @@ extension AppState {
     func removeTravel(id: String) {
         guard let root = travelsRoot, let s = travels.first(where: { $0.id == id }) else { return }
         if let r = s.definition.record {
+            // A record folder that is a direct child of the Travels folder would simply be
+            // re-discovered on the next refresh (with derived name/dates, losing the user's edits),
+            // so hide those folders before the file goes — "removed" has to stay removed.
+            var st = travelSettings
+            if let tf = travelSettings.travelsFolder {
+                for f in r.folders where (f as NSString).deletingLastPathComponent == tf && !st.hidden.contains(f) {
+                    st.hidden.append(f)
+                }
+            }
+            if st != travelSettings {
+                do { try TravelStore.saveSettings(st, libraryRoot: root) } catch { NSAlert(error: error).runModal(); return }
+            }
             TravelStore.delete(id: r.id, libraryRoot: root)
         } else if case .discovered(let p) = s.definition.source {
             var st = travelSettings

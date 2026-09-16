@@ -210,6 +210,10 @@ final class AppState {
     }
     @ObservationIgnored private var _placeSearch: PlaceSearch?
 
+    /// The place index only if it is already loaded — non-forcing, so callers on the library-open
+    /// path (`refreshTravels`) never parse the dataset on the main actor.
+    var loadedPlaceSearch: PlaceSearch? { _placeSearch }
+
     /// Nonisolated so the off-main warm-up can read it without hopping back to the main actor.
     nonisolated private static var geoNamesDirectory: URL? {
         Bundle.main.resourceURL?.appendingPathComponent("geonames")
@@ -224,6 +228,7 @@ final class AppState {
             }.value
             guard let self, self._placeSearch == nil else { return }
             self._placeSearch = search
+            refreshTravels()   // detected places gain coordinates one tick after the load
         }
     }
 
@@ -2186,8 +2191,8 @@ final class AppState {
             library?.catalog.revealLocked = false
             lockedRevealed = false
             refreshAlbums()
+            warmPlaceSearch()     // GeoNames index off-main FIRST — refreshTravels must not force it
             refreshTravels()      // settings + any trips visible before the first scan refresh
-            warmPlaceSearch()     // GeoNames index off-main, ready for the Travels inspector
             if finderTagSyncEnabled { syncFinderTagsNow() }   // initial Finder-tag reconcile pass
             deviceWatcher.onVolumesChanged = { [weak self] in
                 Task { @MainActor in
