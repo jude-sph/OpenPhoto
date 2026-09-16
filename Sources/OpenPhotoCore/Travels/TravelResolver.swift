@@ -110,6 +110,28 @@ public enum TravelResolver {
             coverHash: r?.coverHash ?? stats.earliestHash, coverOverridden: r?.coverHash != nil)
     }
 
+    /// After a folder move/rename `from` → `to`, rewrite every record folder and settings path that is
+    /// `from` or lies under it (prefix + "/"), so trips follow their folders. Pure.
+    public static func rewritePaths(records: [TravelRecord], settings: TravelSettings, from src: String, to dst: String)
+        -> (records: [TravelRecord], settings: TravelSettings, changedRecordIDs: Set<String>) {
+        func remap(_ p: String) -> String {
+            if p == src { return dst }
+            if p.hasPrefix(src + "/") { return dst + String(p.dropFirst(src.count)) }
+            return p
+        }
+        var changed = Set<String>()
+        let recs = records.map { r -> TravelRecord in
+            var r = r
+            let f = r.folders.map(remap)
+            if f != r.folders { r.folders = f; changed.insert(r.id) }
+            return r
+        }
+        var s = settings
+        s.travelsFolder = s.travelsFolder.map(remap)
+        s.hidden = s.hidden.map(remap)
+        return (recs, s, changed)
+    }
+
     /// "YYYY-MM-DD" in the local calendar (the same calendar the timeline groups by).
     public static func dateString(fromMs ms: Int64) -> String {
         let d = Date(timeIntervalSince1970: Double(ms) / 1000)
