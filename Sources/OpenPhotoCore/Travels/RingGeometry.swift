@@ -101,4 +101,31 @@ public struct RingGeometry: Sendable, Equatable {
             || dist < 220
         return CardPlacement(angle: th, x: x * proj, scale: s * proj, depth: d / 180, hidden: off)
     }
+
+    /// Which card a click at `(x, y)` in stage coordinates lands on — or nil for a click on bare stage.
+    ///
+    /// The ring has to answer this itself: SwiftUI hit-tests a `rotation3DEffect`'d view by its
+    /// UNROTATED frame, so overlapping postcards resolved clicks unpredictably (clicking an off-centre
+    /// card sometimes opened the centre one). Here each visible card is the axis-aligned box it
+    /// actually projects to: centred at `stageWidth/2 + x·zoom` horizontally and at `centerY`
+    /// vertically (the ring's own centre in the stage, which the view offsets slightly above the
+    /// stage centre). A turned card's projected half-width shrinks with cos θ — floored at 0.12 so a
+    /// nearly edge-on card keeps a clickable sliver. Among the cards containing the point the one
+    /// drawn on top wins: the smallest `depth`, matching the view's `zIndex(1 - depth)`.
+    public func hitTest(x: Double, y: Double, count: Int, angle: Double,
+                        stageWidth: Double, stageHeight: Double, centerY: Double) -> Int? {
+        guard count > 0 else { return nil }
+        let zoom = zoom(forStageWidth: stageWidth, stageHeight: stageHeight, count: count)
+        var best: (index: Int, depth: Double)?
+        for i in 0..<count {
+            let p = placement(index: i, count: count, angle: angle, stageWidth: stageWidth, stageHeight: stageHeight)
+            guard !p.hidden else { continue }
+            let cx = stageWidth / 2 + p.x * zoom
+            let hw = cardWidth / 2 * p.scale * zoom * max(abs(cos(p.angle * .pi / 180)), 0.12)
+            let hh = cardHeight / 2 * p.scale * zoom
+            guard abs(x - cx) <= hw, abs(y - centerY) <= hh else { continue }
+            if best == nil || p.depth < best!.depth { best = (i, p.depth) }
+        }
+        return best?.index
+    }
 }

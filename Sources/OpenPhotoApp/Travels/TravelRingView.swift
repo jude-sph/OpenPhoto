@@ -2,8 +2,9 @@ import SwiftUI
 import OpenPhotoCore
 
 /// The ring: trips as postcards standing in a circle around you, newest at the front, spun by
-/// trackpad scroll, drag, or arrow keys with inertia + snap, and a ratchet click as each card crosses
-/// the front. Geometry lives in `RingGeometry` (Core, unit-tested); this view only applies it.
+/// trackpad scroll or arrow keys with inertia + snap, and a ratchet click as each card crosses the
+/// front. Geometry lives in `RingGeometry` (Core, unit-tested); this view only applies it — including
+/// the click resolution, since SwiftUI hit-tests the rotated cards by their unrotated frames.
 struct TravelRingView: View {
     @Bindable var state: AppState
 
@@ -12,7 +13,7 @@ struct TravelRingView: View {
     @State private var target: Double?        // snap/step target, eased
     @State private var lastTick = Date()
     @State private var lastClickIndex = -1
-    @State private var dragStartX: CGFloat?
+    @State private var hasSpun = false         // hides the "how to spin" hint once you have
     private let geo = RingGeometry()
     private let clock = Timer.publish(every: 1 / 60, on: .main, in: .common).autoconnect()
 
@@ -26,7 +27,20 @@ struct TravelRingView: View {
         GeometryReader { g in
             let w = g.size.width
             ZStack {
+                // The stage itself takes every click on the ring: the cards are `allowsHitTesting(false)`
+                // because SwiftUI hit-tests a `rotation3DEffect`'d view by its UNROTATED frame, so
+                // overlapping postcards answered clicks unpredictably (an off-centre card would open
+                // the centre one). `RingGeometry.hitTest` resolves the card from the real projection.
+                // Meta buttons, the year strip and the rest of the chrome sit ABOVE this layer and
+                // keep their own clicks.
                 Theme.windowBG
+                    .onTapGesture(count: 1, coordinateSpace: .local) { pt in
+                        guard state.openedTravelID == nil, count > 0 else { return }
+                        guard let i = geo.hitTest(x: Double(pt.x), y: Double(pt.y), count: count, angle: angle,
+                                                  stageWidth: Double(g.size.width), stageHeight: Double(g.size.height),
+                                                  centerY: ringCenterY(g.size.height)) else { return }
+                        if i == focusedIndex { state.openedTravelID = trips[i].id } else { stepTo(i) }
+                    }
                 // Nothing of the ring is drawn while the trip page is over it — a card sliding past
                 // the stage edge would otherwise show beside the page.
                 if trips.isEmpty { emptyState } else if state.openedTravelID == nil {
@@ -39,23 +53,19 @@ struct TravelRingView: View {
                 if state.openedTravelID == nil {
                     ScrollWheelCatcher { dx, dy in
                         target = nil
+                        hasSpun = true
                         let d = abs(dx) > abs(dy) ? dx : dy
                         velocity += Double(d) * 0.045
                     }
                 }
             }
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 3).onChanged { v in
-                if dragStartX == nil { dragStartX = v.location.x; target = nil; velocity = 0 }
-                let dx = v.location.x - (dragStartX ?? v.location.x); dragStartX = v.location.x
-                angle += Double(dx) * -0.16; velocity = Double(dx) * -0.16 * 0.9
-            }.onEnded { _ in dragStartX = nil })
             .onReceive(clock) { now in tick(now) }
             .onChange(of: state.selectedTravelID) { _, id in
                 // Only follow selections from OUTSIDE the ring (folder context menu, etc.). While the
                 // ring is spinning it publishes the selection itself, and a delivery that lands after
                 // the angle has moved on would yank the physics into eased-target mode mid-flick.
-                guard dragStartX == nil, velocity == 0, target == nil else { return }
+                guard velocity == 0, target == nil else { return }
                 if let id, let i = trips.firstIndex(where: { $0.id == id }), i != focusedIndex { stepTo(i) }
             }
             .onChange(of: trips.map(\.id)) { _, _ in
@@ -67,8 +77,8 @@ struct TravelRingView: View {
         }
         .focusable()
         .focusEffectDisabled()
-        .onKeyPress(.rightArrow) { guard ringTakesKeys else { return .ignored }; stepTo((focusedIndex + 1) % max(count, 1)); return .handled }
-        .onKeyPress(.leftArrow) { guard ringTakesKeys else { return .ignored }; stepTo((focusedIndex - 1 + count) % max(count, 1)); return .handled }
+        .onKeyPress(.rightArrow) { guard ringTakesKeys else { return .ignored }; hasSpun = true; stepTo((focusedIndex + 1) % max(count, 1)); return .handled }
+        .onKeyPress(.leftArrow) { guard ringTakesKeys else { return .ignored }; hasSpun = true; stepTo((focusedIndex - 1 + count) % max(count, 1)); return .handled }
         .onKeyPress(.return) { guard ringTakesKeys, let f = focused else { return .ignored }; state.openedTravelID = f.id; return .handled }
         .onKeyPress(.escape) { guard ringTakesKeys, state.travelEditing else { return .ignored }; state.travelEditing = false; return .handled }
         .onKeyPress(.home) { guard ringTakesKeys else { return .ignored }; stepTo(0); return .handled }
@@ -117,6 +127,11 @@ struct TravelRingView: View {
 
     // MARK: ring
 
+    /// The ring's vertical centre in the stage — the stage centre, lifted a little. `ring(width:height:)`
+    /// draws itself at exactly this centre and `hitTest` resolves clicks against it, so the two must
+    /// never drift apart: both go through here.
+    private func ringCenterY(_ height: CGFloat) -> Double { Double(height) / 2 - Double(height) * 0.04 }
+
     private func ring(width: CGFloat, height: CGFloat) -> some View {
         let zoom = geo.zoom(forStageWidth: Double(width), stageHeight: Double(height), count: count)
         return ZStack {
@@ -128,16 +143,17 @@ struct TravelRingView: View {
                         .scaleEffect(p.scale)
                         .offset(x: p.x)
                         .zIndex(1 - p.depth)
-                        .onTapGesture { if i == focusedIndex { state.openedTravelID = trip.id } else { stepTo(i) } }
                 }
             }
         }
         .scaleEffect(zoom)
         .frame(width: width, height: height)
-        .offset(y: -height * 0.04)
+        .offset(y: ringCenterY(height) - height / 2)
         // The ring is wider than the stage by design (cards slide off the edges); without this they
         // would draw over the sidebar, the toolbar and the trip page.
         .clipped()
+        // The cards take no clicks of their own — the stage resolves them through `RingGeometry.hitTest`.
+        .allowsHitTesting(false)
     }
 
     /// Every card is exactly `cardWidth` × `cardHeight`, whatever the cover photo's aspect: the
@@ -191,7 +207,7 @@ struct TravelRingView: View {
         VStack(alignment: .trailing, spacing: 2) {
             Text(focused?.year.map(String.init) ?? "—")
                 .font(.system(size: 64, weight: .ultraLight).monospacedDigit()).kerning(-2).foregroundStyle(Theme.text).opacity(0.9)
-            Text("SPIN TO TRAVEL BACK").font(.system(size: 11, weight: .semibold)).kerning(0.9).foregroundStyle(Theme.textFaint)
+            Text("SCROLL TO TRAVEL BACK").font(.system(size: 11, weight: .semibold)).kerning(0.9).foregroundStyle(Theme.textFaint)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(.top, 16).padding(.trailing, 26)
         .allowsHitTesting(false)
@@ -215,6 +231,13 @@ struct TravelRingView: View {
                 Button("Edit trip") { state.travelEditing = true }
                 Button("Open trip") { state.openedTravelID = focused?.id }.buttonStyle(.borderedProminent).tint(Theme.accent)
             }.controlSize(.small).padding(.top, 6)
+            // How to spin, until you have. Faded rather than removed, so the chrome never shifts.
+            Text("Two-finger scroll, or ← → keys, to spin")
+                .font(.system(size: 11)).foregroundStyle(Theme.textFaint)
+                .opacity(hasSpun ? 0 : 1)
+                .padding(.top, 2)
+                .allowsHitTesting(false)
+                .animation(.easeOut(duration: 0.4), value: hasSpun)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom).padding(.bottom, 60)
     }

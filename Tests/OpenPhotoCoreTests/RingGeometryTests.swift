@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenPhotoCore
 
@@ -86,4 +87,68 @@ private let g = RingGeometry()
     // front card is zoomed in; the front card itself stays on screen.
     #expect(g.placement(index: 6, count: 23, angle: 0, stageWidth: 1670, stageHeight: 1090).hidden)
     #expect(!g.placement(index: 0, count: 23, angle: 0, stageWidth: 1670, stageHeight: 1090).hidden)
+}
+
+// MARK: hit testing
+//
+// The ring resolves clicks itself: SwiftUI hit-tests `rotation3DEffect`'d views by their UNROTATED
+// frames, so overlapping postcards answered clicks unpredictably (an off-centre card would open the
+// centre one). A 1200×800 stage draws the ring centred at y = 368 (the view offsets it by -4% of the
+// height from the stage centre).
+private let stageW = 1200.0, stageH = 800.0, ringY = 368.0
+private let ringZoom = g.zoom(forStageWidth: stageW, stageHeight: stageH, count: 12)
+
+/// The same box the hit test must be using, computed independently from `placement`.
+private func box(_ i: Int) -> (cx: Double, hw: Double, hh: Double, depth: Double, hidden: Bool) {
+    let p = g.placement(index: i, count: 12, angle: 0, stageWidth: stageW, stageHeight: stageH)
+    let th = p.angle * .pi / 180
+    return (stageW / 2 + p.x * ringZoom,
+            g.cardWidth / 2 * p.scale * ringZoom * max(abs(cos(th)), 0.12),
+            g.cardHeight / 2 * p.scale * ringZoom,
+            p.depth, p.hidden)
+}
+private func contains(_ i: Int, _ x: Double, _ y: Double) -> Bool {
+    let b = box(i)
+    return !b.hidden && abs(x - b.cx) <= b.hw && abs(y - ringY) <= b.hh
+}
+private func hit(_ x: Double, _ y: Double) -> Int? {
+    g.hitTest(x: x, y: y, count: 12, angle: 0, stageWidth: stageW, stageHeight: stageH, centerY: ringY)
+}
+
+@Test func hitTestFindsTheFrontCardAtTheStageCentre() {
+    #expect(hit(stageW / 2, ringY) == 0)
+}
+
+@Test func hitTestFindsAnOffCentreCardAtItsProjectedCentre() {
+    let b = box(1)
+    #expect(!b.hidden)
+    #expect(hit(b.cx, ringY) == 1)
+    // The bug this replaces: the front card must NOT answer for a click that is nowhere near it.
+    #expect(!contains(0, b.cx, ringY))
+}
+
+@Test func hitTestResolvesOverlapByWhatIsDrawnOnTop() {
+    // 40 pt from index 1's centre towards the front card. Whether the two boxes overlap there is
+    // geometry, not a promise — but the answer must always be the containing card drawn on top
+    // (the smallest depth, matching the view's `zIndex(1 - depth)`).
+    let x = box(1).cx + 40
+    let candidates = (0..<12).filter { contains($0, x, ringY) }
+    let expected = candidates.min { box($0).depth < box($1).depth }
+    #expect(hit(x, ringY) == expected)
+    #expect(expected == 0 || expected == 1)
+}
+
+@Test func hitTestMissesEmptyCorners() {
+    #expect(hit(10, 10) == nil)
+    #expect(hit(stageW / 2, ringY + box(0).hh + 1) == nil)
+}
+
+@Test func hitTestNeverReturnsAHiddenCard() {
+    // Index 6 sits at 180° — hidden (back-facing), and projected straight onto the stage centre,
+    // where the front card really is. The click belongs to the front card, never to the hidden one.
+    #expect(box(6).hidden)
+    let b = box(6)
+    #expect(hit(b.cx, ringY) != 6)
+    // And with nothing visible under the point at all, nobody answers.
+    #expect(hit(b.cx, ringY + 400) == nil)
 }
