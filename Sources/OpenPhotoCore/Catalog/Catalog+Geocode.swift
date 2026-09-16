@@ -54,6 +54,25 @@ extension Catalog {
         }
     }
 
+    /// City per hash for a batch of assets (the trip page's per-day place), skipping assets with no
+    /// geocode row and country-only rows (empty city). One query per 500 hashes — SQLite's default
+    /// variable limit is 999, and the hashes are bound as arguments rather than inlined.
+    public func geocodeCities(forHashes hashes: [String]) throws -> [String: String] {
+        guard !hashes.isEmpty else { return [:] }
+        var out: [String: String] = [:]
+        try dbQueue.read { db in
+            for chunk in stride(from: 0, to: hashes.count, by: 500).map({ Array(hashes[$0..<min($0 + 500, hashes.count)]) }) {
+                let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                for r in try Row.fetchAll(db, sql: """
+                    SELECT hash, city FROM geocode WHERE hash IN (\(marks)) AND city <> ''
+                    """, arguments: StatementArguments(chunk)) {
+                    out[r["hash"]] = r["city"]
+                }
+            }
+        }
+        return out
+    }
+
     /// (lat, lon) for an asset, or nil if either is null (no GPS). Geocode keys off this, not bytes.
     public func coordinate(forHash hash: String) throws -> (lat: Double, lon: Double)? {
         try dbQueue.read { db in

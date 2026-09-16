@@ -31,6 +31,10 @@ private func rec(_ id: String, folders: [String], name: String? = nil) -> Travel
     let text = try String(contentsOf: TravelStore.directoryURL(libraryRoot: t.root)
         .appendingPathComponent("id-a.json"), encoding: .utf8)
     #expect(text.contains("\"endDate\" : null"))
+    // …including inside a place: a free-text place carries every optional as an explicit null
+    // (vault-format-v1 §16.2 shows the full key set).
+    #expect(text.contains("\"latitude\" : null"))
+    #expect(text.contains("\"geonameID\" : null"))
 }
 
 @Test func travelStoreSkipsCorruptFileAndSettings() throws {

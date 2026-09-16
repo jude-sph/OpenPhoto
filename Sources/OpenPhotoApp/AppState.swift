@@ -2503,9 +2503,8 @@ final class AppState {
 
     /// Refresh every browse surface after the locked set / reveal state changes.
     private func refreshAfterLockChange() {
-        try? refreshQueries()   // timeline / folders / bin (also re-derives trips)
+        try? refreshQueries()   // timeline / folders / bin (also re-derives trips, locked gate and all)
         loadPeople()            // faces (catalog face queries also honour the locked gate)
-        refreshTravels()        // trip counts/covers honour the locked gate too (also if the above threw)
         refreshToken += 1       // nudge map markers, search results, inspector, dependent views
     }
 

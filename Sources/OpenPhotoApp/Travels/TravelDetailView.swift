@@ -44,8 +44,11 @@ struct TravelDetailView: View {
         .focusEffectDisabled()
         .focused($pageFocused)
         .onAppear { pageFocused = true }
-        .task(id: trip.id) { load() }
-        .task(id: state.refreshToken) { load() }
+        // Keyed on the folders, like the inspector's item fetch: this is the trip's whole item list
+        // plus a geocode query, and every cover click / background rescan bumps `refreshToken`. No
+        // two trips share a folder, so the page still follows a trip switch; the hero and the facts
+        // read `trip`, which AppState has already re-derived by then.
+        .task(id: trip.folders) { load() }
         .onKeyPress(.escape) { if state.isEditingText { return .ignored }; state.openedTravelID = nil; return .handled }
         .transition(.opacity)
     }
@@ -56,7 +59,7 @@ struct TravelDetailView: View {
             LinearGradient(colors: [Theme.windowBG, .clear], startPoint: .bottom, endPoint: .init(x: 0.5, y: 0.4))
             VStack(alignment: .leading, spacing: 6) {
                 Text(trip.name).font(.system(size: 34, weight: .semibold)).kerning(-0.8)
-                Text("\(TravelFormat.span(trip)) · \(trip.places.map(\.name).joined(separator: " · "))").font(.system(size: 14)).foregroundStyle(Theme.textDim)
+                Text(heroLine).font(.system(size: 14)).foregroundStyle(Theme.textDim)
             }.padding(.horizontal, 28).padding(.bottom, 18)
         }
         .frame(height: 300)
@@ -67,6 +70,12 @@ struct TravelDetailView: View {
                 Button("Edit trip") { state.openedTravelID = nil; state.travelEditing = true }
             }.controlSize(.small).padding(14)
         }
+    }
+
+    /// Span and places, whichever of the two exists — a trip with no places must not trail a " · ".
+    private var heroLine: String {
+        [TravelFormat.span(trip), trip.places.map(\.name).joined(separator: " · ")]
+            .filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     private func fact(_ label: String, _ value: String) -> some View {
@@ -95,12 +104,16 @@ struct TravelDetailView: View {
             let d = cal.startOfDay(for: Date(timeIntervalSince1970: Double(it.takenAtMs) / 1000))
             if let last = groups.last, last.0 == d { groups[groups.count - 1].1.append(it) } else { groups.append((d, [it])) }
         }
+        // One query for the whole trip, not one per photo: a 4 000-photo trip used to run 4 000
+        // statements (capped at 200 a day) just to label the day headers.
+        var cities: [String: String] = [:]
+        if let cat = state.library?.catalog {
+            cities = (try? cat.geocodeCities(forHashes: all.map(\.hash))) ?? [:]
+        }
         let f = Date.FormatStyle().weekday(.wide).month(.wide).day()
         days = groups.map { day, items in
             var counts: [String: Int] = [:]
-            if let cat = state.library?.catalog {
-                for it in items.prefix(200) { if let g = try? cat.geocode(forHash: it.hash), !g.city.isEmpty { counts[g.city, default: 0] += 1 } }
-            }
+            for it in items { if let c = cities[it.hash] { counts[c, default: 0] += 1 } }
             let place = counts.max { $0.value < $1.value }?.key
             return (day.formatted(f), place, items)
         }

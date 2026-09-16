@@ -172,7 +172,7 @@ like `items(inDir:recursive:)`), each taking `dirPaths: [String]` and matching
 
 - `travelStats(dirPaths:) -> TravelStats` — `count`, `minTakenAtMs`, `maxTakenAtMs`,
   `earliestHash` (the derived cover), all from one query.
-- `travelPlaces(dirPaths:) -> [PlaceFacet]` — distinct `(city, region, country, countryCode)` from
+- `travelPlaces(dirPaths:) -> [DetectedPlace]` — distinct `(city, region, country, countryCode)` from
   `geocode` joined to the visible instances, ordered by photo count desc. Photos without a geocode row
   contribute nothing.
 - `travelItems(dirPaths:) -> [TimelineItem]` — the trip's photos, `takenAtMs ASC` (the trip page
@@ -193,7 +193,7 @@ only the reverse side). API:
   diacritic-insensitive prefix match on `name`, `asciiName`, or any alternate name; exact-name matches
   rank first, then by population desc. Returns fully populated `TravelPlace`s (coordinates, region,
   country, `geonameID`). Empty query ⇒ `[]`. An unloaded dataset ⇒ `[]` (graceful, like the stage).
-- `PlaceSearch.place(matching facet: PlaceFacet) -> TravelPlace?` — resolve a *detected* city
+- `PlaceSearch.place(matching place: DetectedPlace) -> TravelPlace?` — resolve a *detected* city
   (`geocode` row: city + countryCode + region) back to its GeoNames entry so derived places also carry
   coordinates when the user first edits them.
 
@@ -339,3 +339,4 @@ mirror, trip page, locked-folder gating).
 ## Changelog
 
 - 2026-09-15 — initial spec.
+- 2026-09-15 — implemented; `DetectedPlace` replaces the draft's `PlaceFacet` reuse.

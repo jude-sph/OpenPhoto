@@ -20,6 +20,27 @@ public struct TravelPlace: Codable, Sendable, Equatable, Hashable {
 
     /// True when the place carries coordinates (a GeoNames match), false for free text.
     public var isOnMap: Bool { latitude != nil && longitude != nil }
+
+    // Like TravelRecord below: nil is written as an explicit JSON null so a free-text place carries
+    // the full key set on disk (vault-format-v1 §16.2), not a short object.
+    private enum K: String, CodingKey { case name, region, country, countryCode, latitude, longitude, geonameID }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: K.self)
+        try c.encode(name, forKey: .name); try c.encode(region, forKey: .region)
+        try c.encode(country, forKey: .country); try c.encode(countryCode, forKey: .countryCode)
+        try c.encode(latitude, forKey: .latitude); try c.encode(longitude, forKey: .longitude)
+        try c.encode(geonameID, forKey: .geonameID)
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        name = try c.decode(String.self, forKey: .name)
+        region = try c.decodeIfPresent(String.self, forKey: .region)
+        country = try c.decodeIfPresent(String.self, forKey: .country)
+        countryCode = try c.decodeIfPresent(String.self, forKey: .countryCode)
+        latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
+        longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
+        geonameID = try c.decodeIfPresent(Int.self, forKey: .geonameID)
+    }
 }
 
 /// One trip: the user's decisions only. Everything derivable (count, date span, detected places,

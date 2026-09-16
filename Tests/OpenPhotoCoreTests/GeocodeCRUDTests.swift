@@ -28,6 +28,22 @@ private let C = "sha256:" + String(repeating: "c", count: 64)   // NO gps
     #expect(try cat.geocode(forHash: A)?.city == "Taipei City")
 }
 
+@Test func geocodeCitiesForHashesReturnsOnlyGeocodedCities() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.upsert(assets: [photo(A, lat: 25, lon: 121), photo(B, lat: 35, lon: 139), photo(C)])
+    try cat.upsertGeocode(GeocodeRow(hash: A, city: "Taipei", region: "Taipei",
+                                     country: "Taiwan", countryCode: "TW"))
+    try cat.upsertGeocode(GeocodeRow(hash: B, city: "Tokyo", region: "Tokyo",
+                                     country: "Japan", countryCode: "JP"))
+    let map = try cat.geocodeCities(forHashes: [A, B, C])
+    #expect(map == [A: "Taipei", B: "Tokyo"])                 // C has no geocode row at all
+    #expect(try cat.geocodeCities(forHashes: []).isEmpty)
+    // A country-only geocode row (no city) contributes nothing.
+    try cat.upsertGeocode(GeocodeRow(hash: C, city: "", region: "", country: "Taiwan", countryCode: "TW"))
+    #expect(try cat.geocodeCities(forHashes: [C]).isEmpty)
+}
+
 @Test func distinctPlacesReturnsCountryAndCityFacets() throws {
     let t = try TestDirs(); defer { t.cleanup() }
     let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))

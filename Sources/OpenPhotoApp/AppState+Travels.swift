@@ -35,16 +35,6 @@ extension AppState {
         if selectedTravelID == nil { selectedTravelID = travels.first?.id }
     }
 
-    /// The detected (derived) places for a trip, regardless of any override — for "Use detected".
-    func travelDetectedPlaces(_ s: TravelSummary) -> [TravelPlace] {
-        let search = loadedPlaceSearch   // non-forcing (see refreshTravels)
-        return ((try? library?.catalog.travelPlaces(dirPaths: s.folders)) ?? []).map { d in
-            search?.place(matching: d)
-                ?? TravelPlace(name: d.city, region: d.region.isEmpty ? nil : d.region,
-                               country: d.country.isEmpty ? nil : d.country, countryCode: d.countryCode)
-        }
-    }
-
     /// The trip's photos, oldest first (the Travels detail grid).
     func travelItems(_ s: TravelSummary) -> [TimelineItem] {
         (try? library?.catalog.travelItems(dirPaths: s.folders)) ?? []
@@ -56,9 +46,11 @@ extension AppState {
             ?? TravelStats(count: 0, minTakenAtMs: nil, maxTakenAtMs: nil, earliestHash: nil)
     }
 
-    /// The trip (if any) whose folders cover `path` — for the folder context menu.
+    /// The trip (if any) that overlaps `path` — for the folder context menu and the overlap guard.
+    /// Both nesting directions count: an ancestor of a trip's folder shares its photos just as
+    /// surely as a descendant does, and two trips must never show the same photo.
     func travelID(forFolder path: String) -> String? {
-        travels.first { $0.folders.contains { path == $0 || path.hasPrefix($0 + "/") } }?.id
+        travels.first { $0.folders.contains { path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/") } }?.id
     }
 
     // MARK: - Mutations
@@ -132,11 +124,12 @@ extension AppState {
         return r.id
     }
 
-    /// Choose the Travels folder (nil = none). Changing the folder clears `hidden` (it was per-folder).
+    /// Choose the Travels folder (nil = none). Switching to a DIFFERENT folder clears `hidden` (it
+    /// was per-folder); clearing the folder and re-choosing the same one keeps removed trips removed.
     func setTravelsFolder(_ path: String?, auto: Bool) {
         guard let root = travelsRoot else { return }
         var s = travelSettings
-        if s.travelsFolder != path { s.hidden = [] }
+        if let p = path, p != s.travelsFolder { s.hidden = [] }
         s.travelsFolder = path
         s.autoDiscover = auto
         do { try TravelStore.saveSettings(s, libraryRoot: root) } catch { NSAlert(error: error).runModal(); return }

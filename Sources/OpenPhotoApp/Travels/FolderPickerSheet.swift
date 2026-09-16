@@ -121,7 +121,7 @@ struct FolderPickerSheet: View {
             .buttonStyle(.plain).disabled(node.children.isEmpty)
             Image(systemName: "folder").foregroundStyle(Theme.textDim)
             Text(node.name).lineLimit(1)
-            if state.travelSettings.travelsFolder == node.path && state.travelSettings.autoDiscover {
+            if state.travelSettings.travelsFolder == node.path {
                 Text("Travels").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.accent)
                     .padding(.horizontal, 6).padding(.vertical, 1).background(Theme.accentDim, in: Capsule())
             }

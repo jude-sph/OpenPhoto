@@ -47,7 +47,10 @@ struct TravelInspector: View {
             if old == .name && new != .name { commitName() }
         }
         .sheet(isPresented: $showAddFolder) {
-            FolderPickerSheet(state: state, mode: .addFolder(exclude: trip.folders)) { p, _ in
+            // Every other trip's folders too: adding one here would silently hand the same photos
+            // to two trips (the New-trip picker already greys them out).
+            let taken = trip.folders + state.travels.filter { $0.id != trip.id }.flatMap(\.folders)
+            FolderPickerSheet(state: state, mode: .addFolder(exclude: taken)) { p, _ in
                 state.addTravelFolder(id: trip.id, p)
             }
         }

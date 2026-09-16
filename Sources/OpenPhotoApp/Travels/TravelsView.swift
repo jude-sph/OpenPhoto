@@ -54,8 +54,11 @@ struct TravelsView: View {
             Button {
                 showTravelsFolderPicker = true
             } label: {
+                // The chosen folder shows even with auto-discovery off — it is still the folder the
+                // picker will open on, and "No Travels folder" would be a lie.
                 let name = state.travelSettings.travelsFolder.map { ($0 as NSString).lastPathComponent }
-                Label(state.travelSettings.autoDiscover && name != nil ? "Travels folder: \(name!)" : "No Travels folder",
+                Label(name.map { "Travels folder: \($0)" + (state.travelSettings.autoDiscover ? "" : " (auto off)") }
+                        ?? "No Travels folder",
                       systemImage: "folder")
             }
             .help("Every folder directly inside the Travels folder becomes a trip automatically")

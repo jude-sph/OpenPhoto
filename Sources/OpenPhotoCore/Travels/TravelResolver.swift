@@ -69,11 +69,13 @@ public enum TravelResolver {
         var defs = records.map {
             TravelDefinition(id: $0.id, source: .record($0), folders: normalise(folders: $0.folders))
         }
-        guard settings.autoDiscover, let root = settings.travelsFolder,
-              let rootNode = find(root, in: folderTree) else { return defs }
+        guard settings.autoDiscover, let root = settings.travelsFolder else { return defs }
+        // "" is the vault root itself: the tree's top-level nodes are its direct children, and no
+        // node carries the empty path, so `find` could never return one.
+        guard let children = root.isEmpty ? folderTree : find(root, in: folderTree)?.children else { return defs }
         let covered = defs.flatMap(\.folders)
         let hidden = Set(settings.hidden)
-        for child in rootNode.children {
+        for child in children {
             let p = child.path
             if hidden.contains(p) { continue }
             if covered.contains(where: { p == $0 || p.hasPrefix($0 + "/") || $0.hasPrefix(p + "/") }) { continue }
@@ -85,7 +87,7 @@ public enum TravelResolver {
     private static func find(_ path: String, in nodes: [FolderNode]) -> FolderNode? {
         for n in nodes {
             if n.path == path { return n }
-            if path.hasPrefix(n.path + "/") || n.path.isEmpty, let hit = find(path, in: n.children) { return hit }
+            if path.hasPrefix(n.path + "/"), let hit = find(path, in: n.children) { return hit }
         }
         return nil
     }

@@ -22,6 +22,11 @@ private func settings(_ folder: String? = "Travel", auto: Bool = true, hidden: [
     #expect(defs[0].folders == ["Travel/Japan 2026"] && defs[0].isDiscovered)
 }
 
+@Test func emptyTravelsFolderMeansVaultRoot() {
+    let defs = TravelResolver.resolve(settings: settings(""), records: [], folderTree: tree)
+    #expect(defs.map(\.id) == ["folder:Travel", "folder:Family"])
+}
+
 @Test func hiddenAndRecordsSupersedeDiscovery() {
     let r = rec("R", ["Travel/Japan 2026/Kyoto"])      // record INSIDE a discovered folder → supersedes
     let defs = TravelResolver.resolve(settings: settings(hidden: ["Travel/Old"]), records: [r], folderTree: tree)
