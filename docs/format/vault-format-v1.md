@@ -25,6 +25,7 @@ A **vault** is a folder tree containing media files, organized however the user 
     sends.jsonl                    ← confirmed-send registry (§13)
     devices.jsonl                  ← known-device registry (§14)
     albums/                        ← manual album definitions, one JSON per album (§15)
+    travels/                       ← trip definitions: settings.json + one JSON per trip (§16)
     locked-folders.json            ← Touch-ID-locked folder list (app visibility gate; not encryption)
     staging/                       ← transient import workspace — readers MUST ignore
   rome2022/
@@ -327,3 +328,58 @@ Schema:
 - `members` — an **ordered** array of content hashes (§2). A hash appears at most once. Each is resolved to a file via the manifest/catalog at display time; a member whose content is absent (binned/missing) is simply not shown.
 
 Reader obligations: an unreadable/corrupt album file MUST be skipped without affecting the others. Writers MUST write atomically (§10 step 2). Smart/rule-based albums are not part of v1.
+
+
+## 16. Travels (`travels/`)
+
+A **trip** is a human-authored record over one or more library folders — a name, the folders it spans (each including its whole subtree), an optional date override, an optional list of places, and an optional cover — that does **not** move or copy files. Trips are **normative, sovereign state**: this directory is the authoritative record; the app derives everything else (photo count, date span, detected places, default cover) from the photos at display time and stores none of it.
+
+- **Location:** `<primary-vault-root>/.openphoto/travels/settings.json` plus one file per trip at `…/travels/<id>.json`, where `<id>` is the trip's UUID and equals the filename stem.
+- **Drive propagation:** when OpenPhoto syncs to a canonical/backup drive it mirrors this directory (including `settings.json`) to the drive's `.openphoto/travels/` (copying present files, deleting absent ones). Folder paths are vault-relative and drives keep the vault's folder layout, so the files copy verbatim.
+
+### 16.1 `settings.json`
+
+```json
+{
+  "travelsFolder": "Travel",
+  "autoDiscover": true,
+  "hidden": ["Travel/Scans from Mum"]
+}
+```
+
+- `travelsFolder` — a vault-relative directory path (forward slashes, no leading slash; `""` is the vault root) or `null`.
+- `autoDiscover` — when `true` and `travelsFolder` is non-null, every **direct** subfolder of it is a trip unless it is listed in `hidden` or is equal to / nested inside a folder of some trip record (the record supersedes the discovery). A discovered trip has no file until the user edits it.
+- `hidden` — direct subfolders of `travelsFolder` the user removed from Travels. Entries that are no longer direct subfolders are ignored.
+
+A missing `settings.json` means `{ "travelsFolder": null, "autoDiscover": true, "hidden": [] }`.
+
+### 16.2 `<id>.json`
+
+```json
+{
+  "id": "5C2E9F1A-…-UUID",
+  "name": "Japan 2026",
+  "folders": ["Travel/Japan 2026"],
+  "startDate": "2026-04-03",
+  "endDate": "2026-04-15",
+  "places": [
+    { "name": "Kyoto", "region": "Kyoto", "country": "Japan", "countryCode": "JP",
+      "latitude": 35.02107, "longitude": 135.75385, "geonameID": 1857910 },
+    { "name": "Grandma's village", "region": null, "country": null, "countryCode": null,
+      "latitude": null, "longitude": null, "geonameID": null }
+  ],
+  "coverHash": "sha256:…",
+  "createdAtMs": 1789000000000,
+  "modifiedAtMs": 1789000000000
+}
+```
+
+- `id` — UUID string, immutable, equal to the filename stem.
+- `name` — display name, or `null` ⇒ derived: the last path component of `folders[0]`.
+- `folders` — **non-empty** ordered array of vault-relative directory paths; each includes its entire subtree. No path should equal or lie inside another in the same array (writers normalise; readers tolerate).
+- `startDate` / `endDate` — ISO-8601 calendar dates (`YYYY-MM-DD`, local calendar, no time zone) or `null` ⇒ derived from the earliest/latest capture time of the trip's photos. If only one is set, the other is derived. Writers keep `startDate ≤ endDate`.
+- `places` — ordered array, or `null` ⇒ derived from the reverse-geocoded cities of the trip's photos (most photos first). Each element has `name` (required) and the GeoNames fields `region`, `country`, `countryCode`, `latitude`, `longitude`, `geonameID` — all `null` together for a free-text place that matched no city. `geonameID` is the integer id in the GeoNames `cities15000` extract. An **empty array** means "no places" and is distinct from `null`.
+- `coverHash` — a content hash (§2) or `null` ⇒ derived: the earliest photo of the trip. A cover whose content is absent falls back to the derived cover at display time; the value is kept.
+- `createdAtMs` / `modifiedAtMs` — epoch-milliseconds.
+
+Reader obligations: an unreadable/corrupt file MUST be skipped without affecting the others; unknown keys MUST be ignored; a missing `settings.json` MUST be read as the defaults above. Writers MUST write atomically (§10 step 2). Place data is © GeoNames (https://www.geonames.org), CC BY 4.0.
