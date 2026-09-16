@@ -3,8 +3,9 @@ import Foundation
 /// The ring's maths, ported from the browser mockup (mockups/travel-carousel-DISPOSABLE/ring.html):
 /// you stand near the centre of a ring of postcards; card i sits at θ = i·step − ringAngle and is placed
 /// by translateZ(−pull) · rotateY(θ) · translateZ(−R) · scale(s). The viewer looks along −z from z = +P.
-/// A card is hidden only once it is fully outside the stage or about to pass the camera, so cards
-/// slide off the edges instead of fading on screen. Pure; the SwiftUI view applies the numbers.
+/// Back-facing cards (θ ≥ 90°) are explicitly hidden—SwiftUI does not cull backfaces as the browser does.
+/// Front-facing cards are hidden once fully outside the stage or about to pass the camera, so they slide
+/// off edges instead of fading on screen. Pure; the SwiftUI view applies the numbers.
 public struct RingGeometry: Sendable, Equatable {
     public var radius: Double = 400
     public var pull: Double = -60
@@ -47,8 +48,13 @@ public struct RingGeometry: Sendable, Equatable {
         let dist = perspective - z
         let proj = perspective / max(dist, 1)
         let zoom = zoom(forStageWidth: stageWidth)
-        let halfW = cardWidth / 2 * s * proj
-        let off = (abs(x * proj) - halfW) * zoom > stageWidth / 2 + 8 || dist < 220
+        // Back-facing cards (past 90°) must be hidden explicitly — SwiftUI does not cull backfaces.
+        // A turned card's projected half-width shrinks with cos θ; it is off-screen once its near
+        // edge passes the stage edge, or when it is about to pass through the camera.
+        let halfW = cardWidth / 2 * s * proj * abs(cos(rad))
+        let off = d >= 90
+            || (abs(x * proj) - halfW) * zoom > stageWidth / 2 + 8
+            || dist < 220
         return CardPlacement(angle: th, x: x * proj, scale: s * proj, depth: d / 180, hidden: off)
     }
 }
