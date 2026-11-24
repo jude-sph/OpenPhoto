@@ -17,7 +17,9 @@ public enum CatalogSnapshot {
     /// the drive's manifest hashes, write snapshot.json, then swap the temp dir over the old one.
     public static func write(catalog: Catalog, thumbnails: ThumbnailStore, drive: Vault) throws {
         let fm = FileManager.default
-        let hashes = try Manifest.read(from: drive.manifestURL).map { $0.hash.stringValue }
+        // Deduplicated: one photo filed in two drive folders appears twice in the manifest, and a
+        // second `copyItem` onto the same thumbnail path throws — which aborted the whole snapshot.
+        let hashes = Set(try Manifest.read(from: drive.manifestURL).map { $0.hash.stringValue })
 
         let tmp = drive.stateDirURL.appendingPathComponent("\(dirName).tmp")
         try? fm.removeItem(at: tmp)

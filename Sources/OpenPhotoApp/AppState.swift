@@ -1737,6 +1737,9 @@ final class AppState {
     /// Drives currently being reconciled (auto-on-connect or manual) — DrivesView shows a progress
     /// indicator for these.
     var reconcilingDriveIDs: Set<String> = []
+    /// Durable drives present at the last volume event — so a mount/unmount only auto-scans drives
+    /// that newly appeared.
+    @ObservationIgnored var autoScannedDriveIDs: Set<String> = []
     /// Set after a reconnect/mount scan finds pending changes → DrivesView auto-presents the review.
     var reviewDrive: ReviewPresentation?
 
@@ -1964,8 +1967,9 @@ final class AppState {
 
     /// Background fast-scan of every connected durable drive (canonical + backups) — keeps badges +
     /// the status line honest automatically (at library-open and whenever a volume mounts), no manual Check.
-    func autoScanConnectedDrives() async {
+    func autoScanConnectedDrives(only: Set<String>? = nil) async {
         for vr in durableVaults where driveIsPresent(vr) {
+            if let only, !only.contains(vr.id) { continue }
             cacheDriveKind(vr)
             guard let drive = openVault(for: vr) else { continue }
             // Reconcile FIRST — make the drive mirror the library by content (copy in / relocate /
@@ -2000,13 +2004,21 @@ final class AppState {
         let bases = lib.vaults.map { $0.rootURL.lastPathComponent }
         let macID = local.descriptor.vaultID
         let cat = lib.catalog
+        // Single-flight per drive, and never alongside a running drive job (Sync…/evict/rehydrate):
+        // both rewrite the drive's manifest, and a job snapshots it at start and overwrites it at the
+        // end — a reconcile in between would have its manifest changes clobbered.
+        guard !reconcilingDriveIDs.contains(vr.id), jobTask == nil else { return nil }
         reconcilingDriveIDs.insert(vr.id)
         defer { reconcilingDriveIDs.remove(vr.id) }
         let result = await Task.detached(priority: .userInitiated) {
             try? ReconcileService.reconcile(drive: drive, localVault: local, catalog: cat,
                                             sourceBasenames: bases, macVaultID: macID)
         }.value
-        try? cat.clearFolderOps(forVault: vr.id)   // op-queue superseded — reconcile made the drive match
+        // The op-queue is superseded only when reconcile actually ran to completion — a thrown error or
+        // a blast-radius block leaves the drive unreconciled, so its queued ops must survive.
+        if let result, !result.blockedByBlastRadius {
+            try? cat.clearFolderOps(forVault: vr.id)
+        }
         // NB: leave driveDrift as the scan found it — reconcile fixes sync state (moves/copies/deletes),
         // not corruption/unadopted drift, so those must keep surfacing in the row.
         reloadCanonicalPresence()
@@ -2204,10 +2216,17 @@ final class AppState {
                        !FileManager.default.fileExists(atPath: ctx.root.path) {
                         self.endQuickView()
                     }
-                    await self.autoScanConnectedDrives()
+                    // Only drives that just APPEARED need a reconcile + scan. Any volume event
+                    // (an SD card, a disk image, an unmount) used to re-reconcile and re-walk every
+                    // connected drive.
+                    let present = Set(self.durableVaults.filter { self.driveIsPresent($0) }.map(\.id))
+                    let appeared = present.subtracting(self.autoScannedDriveIDs)
+                    self.autoScannedDriveIDs = present
+                    if !appeared.isEmpty { await self.autoScanConnectedDrives(only: appeared) }
                     await self.reverifySentToConnectedDevices()
                 }
             }
+            autoScannedDriveIDs = Set(durableVaults.filter { driveIsPresent($0) }.map(\.id))
             Task { await autoScanConnectedDrives(); await reverifySentToConnectedDevices() }
         } catch {
             NSAlert(error: error).runModal()

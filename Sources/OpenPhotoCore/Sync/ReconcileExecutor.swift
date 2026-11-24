@@ -3,9 +3,9 @@ import Foundation
 /// Phase 2 of the drive-mirroring rewrite: applying a `ReconcilePlan`'s AUTO-SAFE, verified actions to
 /// a drive. This turn implements the operation a mirror actually needs to self-heal move-orphans —
 /// stale-removals — with the same discipline as `RedundantDriveFolderCleaner`: PROVE on disk before
-/// removing (Decision 3). Relocations and copies are counted as pending (next slice); genuine deletions
-/// are NEVER auto-applied — they're returned for review. A high genuine-deletion blast-radius blocks all
-/// destructive work, since it signals the catalog (hence the whole plan) can't be trusted.
+/// removing (Decision 3). `apply` runs all of: copies in, relocations, stale removals, genuine deletions
+/// (binned on the drive, recoverable) and sidecar updates. A high genuine-deletion blast-radius blocks
+/// the whole run, since it signals the catalog (hence the whole plan) can't be trusted.
 public enum ReconcileExecutor {
 
     public struct RemovalResult: Equatable, Sendable {
@@ -25,14 +25,17 @@ public enum ReconcileExecutor {
         public var copied: Int
         public var copySkipped: Int
         public var deletionsApplied: Int
+        public var sidecarsUpdated: Int
         public var blockedByBlastRadius: Bool
         public var blockedDeletions: [Placement]   // populated only when blast-radius blocks the run
         public init(staleRemoved: Int = 0, staleSkipped: Int = 0, staleAlreadyGone: Int = 0,
                     relocated: Int = 0, copied: Int = 0, copySkipped: Int = 0, deletionsApplied: Int = 0,
+                    sidecarsUpdated: Int = 0,
                     blockedByBlastRadius: Bool = false, blockedDeletions: [Placement] = []) {
             self.staleRemoved = staleRemoved; self.staleSkipped = staleSkipped
             self.staleAlreadyGone = staleAlreadyGone; self.relocated = relocated
             self.copied = copied; self.copySkipped = copySkipped; self.deletionsApplied = deletionsApplied
+            self.sidecarsUpdated = sidecarsUpdated
             self.blockedByBlastRadius = blockedByBlastRadius; self.blockedDeletions = blockedDeletions
         }
     }
@@ -58,8 +61,13 @@ public enum ReconcileExecutor {
         let sr = try applyStaleRemovals(plan.staleRemovals, drive: drive, localVault: localVault,
                                         catalog: catalog, macVaultID: macVaultID)
         let del = try applyDeletions(plan.reviewDeletions, drive: drive, catalog: catalog, macVaultID: macVaultID)
+        // Last: mirror sidecar edits for photos the drive already holds (after relocations, so the
+        // sidecar lands beside the media's final path).
+        let sc = try applySidecarUpdates(drive: drive, localVault: localVault, catalog: catalog,
+                                         macVaultID: macVaultID)
         return Result(staleRemoved: sr.removed, staleSkipped: sr.skipped, staleAlreadyGone: sr.alreadyGone,
-                      relocated: rel, copied: cp.copied, copySkipped: cp.skipped, deletionsApplied: del)
+                      relocated: rel, copied: cp.copied, copySkipped: cp.skipped, deletionsApplied: del,
+                      sidecarsUpdated: sc)
     }
 
     /// Honor genuine deletions on the drive: bin each deleted photo's drive copy (origin `.propagated`,
@@ -184,58 +192,128 @@ public enum ReconcileExecutor {
     /// no local source (or an occupied destination) is skipped — never overwritten.
     @discardableResult
     public static func applyCopies(_ copies: [Placement], drive: Vault, localVault: Vault?,
-                                   catalog: Catalog, macVaultID: String) throws -> CopyResult {
+                                   catalog: Catalog, macVaultID: String,
+                                   flushEvery: Int = 200) throws -> CopyResult {
         guard !copies.isEmpty, let localVault else { return CopyResult(copied: 0, skipped: copies.count) }
         let fm = FileManager.default
-        var added: [ManifestEntry] = []
+        var pending: [ManifestEntry] = []   // placed on disk, not yet recorded in the manifest
         var copied = 0, skipped = 0
+        let recorded = Set(try Manifest.read(from: drive.manifestURL).map(\.path))
 
-        for c in copies {
-            let destURL = drive.absoluteURL(forRelativePath: c.path)
-            if fm.fileExists(atPath: destURL.path) { skipped += 1; continue }
-            guard let srcRel = try firstVerifiedLocalSource(hash: c.hash, localVault: localVault, catalog: catalog) else {
-                skipped += 1; continue
-            }
-            let srcURL = localVault.absoluteURL(forRelativePath: srcRel)
-            guard VerifiedCopy.copy(from: srcURL, to: destURL, expectedHash: c.hash) == .copied else {
-                skipped += 1; continue
-            }
-            // Sidecar (human metadata) travels with the media.
-            let srcSidecar = localVault.sidecarURL(forMediaAt: srcURL)
-            if fm.fileExists(atPath: srcSidecar.path) {
-                let dstSidecar = drive.sidecarURL(forMediaAt: destURL)
-                try? fm.createDirectory(at: dstSidecar.deletingLastPathComponent(), withIntermediateDirectories: true)
-                _ = VerifiedCopy.copy(from: srcSidecar, to: dstSidecar,
-                                      expectedHash: (try? ContentHash.ofFile(at: srcSidecar).stringValue) ?? "")
-            }
+        // Record what's been placed so far. Called every `flushEvery` files and on EVERY exit path, so
+        // an interrupted run (unplug, quit, thrown error) never leaves verified copies on the drive
+        // that the manifest doesn't know about.
+        func flush() throws {
+            guard !pending.isEmpty else { return }
+            var entries = try Manifest.read(from: drive.manifestURL)
+            let have = Set(entries.map(\.path))
+            entries.append(contentsOf: pending.filter { !have.contains($0.path) })
+            try Manifest.write(entries, to: drive.manifestURL)
+            pending.removeAll(keepingCapacity: true)
+        }
+        func record(_ c: Placement, at destURL: URL) {
             let attrs = try? fm.attributesOfItem(atPath: destURL.path)
             let size = (attrs?[.size] as? Int64) ?? Int64((attrs?[.size] as? Int) ?? 0)
             let mtime = (attrs?[.modificationDate] as? Date) ?? Date(timeIntervalSince1970: 0)
-            added.append(ManifestEntry(hash: ContentHash(stringValue: c.hash), path: c.path,
-                                       size: size, mtime: ISO8601Millis.string(from: mtime)))
+            pending.append(ManifestEntry(hash: ContentHash(stringValue: c.hash), path: c.path,
+                                         size: size, mtime: ISO8601Millis.string(from: mtime)))
             copied += 1
         }
 
-        if !added.isEmpty {
-            var entries = try Manifest.read(from: drive.manifestURL)
-            entries.append(contentsOf: added)
-            try Manifest.write(entries, to: drive.manifestURL)
+        do {
+            for c in copies {
+                try autoreleasepool {
+                    let destURL = drive.absoluteURL(forRelativePath: c.path)
+                    if recorded.contains(c.path) { skipped += 1; return }   // already mirrored
+                    if fm.fileExists(atPath: destURL.path) {
+                        // Already on disk but not in the manifest (e.g. a previous run was interrupted
+                        // before it could record it). If the bytes are exactly what we want there, adopt
+                        // it into the manifest; anything else is left untouched (never overwritten).
+                        if (try? ContentHash.ofFile(at: destURL).stringValue) == c.hash {
+                            record(c, at: destURL)
+                        } else {
+                            skipped += 1
+                        }
+                        return
+                    }
+                    // `VerifiedCopy` hashes the stream and refuses a mismatch, so the source needs no
+                    // separate pre-hash (that was a second full read of every file). Try each local
+                    // instance of the content until one copies clean.
+                    var placedFrom: URL?
+                    for rel in try catalog.instanceRelPaths(vaultID: localVault.id, hash: c.hash) {
+                        let srcURL = localVault.absoluteURL(forRelativePath: rel)
+                        guard fm.fileExists(atPath: srcURL.path) else { continue }
+                        if VerifiedCopy.copy(from: srcURL, to: destURL, expectedHash: c.hash) == .copied {
+                            placedFrom = srcURL
+                            break
+                        }
+                    }
+                    guard let srcURL = placedFrom else { skipped += 1; return }
+                    // Sidecar (human metadata) travels with the media.
+                    let srcSidecar = localVault.sidecarURL(forMediaAt: srcURL)
+                    if fm.fileExists(atPath: srcSidecar.path),
+                       let sidecarHash = try? ContentHash.ofFile(at: srcSidecar).stringValue {
+                        // Best-effort here; `applySidecarUpdates` (end of every reconcile) repairs a
+                        // sidecar that failed to land.
+                        VerifiedCopy.copy(from: srcSidecar, to: drive.sidecarURL(forMediaAt: destURL),
+                                          expectedHash: sidecarHash)
+                    }
+                    record(c, at: destURL)
+                    if pending.count >= flushEvery { try flush() }
+                }
+            }
+        } catch {
+            try? flush()
+            throw error
+        }
+        try flush()
+        if copied > 0 {
             SyncLog.append(event: "reconcile", summary: "copied \(copied) files onto drive",
                            counterparty: macVaultID, to: drive.syncLogURL)
         }
         return CopyResult(copied: copied, skipped: skipped)
     }
 
-    /// A local relPath whose file physically exists and re-hashes to `hash`, or nil.
-    private static func firstVerifiedLocalSource(hash: String, localVault: Vault,
-                                                 catalog: Catalog) throws -> String? {
+    /// Mirror human-metadata edits onto the drive: for every local photo the drive already holds at its
+    /// mirrored path, make the drive's XMP sidecar byte-identical to the Mac's when they differ (or the
+    /// drive has none). One-way (Mac → drive), atomic, and never touches media. Without this step a
+    /// rating/caption/tag/face edit made AFTER a photo was first mirrored never reached the drive via
+    /// reconcile (sidecars only travelled alongside a newly copied file).
+    ///
+    /// Cheap on a no-change connect: one `stat` per local sidecar + one on the drive; file contents are
+    /// read only when size differs or the Mac's sidecar is newer than the drive's.
+    @discardableResult
+    public static func applySidecarUpdates(drive: Vault, localVault: Vault?, catalog: Catalog,
+                                           macVaultID: String) throws -> Int {
+        guard let localVault else { return 0 }
         let fm = FileManager.default
-        for rel in try catalog.instanceRelPaths(vaultID: localVault.id, hash: hash) {
-            let url = localVault.absoluteURL(forRelativePath: rel)
-            if fm.fileExists(atPath: url.path),
-               (try? ContentHash.ofFile(at: url).stringValue) == hash { return rel }
+        let onDrive = Set(try Manifest.read(from: drive.manifestURL).map(\.path))
+        var updated = 0
+        for (_, rel) in try catalog.instanceHashPaths(vaultID: localVault.id) {
+            autoreleasepool {
+                let srcMedia = localVault.absoluteURL(forRelativePath: rel)
+                let srcSidecar = localVault.sidecarURL(forMediaAt: srcMedia)
+                guard let sAttrs = try? fm.attributesOfItem(atPath: srcSidecar.path) else { return }
+                let drivePath = SyncEngine.driveRelPath(forSourceVault: localVault, relPath: rel)
+                guard onDrive.contains(drivePath) else { return }   // media not mirrored there (yet)
+                let dstSidecar = drive.sidecarURL(forMediaAt: drive.absoluteURL(forRelativePath: drivePath))
+                if let dAttrs = try? fm.attributesOfItem(atPath: dstSidecar.path),
+                   let sSize = sAttrs[.size] as? NSNumber, let dSize = dAttrs[.size] as? NSNumber,
+                   sSize == dSize,
+                   let sM = sAttrs[.modificationDate] as? Date, let dM = dAttrs[.modificationDate] as? Date,
+                   dM >= sM {
+                    return   // same size and the drive's copy is at least as new → already mirrored
+                }
+                guard let data = try? Data(contentsOf: srcSidecar), !data.isEmpty else { return }
+                if (try? Data(contentsOf: dstSidecar)) == data { return }
+                if (try? AtomicFile.write(data, to: dstSidecar)) != nil { updated += 1 }
+            }
         }
-        return nil
+        if updated > 0 {
+            SyncLog.append(event: "reconcile", summary: "updated \(updated) sidecars on drive",
+                           counterparty: macVaultID, to: drive.syncLogURL)
+        }
+        return updated
     }
 
     /// Remove husk directories the removals emptied, deepest-first. `deleteEmptyFolder` refuses any dir

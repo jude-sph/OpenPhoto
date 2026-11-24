@@ -339,3 +339,96 @@ private func P(_ h: String, _ p: String) -> Placement { Placement(hash: h, path:
 
     #expect(res == ReconcileExecutor.CopyResult(copied: 0, skipped: 1))
 }
+
+// An interrupted earlier run left a verified copy on the drive that the manifest never recorded.
+// The next run must ADOPT it (bytes match) rather than skip it forever.
+@Test func adoptsMatchingUnrecordedFileLeftByInterruptedRun() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.local, "album/a.jpg", "PAYLOAD")
+    _ = try put(r.drive, "Pics/album/a.jpg", "PAYLOAD")      // on disk, NOT in the manifest
+    try r.cat.upsert(instances: [inst(r.local.id, "album/a.jpg", h)])
+    try Manifest.write([], to: r.drive.manifestURL)
+
+    let res = try ReconcileExecutor.applyCopies([P(h, "Pics/album/a.jpg")], drive: r.drive,
+                    localVault: r.local, catalog: r.cat, macVaultID: "mac")
+
+    #expect(res == ReconcileExecutor.CopyResult(copied: 1, skipped: 0))
+    #expect(try Manifest.read(from: r.drive.manifestURL).map(\.path) == ["Pics/album/a.jpg"])
+}
+
+// A different file squatting on the destination path is never overwritten or adopted.
+@Test func leavesMismatchedUnrecordedFileAlone() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.local, "album/a.jpg", "PAYLOAD")
+    _ = try put(r.drive, "Pics/album/a.jpg", "SOMETHING ELSE")
+    try r.cat.upsert(instances: [inst(r.local.id, "album/a.jpg", h)])
+    try Manifest.write([], to: r.drive.manifestURL)
+
+    let res = try ReconcileExecutor.applyCopies([P(h, "Pics/album/a.jpg")], drive: r.drive,
+                    localVault: r.local, catalog: r.cat, macVaultID: "mac")
+
+    #expect(res == ReconcileExecutor.CopyResult(copied: 0, skipped: 1))
+    #expect(try Manifest.read(from: r.drive.manifestURL).isEmpty)
+    #expect(try String(contentsOf: r.drive.absoluteURL(forRelativePath: "Pics/album/a.jpg"), encoding: .utf8) == "SOMETHING ELSE")
+}
+
+// The manifest is flushed as the copy loop goes, not only at the very end.
+@Test func copiesFlushManifestIncrementally() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    var placements: [Placement] = []
+    for i in 0..<5 {
+        let h = try put(r.local, "album/\(i).jpg", "PAYLOAD-\(i)")
+        try r.cat.upsert(instances: [inst(r.local.id, "album/\(i).jpg", h)])
+        placements.append(P(h, "Pics/album/\(i).jpg"))
+    }
+    try Manifest.write([], to: r.drive.manifestURL)
+    let res = try ReconcileExecutor.applyCopies(placements, drive: r.drive, localVault: r.local,
+                    catalog: r.cat, macVaultID: "mac", flushEvery: 2)
+    #expect(res.copied == 5)
+    #expect(Set(try Manifest.read(from: r.drive.manifestURL).map(\.path)) == Set(placements.map(\.path)))
+}
+
+// A sidecar edited on the Mac AFTER the photo was mirrored must reach the drive on the next reconcile.
+@Test func mirrorsEditedSidecarOntoAlreadyMirroredPhoto() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.local, "album/a.jpg", "PAYLOAD")
+    try r.cat.upsert(instances: [inst(r.local.id, "album/a.jpg", h)])
+    let drivePath = SyncEngine.driveRelPath(forSourceVault: r.local, relPath: "album/a.jpg")
+    _ = try put(r.drive, drivePath, "PAYLOAD")
+    try Manifest.write([mEntry(drivePath, h)], to: r.drive.manifestURL)
+
+    let srcSidecar = r.local.sidecarURL(forMediaAt: r.local.absoluteURL(forRelativePath: "album/a.jpg"))
+    let dstSidecar = r.drive.sidecarURL(forMediaAt: r.drive.absoluteURL(forRelativePath: drivePath))
+    try FileManager.default.createDirectory(at: srcSidecar.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: dstSidecar.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("<xmp rating=3/>".utf8).write(to: dstSidecar)   // what the drive got at first mirror
+    try Data("<xmp rating=5/>".utf8).write(to: srcSidecar)   // same size, edited later on the Mac
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)],
+                                          ofItemAtPath: dstSidecar.path)
+
+    let n = try ReconcileExecutor.applySidecarUpdates(drive: r.drive, localVault: r.local,
+                                                      catalog: r.cat, macVaultID: "mac")
+    #expect(n == 1)
+    #expect(try String(contentsOf: dstSidecar, encoding: .utf8) == "<xmp rating=5/>")
+    // Second pass is a no-op.
+    #expect(try ReconcileExecutor.applySidecarUpdates(drive: r.drive, localVault: r.local,
+                                                      catalog: r.cat, macVaultID: "mac") == 0)
+}
+
+// A sidecar is never pushed for a photo the drive doesn't hold at its mirrored path.
+@Test func sidecarUpdateSkipsUnmirroredPhoto() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let r = try Rig(t)
+    let h = try put(r.local, "album/a.jpg", "PAYLOAD")
+    try r.cat.upsert(instances: [inst(r.local.id, "album/a.jpg", h)])
+    try Manifest.write([], to: r.drive.manifestURL)
+    let srcSidecar = r.local.sidecarURL(forMediaAt: r.local.absoluteURL(forRelativePath: "album/a.jpg"))
+    try FileManager.default.createDirectory(at: srcSidecar.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("<xmp/>".utf8).write(to: srcSidecar)
+    #expect(try ReconcileExecutor.applySidecarUpdates(drive: r.drive, localVault: r.local,
+                                                      catalog: r.cat, macVaultID: "mac") == 0)
+}

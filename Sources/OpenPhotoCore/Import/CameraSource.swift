@@ -6,9 +6,12 @@ import CoreGraphics
 /// Hardware-validated (see spike Sources/ICCSpike/main.swift); keep this layer THIN.
 ///
 /// NOTE: @unchecked Sendable — all ICC delegate callbacks arrive on ICC's internal
-/// queue (not the Swift concurrency executor). The continuation dance assumes
-/// single-flight fetch/delete: the ImportEngine calls them sequentially per item,
-/// so downloadContinuation and deleteContinuation are never written concurrently.
+/// queue (not the Swift concurrency executor). The continuation dance needs
+/// single-flight fetch/delete. The ImportEngine fetches up to 6 items CONCURRENTLY,
+/// so `fetch` serialises itself through an internal FIFO gate (`acquireFetchSlot`):
+/// one USB device gains nothing from parallel downloads, and a single
+/// `downloadContinuation` slot overwritten by concurrent fetches would leave the
+/// earlier ones suspended forever. `delete` is called as one serial loop.
 /// Thread-safety: `lock` guards `isGone`, all three continuation properties, the
 /// `itemsByID` map, and `enumerationTask`. The import grid and the on-connect
 /// send-reverify both reach the SAME CameraSource, so enumeration and the reads
@@ -33,6 +36,8 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     private var recoveredBusy = false  // tried close+reopen after a -21347 once
     private var readyContinuations: [CheckedContinuation<Void, Error>] = []
     private var downloadContinuation: CheckedContinuation<Void, Error>?
+    private var fetchBusy = false                                   // a download is in flight
+    private var fetchWaiters: [CheckedContinuation<Void, Never>] = []  // FIFO queue for the slot
     private var deleteContinuation: CheckedContinuation<Void, Error>?
     private var itemsByID: [String: ICCameraItem] = [:]
     private var enumerationTask: Task<[ImportItem], Error>?  // single-flights concurrent enumerations
@@ -60,6 +65,27 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
             downloadContinuation = nil
             return c
         }
+    }
+
+    /// Wait for the single download slot (FIFO). Always pair with `releaseFetchSlot()`.
+    private func acquireFetchSlot() async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            let acquired: Bool = lock.withLock {
+                if fetchBusy { fetchWaiters.append(c); return false }
+                fetchBusy = true
+                return true
+            }
+            if acquired { c.resume() }
+        }
+    }
+
+    /// Hand the download slot to the next waiter, or free it.
+    private func releaseFetchSlot() {
+        let next: CheckedContinuation<Void, Never>? = lock.withLock {
+            if fetchWaiters.isEmpty { fetchBusy = false; return nil }
+            return fetchWaiters.removeFirst()   // slot stays busy, ownership passes on
+        }
+        next?.resume()
     }
 
     /// Atomically swap deleteContinuation for nil and return the old value.
@@ -181,6 +207,8 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
     /// Download file to `url` (directory + filename). Uses ICDownloadsDirectoryURL +
     /// ICSaveAsFilename option keys (ICDownloadOption NS_TYPED_ENUM, spike-validated).
     public func fetch(_ item: ImportItem, to url: URL) async throws {
+        await acquireFetchSlot()
+        defer { releaseFetchSlot() }
         if lock.withLock({ isGone }) { throw URLError(.cancelled) }
 
         guard let file = lock.withLock({ itemsByID[item.id] }) as? ICCameraFile else {

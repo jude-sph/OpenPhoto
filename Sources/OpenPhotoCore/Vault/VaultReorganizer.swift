@@ -88,7 +88,15 @@ public enum VaultReorganizer {
         if contents.contains(where: { $0 != ".openphoto" && !$0.hasPrefix(".") }) {
             throw ReorgError.notEmpty
         }
-        try? FileManager.default.removeItem(at: url.appendingPathComponent(".openphoto"))
+        // A folder whose media is all EVICTED still holds those photos' XMP sidecars in its
+        // `.openphoto/` (eviction leaves the sidecar so rehydrate restores the media beside it).
+        // Sidecars are human-authored metadata: never hard-delete them with the "empty" folder.
+        let stateDir = url.appendingPathComponent(".openphoto")
+        let stateContents = (try? FileManager.default.contentsOfDirectory(atPath: stateDir.path)) ?? []
+        if stateContents.contains(where: { !$0.hasPrefix(".") }) {
+            throw ReorgError.notEmpty
+        }
+        try? FileManager.default.removeItem(at: stateDir)
         try FileManager.default.removeItem(at: url)
     }
 

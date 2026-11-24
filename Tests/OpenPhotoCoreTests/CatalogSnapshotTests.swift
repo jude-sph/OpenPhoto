@@ -156,3 +156,21 @@ private func snapshotFixture(_ t: TestDirs) throws
                            driveRelPath: "Pictures/rome/IMG_1.jpg")])
     #expect(try cat.timelineItems().isEmpty)   // no asset row → no browse item
 }
+
+// One photo filed in TWO drive folders appears twice in the manifest. The snapshot must still be
+// written (it used to throw on the second thumbnail copy, and every caller swallowed the error).
+@Test func writeSucceedsWhenSameHashIsInTwoFolders() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (catalog, thumbs, drive, driveHash, _) = try snapshotFixture(t)
+    try Manifest.write([
+        ManifestEntry(hash: ContentHash(stringValue: driveHash), path: "Pictures/rome/IMG_1.jpg",
+                      size: 3, mtime: "2022-10-07T14:23:01.000Z"),
+        ManifestEntry(hash: ContentHash(stringValue: driveHash), path: "Pictures/best/IMG_1.jpg",
+                      size: 3, mtime: "2022-10-07T14:23:01.000Z"),
+    ], to: drive.manifestURL)
+
+    try CatalogSnapshot.write(catalog: catalog, thumbnails: thumbs, drive: drive)
+
+    let snapDir = drive.stateDirURL.appendingPathComponent("catalog-snapshot")
+    #expect(FileManager.default.fileExists(atPath: snapDir.appendingPathComponent("catalog.sqlite").path))
+}

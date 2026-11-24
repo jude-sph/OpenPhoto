@@ -286,3 +286,28 @@ private func sidecarSeed(_ vault: Vault, mediaRelPath: String) throws -> URL {
     #expect(report.unknown.isEmpty && report.missing.isEmpty && report.changed.isEmpty)
     #expect(report.presentHashes.count == 2)
 }
+
+// A folder whose photos were all EVICTED holds no media but still holds their XMP sidecars in
+// `.openphoto/`. Deleting the "empty" folder must not hard-delete that human-authored metadata.
+@Test func deleteEmptyFolderRefusesWhenSidecarsRemain() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let vaultRoot = t.root.appendingPathComponent("V")
+    try FileManager.default.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
+    let vault = try Vault.openOrCreate(at: vaultRoot, role: .local)
+    let media = vault.absoluteURL(forRelativePath: "trip/a.jpg")
+    let sidecar = vault.sidecarURL(forMediaAt: media)
+    try FileManager.default.createDirectory(at: sidecar.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("<xmp/>".utf8).write(to: sidecar)          // media evicted; sidecar left behind
+
+    #expect(throws: (any Error).self) { try VaultReorganizer.deleteEmptyFolder(in: vault, relPath: "trip") }
+    #expect(FileManager.default.fileExists(atPath: sidecar.path))
+
+    // Pruning (best-effort, swallows the refusal) must leave it too.
+    VaultReorganizer.pruneEmptyDirs(in: vault, under: "trip")
+    #expect(FileManager.default.fileExists(atPath: sidecar.path))
+
+    // With the sidecar gone, an `.openphoto/` holding nothing is still removable.
+    try FileManager.default.removeItem(at: sidecar)
+    try VaultReorganizer.deleteEmptyFolder(in: vault, relPath: "trip")
+    #expect(!FileManager.default.fileExists(atPath: vault.absoluteURL(forRelativePath: "trip").path))
+}

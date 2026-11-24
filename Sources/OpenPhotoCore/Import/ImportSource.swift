@@ -74,10 +74,14 @@ public func pairLiveItems(_ items: [ImportItem]) -> [ImportItem] {
     var videosByBase: [String: ImportItem] = [:]
     for i in items where i.kind == .video { videosByBase[base(i.name)] = i }
     var out = items
-    for (idx, i) in out.enumerated() where i.kind == .photo {
+    // id → first index, built once (was a linear `firstIndex` per photo: O(pairs × items)).
+    var indexByID: [String: Int] = [:]
+    indexByID.reserveCapacity(out.count)
+    for (idx, i) in out.enumerated() where indexByID[i.id] == nil { indexByID[i.id] = idx }
+    for (idx, i) in items.enumerated() where i.kind == .photo {
         guard let v = videosByBase[base(i.name)] else { continue }
         out[idx].livePartnerID = v.id
-        if let vIdx = out.firstIndex(where: { $0.id == v.id }) {
+        if let vIdx = indexByID[v.id] {
             out[vIdx].livePartnerID = i.id
         }
     }
