@@ -15,11 +15,58 @@ public struct BinStore: Sendable {
         }
     }
 
+    /// One file to bin in a batch (`moveToBin(_:)`).
+    public struct BinMove: Sendable {
+        public let relPath: String
+        public let hash: ContentHash
+        public let origin: Origin
+        public let includeSidecar: Bool
+        public init(relPath: String, hash: ContentHash, origin: Origin, includeSidecar: Bool = true) {
+            self.relPath = relPath; self.hash = hash; self.origin = origin
+            self.includeSidecar = includeSidecar
+        }
+    }
+
     let vault: Vault
     public init(vault: Vault) { self.vault = vault }
 
     public func moveToBin(relPath: String, hash: ContentHash, origin: Origin,
                           includeSidecar: Bool = true) throws {
+        let failures = moveToBin([BinMove(relPath: relPath, hash: hash, origin: origin,
+                                          includeSidecar: includeSidecar)])
+        if let error = failures[0] { throw error }
+    }
+
+    /// Batch form: move every file (and its sidecar) into the bin FIRST, then append all of them to
+    /// `bin.jsonl` in ONE atomic rewrite — k files cost one log write, not k. Per-file error
+    /// attribution is kept: the result maps the index of each request that FAILED to its error
+    /// (absent = binned and logged); a failed item never stops the rest. "Files first, log after":
+    /// a crash between the two leaves the files recoverable in `bin/` (merely unlisted), exactly as
+    /// the per-file form did. If the single log write itself fails, every item that moved is
+    /// reported failed with that error (the same thing the per-file form threw).
+    @discardableResult
+    public func moveToBin(_ moves: [BinMove]) -> [Int: any Error] {
+        guard !moves.isEmpty else { return [:] }
+        var failures: [Int: any Error] = [:]
+        var moved: [(index: Int, item: BinItem)] = []
+        for (i, m) in moves.enumerated() {
+            do {
+                try moveFileToBin(relPath: m.relPath, includeSidecar: m.includeSidecar)
+                moved.append((i, BinItem(hash: m.hash.stringValue, path: m.relPath,
+                                         deletedAt: ISO8601Millis.string(from: Date()),
+                                         origin: m.origin)))
+            } catch { failures[i] = error }
+        }
+        guard !moved.isEmpty else { return failures }
+        do {
+            try writeLog(try list() + moved.map(\.item))
+        } catch {
+            for m in moved { failures[m.index] = error }
+        }
+        return failures
+    }
+
+    private func moveFileToBin(relPath: String, includeSidecar: Bool) throws {
         let fm = FileManager.default
         let src = vault.absoluteURL(forRelativePath: relPath)
         let dst = vault.binDirURL.appendingPathComponent(relPath)
@@ -33,26 +80,48 @@ public struct BinStore: Sendable {
                                    withIntermediateDirectories: true)
             try fm.moveItem(at: sidecar, to: sidecarDst)
         }
-        var items = try list()
-        items.append(BinItem(hash: hash.stringValue, path: relPath,
-                             deletedAt: ISO8601Millis.string(from: Date()), origin: origin))
-        try writeLog(items)
     }
 
     public func restore(relPath: String) throws {
+        if let error = restore(relPaths: [relPath])[0] { throw error }
+    }
+
+    /// Batch form of `restore`: move every file (and sidecar) back out of the bin, then drop all of
+    /// them from `bin.jsonl` in ONE atomic rewrite. Returns index → error for each request that
+    /// failed (absent = restored); a failed item never stops the rest. If the single log write
+    /// fails, every restored item is reported failed with that error (the files are back in place;
+    /// the stale log lines are harmless leftovers, as with the per-file form).
+    @discardableResult
+    public func restore(relPaths: [String]) -> [Int: any Error] {
+        guard !relPaths.isEmpty else { return [:] }
         let fm = FileManager.default
-        let src = vault.binDirURL.appendingPathComponent(relPath)
-        let dst = vault.absoluteURL(forRelativePath: relPath)
-        try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try fm.moveItem(at: src, to: dst)
-        let sidecarSrc = vault.sidecarURL(forMediaAt: src)
-        if fm.fileExists(atPath: sidecarSrc.path) {
-            let sidecarDst = vault.sidecarURL(forMediaAt: dst)
-            try fm.createDirectory(at: sidecarDst.deletingLastPathComponent(),
-                                   withIntermediateDirectories: true)
-            try fm.moveItem(at: sidecarSrc, to: sidecarDst)
+        var failures: [Int: any Error] = [:]
+        var restored: [Int] = []
+        for (i, relPath) in relPaths.enumerated() {
+            do {
+                let src = vault.binDirURL.appendingPathComponent(relPath)
+                let dst = vault.absoluteURL(forRelativePath: relPath)
+                try fm.createDirectory(at: dst.deletingLastPathComponent(),
+                                       withIntermediateDirectories: true)
+                try fm.moveItem(at: src, to: dst)
+                let sidecarSrc = vault.sidecarURL(forMediaAt: src)
+                if fm.fileExists(atPath: sidecarSrc.path) {
+                    let sidecarDst = vault.sidecarURL(forMediaAt: dst)
+                    try fm.createDirectory(at: sidecarDst.deletingLastPathComponent(),
+                                           withIntermediateDirectories: true)
+                    try fm.moveItem(at: sidecarSrc, to: sidecarDst)
+                }
+                restored.append(i)
+            } catch { failures[i] = error }
         }
-        try writeLog(try list().filter { $0.path != relPath })
+        guard !restored.isEmpty else { return failures }
+        do {
+            let gone = Set(restored.map { relPaths[$0] })
+            try writeLog(try list().filter { !gone.contains($0.path) })
+        } catch {
+            for i in restored { failures[i] = error }
+        }
+        return failures
     }
 
     public func list() throws -> [BinItem] {

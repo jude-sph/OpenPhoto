@@ -54,6 +54,7 @@ public struct DeletionPropagator: Sendable {
         var clearedDrivePaths = Set<String>()
         var moved = 0, skipped = 0, failed = 0
 
+        var toBin: [PendingDeletion] = []
         for e in entries {
             let src = drive.absoluteURL(forRelativePath: e.driveRelPath)
             if !fm.fileExists(atPath: src.path) {
@@ -61,13 +62,19 @@ public struct DeletionPropagator: Sendable {
                 clearedHashes.append(e.hash); clearedDrivePaths.insert(e.driveRelPath)
                 continue
             }
-            do {
-                try bin.moveToBin(relPath: e.driveRelPath,
-                                  hash: ContentHash(stringValue: e.hash), origin: .propagated)
+            toBin.append(e)
+        }
+        // All files first, then ONE bin-log rewrite (not one per file).
+        let binFailures = bin.moveToBin(toBin.map {
+            BinStore.BinMove(relPath: $0.driveRelPath, hash: ContentHash(stringValue: $0.hash),
+                             origin: .propagated)
+        })
+        for (i, e) in toBin.enumerated() {
+            if binFailures[i] != nil {
+                failed += 1   // leave queued; do not clear
+            } else {
                 moved += 1
                 clearedHashes.append(e.hash); clearedDrivePaths.insert(e.driveRelPath)
-            } catch {
-                failed += 1   // leave queued; do not clear
             }
         }
 
@@ -102,17 +109,22 @@ public struct DeletionPropagator: Sendable {
         var clearedHashes: [String] = []
         var clearedDrivePaths = Set<String>()
         var moved = 0
+        var toBin: [(hash: String, driveRelPath: String)] = []
         for e in entries {
             let src = drive.absoluteURL(forRelativePath: e.driveRelPath)
             if !fm.fileExists(atPath: src.path) {
                 clearedHashes.append(e.hash); clearedDrivePaths.insert(e.driveRelPath); continue
             }
-            do {
-                try bin.moveToBin(relPath: e.driveRelPath,
-                                  hash: ContentHash(stringValue: e.hash), origin: .user)
-                moved += 1
-                clearedHashes.append(e.hash); clearedDrivePaths.insert(e.driveRelPath)
-            } catch { /* leave it; not cleared */ }
+            toBin.append(e)
+        }
+        // All files first, then ONE bin-log rewrite (not one per file).
+        let binFailures = bin.moveToBin(toBin.map {
+            BinStore.BinMove(relPath: $0.driveRelPath, hash: ContentHash(stringValue: $0.hash),
+                             origin: .user)
+        })
+        for (i, e) in toBin.enumerated() where binFailures[i] == nil {   // failed: left, not cleared
+            moved += 1
+            clearedHashes.append(e.hash); clearedDrivePaths.insert(e.driveRelPath)
         }
         let remaining = try Manifest.read(from: drive.manifestURL)
             .filter { !clearedDrivePaths.contains($0.path) }

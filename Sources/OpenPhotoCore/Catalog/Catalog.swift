@@ -405,18 +405,35 @@ public final class Catalog: Sendable {
     // MARK: Pending deletions (Slice 3 — Delete-only queue)
 
     public func enqueuePendingDeletion(hash: String, relPath: String, deletedAtMs: Int64) throws {
+        try enqueuePendingDeletions([(hash: hash, relPath: relPath)], deletedAtMs: deletedAtMs)
+    }
+
+    /// Batch form: queue every `(hash, relPath)` in ONE write transaction (a k-photo delete commits
+    /// once, not k times). Applied in order, so a repeated hash keeps the last relPath — same as
+    /// calling the single form in a loop.
+    public func enqueuePendingDeletions(_ items: [(hash: String, relPath: String)],
+                                        deletedAtMs: Int64) throws {
+        guard !items.isEmpty else { return }
         try dbQueue.write { db in
-            try db.execute(sql: """
+            let stmt = try db.cachedStatement(sql: """
                 INSERT INTO pending_deletions (hash, relPath, deletedAtMs) VALUES (?, ?, ?)
                 ON CONFLICT(hash) DO UPDATE SET relPath = excluded.relPath,
                                                 deletedAtMs = excluded.deletedAtMs
-                """, arguments: [hash, relPath, deletedAtMs])
+                """)
+            for i in items { try stmt.execute(arguments: [i.hash, i.relPath, deletedAtMs]) }
         }
     }
 
     public func dequeuePendingDeletion(hash: String) throws {
+        try dequeuePendingDeletions(hashes: [hash])
+    }
+
+    /// Batch form: drop every hash from the queue in ONE write transaction.
+    public func dequeuePendingDeletions(hashes: [String]) throws {
+        guard !hashes.isEmpty else { return }
         try dbQueue.write { db in
-            try db.execute(sql: "DELETE FROM pending_deletions WHERE hash = ?", arguments: [hash])
+            let stmt = try db.cachedStatement(sql: "DELETE FROM pending_deletions WHERE hash = ?")
+            for h in hashes { try stmt.execute(arguments: [h]) }
         }
     }
 

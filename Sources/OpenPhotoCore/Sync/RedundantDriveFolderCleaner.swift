@@ -86,10 +86,13 @@ public enum RedundantDriveFolderCleaner {
 
         // Files first — each lands recoverable in the bin, so an interruption before the manifest
         // rewrite self-heals as a recoverable `missing` on the next scan (same discipline as deletions).
-        for f in assessment.proven {
-            try bin.moveToBin(relPath: f.driveRelPath,
-                              hash: ContentHash(stringValue: f.hash), origin: .repaired)
-        }
+        // One bin-log rewrite for the whole folder (not one per file). Any failure still aborts
+        // before the manifest is touched; files already binned stay recoverable.
+        let binFailures = bin.moveToBin(assessment.proven.map {
+            BinStore.BinMove(relPath: $0.driveRelPath, hash: ContentHash(stringValue: $0.hash),
+                             origin: .repaired)
+        })
+        if let first = binFailures.min(by: { $0.key < $1.key }) { throw first.value }
 
         // One atomic manifest rewrite: drop every entry under the folder.
         let remaining = try Manifest.read(from: drive.manifestURL)

@@ -83,16 +83,21 @@ public enum ReconcileExecutor {
         var clearedPaths = Set<String>()
         var clearedHashes: [String] = []
         var binned = 0
+        var verified: [Placement] = []
         for d in deletions {
             let url = drive.absoluteURL(forRelativePath: d.path)
             if !fm.fileExists(atPath: url.path) {
                 clearedPaths.insert(d.path); clearedHashes.append(d.hash); continue
             }
             guard (try? ContentHash.ofFile(at: url).stringValue) == d.hash else { continue }  // drift → skip
-            do {
-                try bin.moveToBin(relPath: d.path, hash: ContentHash(stringValue: d.hash), origin: .propagated)
-                binned += 1; clearedPaths.insert(d.path); clearedHashes.append(d.hash)
-            } catch { /* leave; not cleared */ }
+            verified.append(d)
+        }
+        // All verified files first, then ONE bin-log rewrite (not one per file).
+        let binFailures = bin.moveToBin(verified.map {
+            BinStore.BinMove(relPath: $0.path, hash: ContentHash(stringValue: $0.hash), origin: .propagated)
+        })
+        for (i, d) in verified.enumerated() where binFailures[i] == nil {   // failed: left, not cleared
+            binned += 1; clearedPaths.insert(d.path); clearedHashes.append(d.hash)
         }
         if !clearedPaths.isEmpty {
             let remaining = try Manifest.read(from: drive.manifestURL).filter { !clearedPaths.contains($0.path) }
@@ -121,6 +126,7 @@ public enum ReconcileExecutor {
         let removingPaths = Set(removals.map(\.path))
         var removed = 0, skipped = 0, alreadyGone = 0
         var clearedPaths = Set<String>()
+        var proven: [Placement] = []
 
         for r in removals {
             let url = drive.absoluteURL(forRelativePath: r.path)
@@ -136,10 +142,15 @@ public enum ReconcileExecutor {
                                      localVault: localVault, catalog: catalog) else {
                 skipped += 1; continue
             }
-            do {
-                try bin.moveToBin(relPath: r.path, hash: ContentHash(stringValue: r.hash), origin: .repaired)
-                removed += 1; clearedPaths.insert(r.path)
-            } catch { skipped += 1 }   // leave it; not cleared
+            proven.append(r)
+        }
+        // All proven files first, then ONE bin-log rewrite (not one per file).
+        let binFailures = bin.moveToBin(proven.map {
+            BinStore.BinMove(relPath: $0.path, hash: ContentHash(stringValue: $0.hash), origin: .repaired)
+        })
+        for (i, r) in proven.enumerated() {
+            if binFailures[i] == nil { removed += 1; clearedPaths.insert(r.path) }
+            else { skipped += 1 }   // leave it; not cleared
         }
 
         if !clearedPaths.isEmpty {

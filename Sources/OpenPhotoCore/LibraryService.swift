@@ -363,27 +363,34 @@ public final class LibraryService: Sendable {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         for (vaultID, group) in byVault {
             guard let bin = binStores[vaultID] else { continue }
-            var n = 0
-            for item in group {
-                do {
-                    try bin.moveToBin(relPath: item.relPath,
-                                      hash: ContentHash(stringValue: item.hash), origin: .user)
-                } catch { continue }   // primary already gone / unreadable — skip, not counted
-                // The file is binned; if recording the pending deletion fails, keep going (the
-                // rescan below still reconciles the catalog) but remember the error to report.
-                do {
-                    try catalog.enqueuePendingDeletion(hash: item.hash, relPath: item.relPath, deletedAtMs: nowMs)
-                } catch { if firstError == nil { firstError = error } }
-                n += 1
-                // Best-effort: the Live pair's video is binned + queued alongside it.
+            // Batched: every primary is moved first and the bin log is rewritten ONCE (then once more
+            // for the Live-pair videos, if any) — not one whole-log rewrite + full flush per file.
+            // A primary already gone / unreadable is skipped, not counted.
+            let failures = bin.moveToBin(group.map {
+                BinStore.BinMove(relPath: $0.relPath, hash: ContentHash(stringValue: $0.hash),
+                                 origin: .user)
+            })
+            let binned = group.enumerated().filter { failures[$0.offset] == nil }.map(\.element)
+            let n = binned.count
+            // Best-effort: each binned still's Live-pair video is binned + queued alongside it.
+            var queue: [(hash: String, relPath: String)] = []
+            var pairMoves: [BinStore.BinMove] = []
+            for item in binned {
+                queue.append((item.hash, item.relPath))
                 if let pairHash = item.livePairHash,
                    let pairInstance = try? catalog.instanceItem(hash: pairHash, vaultID: vaultID) {
-                    try? bin.moveToBin(relPath: pairInstance.relPath,
-                                       hash: ContentHash(stringValue: pairHash), origin: .user)
-                    try? catalog.enqueuePendingDeletion(hash: pairHash, relPath: pairInstance.relPath,
-                                                        deletedAtMs: nowMs)
+                    pairMoves.append(BinStore.BinMove(relPath: pairInstance.relPath,
+                                                      hash: ContentHash(stringValue: pairHash),
+                                                      origin: .user))
+                    queue.append((pairHash, pairInstance.relPath))
                 }
             }
+            bin.moveToBin(pairMoves)
+            // The files are binned; if recording the pending deletions fails, keep going (the
+            // rescan below still reconciles the catalog) but remember the error to report.
+            do {
+                try catalog.enqueuePendingDeletions(queue, deletedAtMs: nowMs)   // one transaction
+            } catch { if firstError == nil { firstError = error } }
             if n > 0 {
                 do { try await rescan(vaultID: vaultID); deleted += n }
                 catch { if firstError == nil { firstError = error } }
