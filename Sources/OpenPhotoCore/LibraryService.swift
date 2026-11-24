@@ -401,14 +401,63 @@ public final class LibraryService: Sendable {
     }
 
     public func restore(_ entry: BinEntry) async throws {
-        try binStores[entry.vaultID]?.restore(relPath: entry.item.path)
-        try catalog.dequeuePendingDeletion(hash: entry.item.hash)
-        // Mirror the dequeue onto a Live pair (favor not-deleting: a restored still
-        // should not leave its video queued to propagate alone).
-        if let pair = try catalog.assetLivePairHash(forHash: entry.item.hash) {
-            try catalog.dequeuePendingDeletion(hash: pair)
+        let outcome = await restoreBatch([entry])
+        if let error = outcome.itemErrors.first?.value ?? outcome.otherError { throw error }
+    }
+
+    /// Restore a set of bin entries in one pass: every file (and sidecar) is moved back, each
+    /// vault's bin log is rewritten ONCE, the pending deletions of every restored hash (and its
+    /// Live pair) are dequeued in one transaction, and each touched vault is rescanned ONCE —
+    /// instead of a whole-log rewrite + full library rescan per entry. Resilient like `delete`:
+    /// an entry whose file can't be restored is skipped (absent from the result) without stopping
+    /// the rest, and the touched vaults are always rescanned. Returns the entries actually
+    /// restored; throws only a catalog/rescan error, after everything has been attempted.
+    @discardableResult
+    public func restore(_ entries: [BinEntry]) async throws -> [BinEntry] {
+        let outcome = await restoreBatch(entries)
+        if let error = outcome.otherError { throw error }
+        return outcome.restored
+    }
+
+    private func restoreBatch(_ entries: [BinEntry]) async
+        -> (restored: [BinEntry], itemErrors: [Int: any Error], otherError: (any Error)?) {
+        var itemErrors: [Int: any Error] = [:]
+        var otherError: (any Error)?
+        var restoredIdx: [Int] = []
+        var byVault: [String: [Int]] = [:]
+        var vaultOrder: [String] = []
+        for (i, e) in entries.enumerated() {
+            if byVault[e.vaultID] == nil { vaultOrder.append(e.vaultID) }
+            byVault[e.vaultID, default: []].append(i)
         }
-        try await rescan(vaultID: entry.vaultID)
+        var touched: [String] = []
+        for vaultID in vaultOrder {
+            guard let bin = binStores[vaultID], let idxs = byVault[vaultID] else { continue }
+            let failures = bin.restore(relPaths: idxs.map { entries[$0].item.path })
+            for (k, i) in idxs.enumerated() {
+                if let error = failures[k] { itemErrors[i] = error } else { restoredIdx.append(i) }
+            }
+            // A file can be back on disk even when its entry reports failure (the log rewrite
+            // failed after the move), so rescan whenever anything was attempted.
+            touched.append(vaultID)
+        }
+        restoredIdx.sort()
+        let restored = restoredIdx.map { entries[$0] }
+        // Dequeue each restored hash, mirrored onto its Live pair (favor not-deleting: a restored
+        // still should not leave its video queued to propagate alone).
+        do {
+            var hashes: [String] = []
+            for e in restored {
+                hashes.append(e.item.hash)
+                if let pair = try catalog.assetLivePairHash(forHash: e.item.hash) { hashes.append(pair) }
+            }
+            try catalog.dequeuePendingDeletions(hashes: hashes)
+        } catch { otherError = error }
+        for vaultID in touched {
+            do { try await rescan(vaultID: vaultID) }
+            catch { if otherError == nil { otherError = error } }
+        }
+        return (restored, itemErrors, otherError)
     }
 
     public func binItems() throws -> [BinEntry] {
