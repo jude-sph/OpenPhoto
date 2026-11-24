@@ -65,6 +65,7 @@ public final class ImportRegistry: @unchecked Sendable {
     /// All import entries that recorded these exact bytes (any device).
     public func entries(forHash hash: String) -> [Entry] {
         lock.lock(); defer { lock.unlock() }
+        guard byHash[hash] != nil else { return [] }   // O(1) miss — the common case per photo
         return byKey.values.filter { $0.hash == hash }
     }
 

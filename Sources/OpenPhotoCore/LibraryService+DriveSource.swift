@@ -7,8 +7,7 @@ extension LibraryService {
     /// item's pinned vault. Callers pass drives canonical-first so the canonical is preferred.
     func driveSource(forHash hash: String, among drives: [Vault]) -> (vault: Vault, row: VaultPresenceEntry)? {
         for d in drives {
-            if let row = (try? catalog.vaultPresenceRows(forVault: d.descriptor.vaultID))?
-                .first(where: { $0.hash == hash }) {
+            if let row = try? catalog.presenceRow(vaultID: d.descriptor.vaultID, hash: hash) {
                 return (d, row)
             }
         }

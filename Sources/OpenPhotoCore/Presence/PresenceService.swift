@@ -55,9 +55,11 @@ public struct PresenceService: Sendable {
 
         // Registered drive vaults (confirmed) — presence derived from their manifests.
         if let vaults = try? catalog.registeredVaults() {
+            // One indexed query for "which vaults hold this hash" (was: load every drive's whole
+            // hash set, per hash).
+            let holding = (try? catalog.vaultIDsHolding(hash: hash)) ?? []
             for vr in vaults where vr.role != "local" {
-                guard let present = try? catalog.vaultPresenceHashes(forVault: vr.id),
-                      present.contains(hash), !seenDevices.contains(vr.id) else { continue }
+                guard holding.contains(vr.id), !seenDevices.contains(vr.id) else { continue }
                 seenDevices.insert(vr.id)
                 let name = (vr.rootPath as NSString).lastPathComponent
                 out.append(Location(place: .device(key: vr.id, name: name, kind: .volume),

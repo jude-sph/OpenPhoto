@@ -116,8 +116,7 @@ extension LibraryService {
             var halves: [(hash: String, driveRelPath: String, relPath: String)] =
                 [(item.hash, stillRow.driveRelPath, item.relPath)]
             if let pairHash = item.livePairHash,
-               let row = (try? catalog.vaultPresenceRows(forVault: drive.descriptor.vaultID))?
-                    .first(where: { $0.hash == pairHash }) {
+               let row = try? catalog.presenceRow(vaultID: drive.descriptor.vaultID, hash: pairHash) {
                 halves.append((pairHash, row.driveRelPath, row.relPath))
             }
             var stillVaultID: String?
@@ -185,8 +184,8 @@ extension LibraryService {
             return canonicalPresence.contains(hash)
         case .verified:
             for drive in connectedCanonical {
-                guard let row = (try? catalog.vaultPresenceRows(forVault: drive.descriptor.vaultID))?
-                        .first(where: { $0.hash == hash }) else { continue }
+                guard let row = try? catalog.presenceRow(vaultID: drive.descriptor.vaultID, hash: hash)
+                else { continue }
                 let url = drive.absoluteURL(forRelativePath: row.driveRelPath)
                 if (try? ContentHash.ofFile(at: url).stringValue) == hash { return true }
             }
