@@ -30,10 +30,19 @@ public final class ThumbnailStore: Sendable {
         guard let img = try await generate(from: sourceURL, kind: kind) else { return nil }
         try FileManager.default.createDirectory(at: cached.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
-        if let dest = CGImageDestinationCreateWithURL(cached as CFURL,
+        // Encode to a unique temp file beside the final path, then rename over it: a reader (or a
+        // crash mid-encode) never sees a truncated JPEG at the cache path, and two concurrent
+        // generations of the same hash can't interleave bytes — the last complete one wins.
+        let tmp = cached.deletingLastPathComponent()
+            .appendingPathComponent(".\(cached.lastPathComponent).\(UUID().uuidString).tmp")
+        var written = false
+        if let dest = CGImageDestinationCreateWithURL(tmp as CFURL,
                                                       UTType.jpeg.identifier as CFString, 1, nil) {
             CGImageDestinationAddImage(dest, img, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
-            CGImageDestinationFinalize(dest)
+            written = CGImageDestinationFinalize(dest)
+        }
+        if !(written && rename(tmp.path, cached.path) == 0) {
+            try? FileManager.default.removeItem(at: tmp)   // our own partial temp, never cached data
         }
         return img
     }
