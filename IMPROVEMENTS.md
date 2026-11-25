@@ -16,6 +16,12 @@ This audit is a snapshot dated 2026-06-13; the codebase has moved since. Finding
 **Resolved 2026-06-17 — Batch A (data-integrity & crash hardening), Tier 0:**
 - **S13** path-traversal containment in `VaultReorganizer`; **S12** crash-durable `AtomicFile` (`F_FULLFSYNC` + parent-dir fsync); **S03** (+**S25**) reorg serialized against the off-main scanner; **S59** atomic `EmbeddedMetadata` replace; **S68** XMP control-char stripping; **S58** `ImportEngine` duplicate-key safety; **S08** `Scanner` enumerator throws instead of crashing; **S64** Finder-tag baseline only advances on a successful write; **S69** resilient `delete()` batch; **S57** `FolderGridView` library force-unwrap guarded.
 
+**Resolved 2026-11-25 — delta audit + bug hunt (branch `perf/delta-audit-fixes`):**
+- **I7 / S02 / D01** `refreshQueries` is now off-main, coalesced and generation-guarded. **I16** batch bin log + bulk restore. Whole-table presence loads replaced by indexed lookups. No-change rescans write nothing (instance diff, manifest skip, batched Live pairs + sidecar ingest). Shared CLIP model; drain gating; DBSCAN on Accelerate; downsampled ML decodes; viewer decode registry; byte-budgeted tile cache (§5 Step 1 quick wins); import progress throttle.
+- Bugs fixed: stale `pending_deletions` binning a drive's only copy; Finder-tag sync erasing tags after rehydrate; merge-into-parent binning the folder; rename dropping the extension; locks not following a moved folder; camera import hang; `deleteEmptyFolder` orphaning sidecars; reconcile not mirroring sidecar edits / not flushing the manifest; duplicate-hash snapshot write failure.
+- **CX04 was wrong** (folder queries do use the `dirPath` index).
+- Still open: EXIF-orientation frame for face rectangles (decision pending); named people not rebuilt from sidecar regions on catalog rebuild; evicted photos of locked folders; offline reorg of evicted photos; I18 AppState decomposition; pagination; tiled renderer (§5 Step 2).
+
 **Triaged but deliberately deferred** (scale beyond ~50k or large refactor, low value for a personal-use library): I7/S02/D01 (refreshQueries off-main), I12–I17 (pagination / index / batch-mutation storage / quadratic drive adopt), I18 (AppState decomposition), I22/I24 (indexed matchers, SemanticIndex Float16). Tile plan (§5) Step 1 and a Step 2 spike remain open and recommended.
 
 ---
