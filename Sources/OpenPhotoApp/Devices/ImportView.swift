@@ -1,9 +1,58 @@
 import SwiftUI
 import OpenPhotoCore
 
+/// Live progress of a running import batch. Its own observable object, read only by
+/// `ImportProgressFooter`, so a progress tick re-renders that one row — not the whole import view
+/// (whose body filters and maps every source item for the grid).
+@MainActor @Observable final class ImportProgressModel {
+    var done = 0
+    var total = 0
+    /// The copy is finished; imported items are being tagged.
+    var tagging = false
+    /// Sequence number of the last applied tick — main-actor hops can land out of order.
+    @ObservationIgnored var appliedSeq = 0
+}
+
+/// Decides which of the engine's per-file progress callbacks reach the UI: at most one per
+/// `interval`, plus always the first of each engine stage (counts restart at 0 per stage) and
+/// the last. Returns a sequence number for ordering on the main actor, or nil to drop the tick.
+/// Called from the engine's (background) context; all state is behind the lock.
+private final class ProgressThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last: ContinuousClock.Instant?
+    private var lastStage: ImportEngine.Progress.Stage?
+    private var seq = 0
+    private let interval: Duration = .milliseconds(125)   // ~8 Hz
+
+    func shouldDeliver(_ p: ImportEngine.Progress) -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        let now = ContinuousClock.now
+        let mustDeliver = p.done >= p.total || p.stage != lastStage
+        if !mustDeliver, let last, now - last < interval { return nil }
+        last = now
+        lastStage = p.stage
+        seq += 1
+        return seq
+    }
+}
+
+private struct ImportProgressFooter: View {
+    let progress: ImportProgressModel
+    var body: some View {
+        ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+            .tint(Theme.accent)
+        Text(progress.tagging
+             ? "Tagging imported photos…"
+             : "Copying & verifying… \(progress.done)/\(progress.total) · checksum verified before any deletion")
+            .font(.system(size: 12).monospacedDigit())
+            .foregroundStyle(Theme.textDim)
+    }
+}
+
 struct ImportView: View {
     @Bindable var state: AppState
     let device: ConnectedDevice
+    @State private var progress = ImportProgressModel()
 
     enum Phase: Equatable { case connecting, waitingForUnlock, ready, importing(done: Int, total: Int), failedToConnect(String) }
     @State private var phase: Phase = .connecting
@@ -167,12 +216,8 @@ struct ImportView: View {
     private var footer: some View {
         HStack(spacing: 12) {
             switch phase {
-            case .importing(let done, let total):
-                ProgressView(value: Double(done), total: Double(max(total, 1)))
-                    .tint(Theme.accent)
-                Text("Copying & verifying… \(done)/\(total) · checksum verified before any deletion")
-                    .font(.system(size: 12).monospacedDigit())
-                    .foregroundStyle(Theme.textDim)
+            case .importing:
+                ImportProgressFooter(progress: progress)   // observes the ticks; this view doesn't
             default:
                 if let r = lastResult {
                     Label("\(r.imported.count) imported & verified" +
@@ -480,7 +525,12 @@ struct ImportView: View {
         guard let source, let lib = state.library, let registry = state.importRegistry,
               let vault = lib.vaults.first else { return }
         let batchItems = items.filter { selection.contains($0.id) }
+        // `phase` is set once for the whole batch; the running counts live in `progress`.
+        progress.done = 0; progress.total = batchItems.count; progress.tagging = false
+        progress.appliedSeq = 0
         phase = .importing(done: 0, total: batchItems.count)
+        let progress = progress
+        let throttle = ProgressThrottle()
         let engine = ImportEngine(library: lib, registry: registry)
         let foreign = source as? ForeignVaultSource
         if let vol = source as? VolumeSource { vol.foldXMPSidecars = carryMetadata }
@@ -502,14 +552,29 @@ struct ImportView: View {
         let result = await engine.run(
             source: source, items: batchItems, vault: vault, dirPath: destination,
             subdirForItem: subdirForItem, postPlace: postPlace) { p in
-            Task { @MainActor in phase = .importing(done: p.done, total: p.total) }
+            // The engine reports every file; the UI needs ~8 updates a second (and the last one).
+            guard let seq = throttle.shouldDeliver(p) else { return }
+            let done = p.done, total = p.total
+            Task { @MainActor in
+                // Hops can land out of order; apply only the newest tick.
+                guard seq > progress.appliedSeq else { return }
+                progress.appliedSeq = seq
+                progress.done = done; progress.total = total
+            }
         }
         lastResult = result
         // Auto-tag NEWLY imported Apple Photos items (skipped duplicates aren't in `imported`).
+        // One sidecar read + atomic write + catalog transaction per item — off the main actor; the
+        // view stays in its importing phase (footer: "Tagging…") until it is done.
         if state.tagApplePhotosImports, source.sourceKey == "photoslib", !result.imported.isEmpty {
             let ids = result.imported.map { "\(vault.descriptor.vaultID)|\($0.placedRelPath)" }
-            let placed = (try? lib.catalog.items(instanceIDs: ids)) ?? []
-            try? lib.appendTag(AppState.applePhotosImportTag, toItems: placed)
+            let tag = AppState.applePhotosImportTag
+            progress.tagging = true
+            await Task.detached(priority: .userInitiated) {
+                let placed = (try? lib.catalog.items(instanceIDs: ids)) ?? []
+                try? lib.appendTag(tag, toItems: placed)
+            }.value
+            progress.tagging = false
         }
         sessionImported.append(contentsOf: result.imported)
         sessionImportedIDs.formUnion(result.imported.map(\.item.id))
