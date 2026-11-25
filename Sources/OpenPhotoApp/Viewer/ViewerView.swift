@@ -14,6 +14,79 @@ nonisolated(unsafe) let viewerImageCache: NSCache<NSString, TileImageBox> = {
     return c
 }()
 
+/// Owns every in-flight full-res decode for the viewer. Full-res bitmaps are 100–200 MB each and a
+/// running ImageIO decode cannot be interrupted, so the number alive at once has to be bounded by
+/// construction — holding an arrow key used to start one unowned decode per step (plus two
+/// neighbour prefetches), which is the unbounded-image-memory shape that has OOM'd this app before.
+///
+/// - One decode per key ("instanceID|rotation"): a second request awaits the first.
+/// - At most `maxConcurrent` decodes run; the rest queue, newest first (the photo on screen is
+///   always the most recent request, so it never waits behind stale ones).
+/// - `keepOnly` cancels requests the viewer has moved away from; a queued one then never starts.
+/// Results land in `viewerImageCache` (which keeps its own count/byte bounds).
+@MainActor
+final class ViewerDecoder {
+    static let shared = ViewerDecoder()
+    private static let maxConcurrent = 2
+
+    private struct Job {
+        let instanceID: String
+        let task: Task<CGImage?, Never>
+    }
+    private var jobs: [String: Job] = [:]
+    private let slots = Slots(free: ViewerDecoder.maxConcurrent)
+
+    static func key(instanceID: String, rotation: Int) -> String { "\(instanceID)|\(rotation)" }
+
+    /// The decoded photo: from the cache, from the decode already in flight for it, or a new decode.
+    /// nil if the file can't be decoded, or the request was cancelled before it started.
+    func image(instanceID: String, url: URL, rotation: Int, priority: TaskPriority) async -> CGImage? {
+        let key = Self.key(instanceID: instanceID, rotation: rotation)
+        if let cached = viewerImageCache.object(forKey: key as NSString)?.image { return cached }
+        if let job = jobs[key] { return await job.task.value }
+        let slots = slots
+        let task = Task.detached(priority: priority) { () -> CGImage? in
+            await slots.acquire()
+            // Checked only once a slot is ours: a request cancelled while queued costs nothing.
+            let image: CGImage? = Task.isCancelled ? nil : autoreleasepool {
+                FullResImage.decode(url: url, extraRotationCW: rotation)
+            }
+            if let image {
+                viewerImageCache.setObject(TileImageBox(image), forKey: key as NSString,
+                                           cost: image.width * image.height * 4)   // NSCache is thread-safe
+            }
+            await slots.release()
+            return image
+        }
+        jobs[key] = Job(instanceID: instanceID, task: task)
+        let image = await task.value
+        if jobs[key]?.task == task { jobs[key] = nil }
+        return image
+    }
+
+    /// Cancel every request that is not for one of `instanceIDs` (the open photo + its neighbours).
+    func keepOnly(_ instanceIDs: Set<String>) {
+        for (key, job) in jobs where !instanceIDs.contains(job.instanceID) {
+            job.task.cancel()
+            jobs[key] = nil
+        }
+    }
+
+    /// Counting semaphore. Waiters resume newest-first.
+    private actor Slots {
+        private var free: Int
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        init(free: Int) { self.free = free }
+        func acquire() async {
+            if free > 0 { free -= 1; return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        func release() {
+            if let next = waiters.popLast() { next.resume() } else { free += 1 }
+        }
+    }
+}
+
 struct ViewerView: View {
     @Bindable var state: AppState
     @State private var fullImage: CGImage?
@@ -30,7 +103,13 @@ struct ViewerView: View {
     /// TimelineItem we were handed can be a stale copy from a grid list that wasn't refreshed after a
     /// rotate, which is why re-opening from the grid used to show the pre-rotation orientation.
     @State private var liveRotation = 0
-    private var index: Int? { flatItems.firstIndex { $0.instanceID == state.openedItem?.instanceID } }
+    /// Position of the open item. Compares the fields `instanceID` is made of — `instanceID` itself
+    /// is a computed string concatenation, which the old lookup built twice per element.
+    private var index: Int? {
+        guard let open = state.openedItem else { return nil }
+        let vaultID = open.vaultID, relPath = open.relPath
+        return flatItems.firstIndex { $0.relPath == relPath && $0.vaultID == vaultID }
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -88,7 +167,7 @@ struct ViewerView: View {
                 tearDownPlayer()
             }
         }
-        .onDisappear { tearDownPlayer() }
+        .onDisappear { tearDownPlayer(); ViewerDecoder.shared.keepOnly([]) }
     }
 
     private var stage: some View {
@@ -214,15 +293,17 @@ struct ViewerView: View {
     }
 
     private var filmstrip: some View {
-        ScrollViewReader { proxy in
+        let openID = state.openedItem?.instanceID
+        return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 5) {
                     ForEach(flatItems, id: \.instanceID) { item in
-                        ThumbnailImage(timelineItem: item, library: state.library!)
+                        // 52 pt tiles @2x need ~104 px — not the 512 px default.
+                        ThumbnailImage(timelineItem: item, library: state.library!, targetPixel: 128)
                             .frame(width: 52, height: 52)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                             .overlay(RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(item.instanceID == state.openedItem?.instanceID
+                                .strokeBorder(item.instanceID == openID
                                               ? Theme.accent : .clear, lineWidth: 2))
                             .id(item.instanceID)
                             .onTapGesture { state.openedItem = item }
@@ -230,6 +311,8 @@ struct ViewerView: View {
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
             }
+            // Start on the opened photo (no animation); later navigation animates.
+            .onAppear { if let openID { proxy.scrollTo(openID, anchor: .center) } }
             .onChange(of: state.openedItem?.instanceID) { _, id in
                 if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
@@ -266,7 +349,13 @@ struct ViewerView: View {
         playingLive = false
         liveURL = nil
         driveUnplugged = false
-        guard let item = state.openedItem else { fullImage = nil; return }
+        guard let item = state.openedItem else {
+            fullImage = nil
+            ViewerDecoder.shared.keepOnly([])
+            return
+        }
+        // Drop decode requests for anything that is no longer the open photo or a neighbour.
+        ViewerDecoder.shared.keepOnly(Set(neighbourhood().map(\.instanceID)))
         // Read the rotation from the catalog (source of truth), not the possibly-stale `item`.
         liveRotation = rotation(for: item)
         guard let url = state.fullResURL(for: item) else {
@@ -281,30 +370,45 @@ struct ViewerView: View {
             player = Self.makeVideoPlayer(url: url, rotationCW: liveRotation)
             return
         }
-        liveURL = resolveLiveURL(for: item, photoURL: url)
+        // The Live-pair lookup is a catalog read + up to four `fileExists` calls — off the main thread.
+        if let lib = state.library {
+            let id = item.instanceID
+            Task {
+                let live = await Task.detached(priority: .userInitiated) {
+                    Self.resolveLiveURL(for: item, photoURL: url, library: lib)
+                }.value
+                if state.openedItem?.instanceID == id { liveURL = live }   // still on this photo
+            }
+        }
         let rot = liveRotation
-        let key = "\(item.instanceID)|\(rot)" as NSString
+        let key = ViewerDecoder.key(instanceID: item.instanceID, rotation: rot) as NSString
         // Cache hit (e.g. a prefetched neighbor) → show instantly. No blank, no decode.
         if let cached = viewerImageCache.object(forKey: key)?.image {
             fullImage = cached
-            prefetchNeighbors()
-            return
+        } else {
+            // Miss → decode full-res OFF the main thread via ImageIO (the fast, Quick-Look path). While
+            // it decodes, the placeholder shows the instant thumbnail, not a spinner. Full resolution.
+            // The decoder dedupes against a prefetch already in flight for this photo and caches the
+            // result itself.
+            fullImage = nil
+            let decoded = await ViewerDecoder.shared.image(
+                instanceID: item.instanceID, url: url, rotation: rot, priority: .userInitiated)
+            // Ignore a result that arrived after the user already navigated away.
+            guard state.openedItem?.instanceID == item.instanceID, liveRotation == rot else { return }
+            if let decoded { fullImage = decoded }
         }
-        // Miss → decode full-res OFF the main thread via ImageIO (the fast, Quick-Look path). The old
-        // code decoded on the MAIN thread (NSImage → cgImage at draw time), which was the freeze. While
-        // it decodes, the placeholder shows the instant thumbnail, not a spinner. Full resolution.
-        fullImage = nil
-        let decoded = await Task.detached(priority: .userInitiated) {
-            FullResImage.decode(url: url, extraRotationCW: rot)
-        }.value
-        // Ignore a result that arrived after the user already navigated away.
-        guard state.openedItem?.instanceID == item.instanceID, liveRotation == rot else { return }
-        if let decoded {
-            viewerImageCache.setObject(TileImageBox(decoded), forKey: key,
-                                       cost: decoded.width * decoded.height * 4)
-            fullImage = decoded
-        }
+        // Prefetch only once navigation has paused: this task is cancelled by the next step, so a held
+        // arrow key never gets here.
+        try? await Task.sleep(for: .milliseconds(150))
+        guard !Task.isCancelled, state.openedItem?.instanceID == item.instanceID else { return }
         prefetchNeighbors()
+    }
+
+    /// The open item and its immediate neighbours (the only photos worth decoding right now).
+    private func neighbourhood() -> [TimelineItem] {
+        guard let i = index else { return state.openedItem.map { [$0] } ?? [] }
+        let items = flatItems
+        return [i - 1, i, i + 1].filter(items.indices.contains).map { items[$0] }
     }
 
     /// The open photo's display rotation, from the catalog (source of truth), falling back to the item.
@@ -313,20 +417,20 @@ struct ViewerView: View {
     }
 
     /// Warm the cache for the immediate neighbors so arrow-key stepping is instant. URL + rotation are
-    /// read on the main actor; each decode runs off-main. Bounded by the cache's own count/byte limits.
+    /// read on the main actor; each decode runs off-main through `ViewerDecoder` (deduped, capped,
+    /// cancelled if the viewer moves on before it starts). Bounded by the cache's count/byte limits.
     private func prefetchNeighbors() {
-        guard let i = index else { return }
-        for j in [i - 1, i + 1] where flatItems.indices.contains(j) {
-            let it = flatItems[j]
+        guard let open = state.openedItem else { return }
+        for it in neighbourhood() where it.instanceID != open.instanceID {
             guard it.kind != MediaKind.video.rawValue else { continue }   // photos only
             let rot = rotation(for: it)
-            let key = "\(it.instanceID)|\(rot)" as NSString
+            let key = ViewerDecoder.key(instanceID: it.instanceID, rotation: rot) as NSString
             guard viewerImageCache.object(forKey: key) == nil,
                   let url = state.fullResURL(for: it) else { continue }
-            Task.detached(priority: .utility) {
-                guard let img = FullResImage.decode(url: url, extraRotationCW: rot) else { return }
-                viewerImageCache.setObject(TileImageBox(img), forKey: key,
-                                           cost: img.width * img.height * 4)   // NSCache is thread-safe
+            let id = it.instanceID
+            Task {
+                _ = await ViewerDecoder.shared.image(instanceID: id, url: url, rotation: rot,
+                                                     priority: .utility)
             }
         }
     }
@@ -358,9 +462,9 @@ struct ViewerView: View {
     }
 
 
-    private func livePairURL(photo: TimelineItem, pairHash: String) -> URL? {
-        guard let lib = state.library,
-              let rec = try? lib.catalog.instanceItem(hash: pairHash, vaultID: photo.vaultID),
+    private nonisolated static func livePairURL(photo: TimelineItem, pairHash: String,
+                                                library lib: LibraryService) -> URL? {
+        guard let rec = try? lib.catalog.instanceItem(hash: pairHash, vaultID: photo.vaultID),
               let vault = lib.vault(id: photo.vaultID) else { return nil }
         return vault.absoluteURL(forRelativePath: rec.relPath)
     }
@@ -368,8 +472,10 @@ struct ViewerView: View {
     /// Resolve a Live Photo's video: prefer the catalog-recorded pair; otherwise
     /// fall back to a same-folder, same-basename .mov/.mp4 on disk (robust even if
     /// the pairing metadata didn't persist for an imported Live Photo).
-    private func resolveLiveURL(for item: TimelineItem, photoURL: URL) -> URL? {
-        if let pair = item.livePairHash, let u = livePairURL(photo: item, pairHash: pair) {
+    private nonisolated static func resolveLiveURL(for item: TimelineItem, photoURL: URL,
+                                                   library: LibraryService) -> URL? {
+        if let pair = item.livePairHash,
+           let u = livePairURL(photo: item, pairHash: pair, library: library) {
             return u
         }
         guard item.kind == MediaKind.photo.rawValue else { return nil }
