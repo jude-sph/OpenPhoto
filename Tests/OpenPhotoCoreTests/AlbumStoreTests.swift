@@ -53,7 +53,7 @@ private func album(_ id: String, _ name: String, members: [String] = []) -> Albu
 
     // Drive now mirrors source exactly: A + fresh B, C gone.
     let names = Set(((try? FileManager.default.contentsOfDirectory(atPath: driveAlbums.path)) ?? []))
-    #expect(names == ["A.json", "B.json"])
+    #expect(names == ["A.json", "B.json", StateFileBin.dirName])     // C binned, not removed
     let driveB = try Data(contentsOf: driveAlbums.appendingPathComponent("B.json"))
     #expect((try? JSONDecoder().decode(AlbumRecord.self, from: driveB))?.name == "Bravo")  // overwritten
 }
@@ -63,4 +63,29 @@ private func album(_ id: String, _ name: String, members: [String] = []) -> Albu
     try AlbumStore.save(album("x", "X", members: ["h1"]), libraryRoot: t.root)
     #expect(AlbumStore.load(id: "x", libraryRoot: t.root)?.members == ["h1"])
     #expect(AlbumStore.load(id: "nope", libraryRoot: t.root) == nil)
+}
+
+// Nothing hard-deletes: a deleted album's file moves into `albums/.bin/` (on the Mac, and on the
+// drive when the mirror propagates the deletion), where loadAll never sees it.
+@Test func albumDeleteBinsTheFileInsteadOfRemovingIt() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try t.sub("lib"), driveState = try t.sub("drive/.openphoto")
+    try AlbumStore.save(album("a", "Keep me", members: ["sha256:1"]), libraryRoot: lib)
+    try AlbumStore.syncToDrive(libraryRoot: lib, driveStateDir: driveState)
+    AlbumStore.delete(id: "a", libraryRoot: lib)
+    try AlbumStore.save(album("a", "Recreated"), libraryRoot: lib)
+    AlbumStore.delete(id: "a", libraryRoot: lib)                       // a second deletion of the same id
+    #expect(AlbumStore.loadAll(libraryRoot: lib).isEmpty)
+    let bin = AlbumStore.directoryURL(libraryRoot: lib).appendingPathComponent(StateFileBin.dirName)
+    let binned = try FileManager.default.contentsOfDirectory(at: bin, includingPropertiesForKeys: nil)
+    #expect(binned.count == 2)                                         // both versions kept
+    let names = try binned.map { try JSONDecoder().decode(AlbumRecord.self, from: Data(contentsOf: $0)).name }
+    #expect(Set(names) == ["Keep me", "Recreated"])
+
+    try AlbumStore.syncToDrive(libraryRoot: lib, driveStateDir: driveState)
+    let dAlbums = driveState.appendingPathComponent("albums")
+    #expect(!FileManager.default.fileExists(atPath: dAlbums.appendingPathComponent("a.json").path))
+    let dBinned = try FileManager.default.contentsOfDirectory(
+        at: dAlbums.appendingPathComponent(StateFileBin.dirName), includingPropertiesForKeys: nil)
+    #expect(dBinned.count == 1)
 }

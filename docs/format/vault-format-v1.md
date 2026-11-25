@@ -24,8 +24,8 @@ A **vault** is a folder tree containing media files, organized however the user 
     imports.jsonl                  ← device-import registry (§12)
     sends.jsonl                    ← confirmed-send registry (§13)
     devices.jsonl                  ← known-device registry (§14)
-    albums/                        ← manual album definitions, one JSON per album (§15)
-    travels/                       ← trip definitions: settings.json + one JSON per trip (§16)
+    albums/                        ← manual album definitions, one JSON per album (§15); deleted ones in albums/.bin/
+    travels/                       ← trip definitions: settings.json + one JSON per trip (§16); deleted ones in travels/.bin/
     locked-folders.json            ← Touch-ID-locked folder list (app visibility gate; not encryption)
     staging/                       ← transient import workspace — readers MUST ignore
   rome2022/
@@ -304,7 +304,7 @@ Known devices OpenPhoto has seen, for friendly names in the UI. One JSON object 
 A **manual album** is a human-authored, ordered collection of photos that does **not** move or copy the files — a photo may belong to any number of albums, and deleting an album never deletes photos. Albums are **normative, sovereign state**: this is the authoritative record (the catalog merely mirrors it, and is rebuildable from these files).
 
 - **Location:** one JSON file per album at `<primary-vault-root>/.openphoto/albums/<id>.json`, where `<id>` is the album's UUID and equals the filename stem.
-- **Drive propagation:** when OpenPhoto syncs to a canonical/backup drive it mirrors this directory to the drive's `.openphoto/albums/` (copying present files, deleting absent ones). Because members are content hashes and the drive holds the same content by hash, the files copy verbatim — no path remapping.
+- **Drive propagation:** when OpenPhoto syncs to a canonical/backup drive it mirrors this directory to the drive's `.openphoto/albums/` (copying present files, binning absent ones — see *Deletion* below). Because members are content hashes and the drive holds the same content by hash, the files copy verbatim — no path remapping.
 
 Schema:
 
@@ -329,13 +329,16 @@ Schema:
 
 Reader obligations: an unreadable/corrupt album file MUST be skipped without affecting the others. Writers MUST write atomically (§10 step 2). Smart/rule-based albums are not part of v1.
 
+**Deletion.** Nothing hard-deletes (§8). Deleting an album — on the Mac, or on a drive when the mirror propagates it — moves its file into the `.bin/` subdirectory of the same directory as `albums/.bin/<id>.deleted-<epochMs>.json` (a `-<n>` suffix before the extension disambiguates a same-millisecond collision); every deletion of the same id is kept. Readers MUST list only the top level of `albums/` and therefore never see `.bin/`. Restore = move the file back to `albums/<id>.json`.
+
 
 ## 16. Travels (`travels/`)
 
 A **trip** is a human-authored record over one or more library folders — a name, the folders it spans (each including its whole subtree), an optional date override, an optional list of places, and an optional cover — that does **not** move or copy files. Trips are **normative, sovereign state**: this directory is the authoritative record; the app derives everything else (photo count, date span, detected places, default cover) from the photos at display time and stores none of it.
 
 - **Location:** `<primary-vault-root>/.openphoto/travels/settings.json` plus one file per trip at `…/travels/<id>.json`, where `<id>` is the trip's UUID and equals the filename stem.
-- **Drive propagation:** when OpenPhoto syncs to a canonical/backup drive it mirrors this directory (including `settings.json`) to the drive's `.openphoto/travels/` (copying present files, deleting absent ones). Folder paths are vault-relative and drives keep the vault's folder layout, so the files copy verbatim.
+- **Drive propagation:** when OpenPhoto syncs to a canonical/backup drive it mirrors this directory (including `settings.json`) to the drive's `.openphoto/travels/` (copying present files, binning absent ones).
+- **Deletion:** a deleted trip's file moves to `travels/.bin/<id>.deleted-<epochMs>.json`, exactly as for albums (§15 *Deletion*); readers MUST list only the top level of `travels/`. Folder paths are vault-relative and drives keep the vault's folder layout, so the files copy verbatim.
 
 ### 16.1 `settings.json`
 

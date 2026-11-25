@@ -42,11 +42,11 @@ public enum AlbumStore {
     }
 
     public static func delete(id: String, libraryRoot: URL) {
-        try? FileManager.default.removeItem(at: fileURL(id: id, libraryRoot: libraryRoot))
+        try? StateFileBin.move(fileURL(id: id, libraryRoot: libraryRoot))   // binned, never removed
     }
 
     /// One-way mirror of the album files to a drive's `<driveStateDir>/albums/`: copy every source
-    /// album (atomic/overwrite) and delete drive album files whose id no longer exists on the source,
+    /// album (atomic/overwrite) and bin (`StateFileBin`) drive album files whose id no longer exists on the source,
     /// so renames/edits/deletions all propagate. Members are content hashes, so files copy verbatim —
     /// the drive holds the same content by hash, no path remapping. `driveStateDir` is `.openphoto`.
     public static func syncToDrive(libraryRoot: URL, driveStateDir: URL) throws {
@@ -62,8 +62,6 @@ public enum AlbumStore {
         }
         let dstFiles = ((try? fm.contentsOfDirectory(at: dstDir, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "json" }
-        for f in dstFiles where !srcNames.contains(f.lastPathComponent) {
-            try? fm.removeItem(at: f)
-        }
+        for f in dstFiles where !srcNames.contains(f.lastPathComponent) { try? StateFileBin.move(f) }
     }
 }

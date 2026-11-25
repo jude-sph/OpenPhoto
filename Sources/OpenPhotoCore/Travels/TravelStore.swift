@@ -55,13 +55,13 @@ public enum TravelStore {
         try AtomicFile.write(encoder.encode(r), to: fileURL(id: r.id, libraryRoot: libraryRoot))
     }
     public static func delete(id: String, libraryRoot: URL) {
-        try? FileManager.default.removeItem(at: fileURL(id: id, libraryRoot: libraryRoot))
+        try? StateFileBin.move(fileURL(id: id, libraryRoot: libraryRoot))   // binned, never removed
     }
 
     // MARK: drive mirror
 
     /// One-way mirror of `travels/` (records AND settings.json) to `<driveStateDir>/travels/`: copy
-    /// every source file, delete drive files absent on the source. Paths inside are vault-relative
+    /// every source file, bin (`StateFileBin`) drive files absent on the source. Paths inside are vault-relative
     /// and drives keep the vault's folder layout, so files copy verbatim.
     public static func syncToDrive(libraryRoot: URL, driveStateDir: URL) throws {
         let fm = FileManager.default
@@ -76,6 +76,6 @@ public enum TravelStore {
         }
         let dstFiles = ((try? fm.contentsOfDirectory(at: dstDir, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "json" }
-        for f in dstFiles where !srcNames.contains(f.lastPathComponent) { try? fm.removeItem(at: f) }
+        for f in dstFiles where !srcNames.contains(f.lastPathComponent) { try? StateFileBin.move(f) }
     }
 }

@@ -75,6 +75,22 @@ private func rec(_ id: String, folders: [String], name: String? = nil) -> Travel
     try TravelStore.syncToDrive(libraryRoot: lib, driveStateDir: driveState)
 
     let names = Set((try? FileManager.default.contentsOfDirectory(atPath: driveDir.path)) ?? [])
-    #expect(names == ["A.json", "settings.json"])
+    #expect(names == ["A.json", "settings.json", StateFileBin.dirName])   // C binned, not removed
     #expect(TravelStore.loadSettings(libraryRoot: driveState.deletingLastPathComponent()).travelsFolder == "Travel")
+}
+
+@Test func tripDeleteBinsTheFileInsteadOfRemovingIt() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try t.sub("lib"), driveState = try t.sub("drive/.openphoto")
+    try TravelStore.save(rec("a", folders: ["Travel/Japan"], name: "Japan"), libraryRoot: lib)
+    try TravelStore.syncToDrive(libraryRoot: lib, driveStateDir: driveState)
+    TravelStore.delete(id: "a", libraryRoot: lib)
+    #expect(TravelStore.loadAll(libraryRoot: lib).isEmpty)
+    let bin = TravelStore.directoryURL(libraryRoot: lib).appendingPathComponent(StateFileBin.dirName)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: bin.path).count == 1)
+    try TravelStore.syncToDrive(libraryRoot: lib, driveStateDir: driveState)
+    let dTravels = driveState.appendingPathComponent("travels")
+    #expect(!FileManager.default.fileExists(atPath: dTravels.appendingPathComponent("a.json").path))
+    #expect(try FileManager.default.contentsOfDirectory(
+        atPath: dTravels.appendingPathComponent(StateFileBin.dirName).path).count == 1)
 }
