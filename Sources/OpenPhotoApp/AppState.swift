@@ -1780,7 +1780,11 @@ final class AppState {
             if let hs = try? lib.catalog.vaultPresenceHashes(forVault: vr.id) { union.formUnion(hs) }
         }
         canonicalPresence = union
+        presenceEpoch &+= 1   // invalidates presence-derived memos (onlyCopyCount)
     }
+    /// Bumped whenever drive presence is reloaded (every presence change funnels through
+    /// `reloadCanonicalPresence`).
+    @ObservationIgnored var presenceEpoch = 0
 
     func openVault(for vr: VaultRecord) -> Vault? {
         try? Vault.open(at: URL(fileURLWithPath: vr.rootPath))
@@ -1797,7 +1801,7 @@ final class AppState {
             && ((try? lib.catalog.pendingFolderOps(forVault: vr.id))?.isEmpty ?? true)
             && FileManager.default.fileExists(atPath:
                 URL(fileURLWithPath: vr.rootPath).appendingPathComponent(".openphoto/catalog-snapshot/catalog.sqlite").path)
-            && ((try? lib.catalog.vaultPresenceHashes(forVault: vr.id))?.isEmpty ?? true)
+            && !((try? lib.catalog.hasAnyPresence(vaultID: vr.id)) ?? false)   // EXISTS, not the whole hash set
         }
     }
 
@@ -1830,8 +1834,8 @@ final class AppState {
         // not only the pinned vault — so a backup serves when the canonical is unplugged. Skip a drive
         // whose recorded copy is missing on disk and try the next.
         for drive in connectedDrivesCanonicalFirst() {
-            guard let row = (try? library?.catalog.vaultPresenceRows(forVault: drive.descriptor.vaultID))?
-                    .first(where: { $0.hash == item.hash }) else { continue }
+            guard let row = try? library?.catalog.presenceRow(vaultID: drive.descriptor.vaultID,
+                                                              hash: item.hash) else { continue }
             let url = drive.absoluteURL(forRelativePath: row.driveRelPath)
             if FileManager.default.fileExists(atPath: url.path) { return url }
         }
@@ -2842,21 +2846,44 @@ final class AppState {
     func folderPresences(for item: TimelineItem) -> [FolderPresence] {
         guard let cat = library?.catalog else { return [] }
         let local = Set((try? cat.instances(forHash: item.hash))?.map(\.dirPath) ?? [])
-        var drive = Set<String>()
-        for vr in durableVaults {
-            for r in (try? cat.vaultPresenceRows(forVault: vr.id)) ?? [] where r.hash == item.hash {
-                drive.insert(r.dirPath)
-            }
-        }
+        // One indexed lookup for every presence row of this hash (was: every drive's WHOLE presence
+        // table, filtered in Swift), restricted to the registered durable drives as before.
+        let driveIDs = Set(durableVaults.map(\.id))
+        let drive = Set(((try? cat.presenceRows(forHash: item.hash)) ?? [])
+            .filter { driveIDs.contains($0.vaultID) }.map(\.entry.dirPath))
         return local.union(drive).sorted().map { FolderPresence(folder: $0, onMac: local.contains($0)) }
     }
 
     /// How many of `items` appear to exist only on this Mac (no confirmed/believed
     /// copy elsewhere). No presence info yet → treat all as only-copies.
+    ///
+    /// Same judgment as `PresenceService.isOnlyOnThisMac`, batched: a hash has another copy when a
+    /// registered non-local vault holds it (ONE chunked `hashesPresent` query for the whole selection,
+    /// was a presence lookup + registry walk per hash) or a send to some device isn't known `.gone`.
+    /// Memoised on (selection, refreshToken, presence epoch) — it's evaluated from alert message
+    /// closures, which re-run on every render while the alert is up.
     func onlyCopyCount(_ items: [TimelineItem]) -> Int {
-        guard let presence = presenceService() else { return Set(items.map(\.hash)).count }
-        return presence.onlyOnThisMac(hashes: items.map(\.hash)).count
+        var seen = Set<String>()
+        let hashes = items.map(\.hash).filter { seen.insert($0).inserted }
+        guard let lib = library, let sends = sendRegistry,
+              importRegistry != nil, deviceRegistry != nil else { return hashes.count }
+        let key = OnlyCopyMemoKey(hashes: hashes, refreshToken: refreshToken, presenceEpoch: presenceEpoch)
+        if let m = onlyCopyMemo, m.key == key { return m.count }
+        let driveIDs = ((try? lib.catalog.registeredVaults()) ?? []).filter { $0.role != "local" }.map(\.id)
+        let onDrives = (try? lib.catalog.hashesPresent(hashes, onAnyOf: driveIDs)) ?? []
+        let count = hashes.reduce(0) { n, h in
+            if onDrives.contains(h) { return n }
+            // Sent somewhere and not since found gone → `.confirmed`/`.believed` → not an only copy.
+            let sentAlive = sends.entries(forHash: h).contains { reverified["\($0.destinationKey)|\(h)"] != .gone }
+            return sentAlive ? n : n + 1
+        }
+        onlyCopyMemo = (key, count)
+        return count
     }
+    private struct OnlyCopyMemoKey: Equatable {
+        let hashes: [String]; let refreshToken: Int; let presenceEpoch: Int
+    }
+    @ObservationIgnored private var onlyCopyMemo: (key: OnlyCopyMemoKey, count: Int)?
 
     /// Items in `items` that are drive-only AND whose drive is currently connected (rehydratable).
     func rehydratableItems(_ items: [TimelineItem]) -> [TimelineItem] {
