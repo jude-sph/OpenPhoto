@@ -711,8 +711,25 @@ public final class Catalog: Sendable {
             let lockedDirs = try String.fetchAll(db, sql:
                 "SELECT DISTINCT dirPath FROM instances WHERE vaultID = ? AND locked = 1",
                 arguments: [vaultID])
-            try db.execute(sql: "DELETE FROM instances WHERE vaultID = ?", arguments: [vaultID])
-            for i in instances { try i.upsert(db) }
+            // Apply as a DIFF against the rows already there: a rescan that found nothing new touches
+            // no rows at all (was DELETE-all + re-insert of every row, on every scan). The end state
+            // is identical to the wholesale replace — the catalog may be empty or stale (it is
+            // rebuildable), in which case everything is simply "new".
+            var existing: [String: InstanceRecord] = [:]
+            for r in try InstanceRecord.fetchAll(db, sql:
+                "SELECT hash, vaultID, relPath, dirPath, size, mtimeMs FROM instances WHERE vaultID = ?",
+                arguments: [vaultID]) { existing[r.relPath] = r }
+            var wanted = Set<String>()
+            var changed = 0
+            for i in instances {
+                wanted.insert(i.relPath)
+                if existing[i.relPath] != i { try i.upsert(db); changed += 1 }
+            }
+            let del = try db.cachedStatement(sql: "DELETE FROM instances WHERE vaultID = ? AND relPath = ?")
+            for path in existing.keys where !wanted.contains(path) {
+                try del.execute(arguments: [vaultID, path])
+            }
+            guard changed > 0 else { return }   // untouched rows keep their `locked` flag as-is
             for dir in lockedDirs {
                 try db.execute(sql: """
                     UPDATE instances SET locked = 1

@@ -139,10 +139,11 @@ public enum Scanner {
                 takenAt: c.takenAt, contentIdentifier: c.contentIdentifier,
                 durationSeconds: durByHash[c.hash.stringValue])
         }
-        for pair in LivePhotoPairer.pair(candidates: candidates) {
-            try catalog.setLivePair(photoHash: pair.photoHash.stringValue,
-                                    videoHash: pair.videoHash.stringValue)
-        }
+        // One transaction for all pairs, writing only pairs not already recorded (was one write
+        // transaction per Live Photo on every scan).
+        try catalog.setLivePairs(LivePhotoPairer.pair(candidates: candidates).map {
+            (photoHash: $0.photoHash.stringValue, videoHash: $0.videoHash.stringValue)
+        })
         // Self-heal existing data: un-pair any video whose duration proves it can't be Live motion
         // (mis-paired by basename before the duration guard existed) so it returns to the timeline.
         try catalog.unpairOverlongVideos(maxSeconds: LivePhotoPairer.maxLiveMotionSeconds)
@@ -157,7 +158,12 @@ public enum Scanner {
                                .timeIntervalSince1970 * 1000))
         }
         try catalog.replaceInstances(inVault: vault.descriptor.vaultID, with: instances)
-        try Manifest.write(aligned.map(\.entry), to: vault.manifestURL)
+        // Skip the whole-manifest rewrite (two full disk flushes) when nothing changed — the common
+        // case for a rescan triggered by a file-watcher tick or a single metadata edit.
+        let newEntries = aligned.map(\.entry)
+        let manifestUnchanged = newEntries.count == oldByPath.count
+            && newEntries.allSatisfy { oldByPath[$0.path] == $0 }
+        if !manifestUnchanged { try Manifest.write(newEntries, to: vault.manifestURL) }
         // Single .finishing emission after manifest is written (Fix 4 — removed the earlier one).
         progress(Progress(stage: .finishing, done: found.count, total: found.count))
         return Result(total: found.count, hashed: hashedCount, skipped: skipped)

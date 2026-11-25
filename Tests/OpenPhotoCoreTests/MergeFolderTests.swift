@@ -68,3 +68,30 @@ private func mergeLibrary(_ t: TestDirs, _ files: [(rel: String, date: String)])
     #expect(moves == ["a.jpg": "Trips", "b.jpg": "Trips/day2"])
     #expect(plan.binInstanceIDs.count == 1 && plan.binInstanceIDs[0].hasSuffix("|Trips/Japan/dupe.jpg"))
 }
+
+// A rescan that finds nothing new must not rewrite the manifest (two full disk flushes) nor touch
+// instance rows; a real change must still land.
+@Test func unchangedRescanWritesNothingAndChangesStillLand() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try await mergeLibrary(t, [("a/one.jpg", "01"), ("a/two.jpg", "02"), ("b/three.jpg", "03")])
+    let vault = try #require(lib.vaults.first)
+    func inode() throws -> UInt64 {
+        (try FileManager.default.attributesOfItem(atPath: vault.manifestURL.path)[.systemFileNumber] as? UInt64) ?? 0
+    }
+    let before = try inode()
+    let rowsBefore = try lib.catalog.instanceHashPaths(vaultID: vault.id).map(\.relPath).sorted()
+
+    try await lib.rescan(vaultID: vault.id)
+    #expect(try inode() == before)                       // atomic rewrite would have replaced the file
+    #expect(try lib.catalog.instanceHashPaths(vaultID: vault.id).map(\.relPath).sorted() == rowsBefore)
+
+    try FileManager.default.removeItem(at: vault.absoluteURL(forRelativePath: "a/two.jpg"))
+    try makeJPEG(at: vault.absoluteURL(forRelativePath: "c/four.jpg").creatingParent(),
+                 dateTimeOriginal: "2022:10:07 14:23:04", lat: nil, lon: nil)
+    try await lib.rescan(vaultID: vault.id)
+    #expect(try inode() != before)
+    #expect(try lib.catalog.instanceHashPaths(vaultID: vault.id).map(\.relPath).sorted()
+            == ["a/one.jpg", "b/three.jpg", "c/four.jpg"])
+    #expect(try Manifest.read(from: vault.manifestURL).map(\.path).sorted()
+            == ["a/one.jpg", "b/three.jpg", "c/four.jpg"])
+}

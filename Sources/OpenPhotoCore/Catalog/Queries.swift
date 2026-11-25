@@ -258,6 +258,31 @@ extension Catalog {
     }
 
     /// Record a Live Photo pairing on already-cataloged assets (scanner healing).
+    /// Batch form of `setLivePair`: one write transaction, and no write at all for pairs already
+    /// recorded exactly as given (idempotent, like the single form).
+    public func setLivePairs(_ pairs: [(photoHash: String, videoHash: String)]) throws {
+        guard !pairs.isEmpty else { return }
+        let existing: [String: String] = try dbQueue.read { db in
+            var out: [String: String] = [:]
+            for r in try Row.fetchAll(db, sql: """
+                SELECT p.hash AS photo, p.livePairHash AS video FROM assets p
+                JOIN assets v ON v.hash = p.livePairHash
+                WHERE p.livePairHash IS NOT NULL AND v.isLivePairedVideo = 1
+                """) { out[r["photo"]] = r["video"] }
+            return out
+        }
+        let todo = pairs.filter { existing[$0.photoHash] != $0.videoHash }
+        guard !todo.isEmpty else { return }
+        try dbQueue.write { db in
+            for p in todo {
+                try db.execute(sql: "UPDATE assets SET livePairHash = ? WHERE hash = ?",
+                               arguments: [p.videoHash, p.photoHash])
+                try db.execute(sql: "UPDATE assets SET isLivePairedVideo = 1 WHERE hash = ?",
+                               arguments: [p.videoHash])
+            }
+        }
+    }
+
     public func setLivePair(photoHash: String, videoHash: String) throws {
         try dbQueue.write { db in
             try db.execute(sql: "UPDATE assets SET livePairHash = ? WHERE hash = ?",
@@ -318,6 +343,46 @@ extension Catalog {
     }
 
     /// Mirror the sidecar's display rotation (0/90/180/270 CW) into the catalog for fast display.
+    /// One asset's human metadata as read from its sidecar.
+    public struct SidecarMetadata: Sendable, Equatable {
+        public var hash: String, favorite: Bool, rating: Int, caption: String?, tagsJSON: String, rotation: Int
+        public init(hash: String, favorite: Bool, rating: Int, caption: String?, tagsJSON: String, rotation: Int) {
+            self.hash = hash; self.favorite = favorite; self.rating = rating
+            self.caption = caption; self.tagsJSON = tagsJSON; self.rotation = rotation
+        }
+    }
+
+    /// Mirror sidecar metadata into the catalog in one write transaction, updating only rows whose
+    /// stored values differ. Applied in order (a later entry for the same hash wins), matching a loop
+    /// of `updateHumanMetadata` + `setRotation`. Returns the number of rows written.
+    @discardableResult
+    public func applySidecarMetadata(_ items: [SidecarMetadata]) throws -> Int {
+        guard !items.isEmpty else { return 0 }
+        return try dbQueue.write { db in
+            var current: [String: SidecarMetadata] = [:]
+            for r in try Row.fetchAll(db, sql:
+                "SELECT hash, favorite, rating, caption, tagsJSON, rotation FROM assets") {
+                let h: String = r["hash"]
+                current[h] = SidecarMetadata(hash: h, favorite: r["favorite"], rating: r["rating"],
+                                             caption: r["caption"], tagsJSON: r["tagsJSON"],
+                                             rotation: r["rotation"] ?? 0)
+            }
+            let stmt = try db.cachedStatement(sql: """
+                UPDATE assets SET favorite = ?, rating = ?, caption = ?, tagsJSON = ?, rotation = ?
+                WHERE hash = ?
+                """)
+            var written = 0
+            for var i in items {
+                i.rotation = ((i.rotation % 360) + 360) % 360
+                guard let have = current[i.hash], have != i else { continue }   // unknown asset or no change
+                try stmt.execute(arguments: [i.favorite, i.rating, i.caption, i.tagsJSON, i.rotation, i.hash])
+                current[i.hash] = i
+                written += 1
+            }
+            return written
+        }
+    }
+
     public func setRotation(hash: String, rotation: Int) throws {
         try dbQueue.write { db in
             try db.execute(sql: "UPDATE assets SET rotation = ? WHERE hash = ?",

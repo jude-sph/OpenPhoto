@@ -70,15 +70,19 @@ public final class LibraryService: Sendable {
     /// still valid and the metadata will be empty until the sidecar is repaired.
     private func ingestSidecars(vault: Vault) throws {
         guard let store = sidecarStores[vault.descriptor.vaultID] else { return }
+        // Read every sidecar, then apply in ONE write transaction that only touches rows whose
+        // values actually differ (was two write transactions per sidecar, on every rescan).
+        var batch: [Catalog.SidecarMetadata] = []
+        let encoder = JSONEncoder()
         for entry in try Manifest.read(from: vault.manifestURL) {
             guard let data = try? store.read(forMediaRelPath: entry.path),
                   data != .empty else { continue }
-            let tags = String(data: try JSONEncoder().encode(data.tags), encoding: .utf8) ?? "[]"
-            try catalog.updateHumanMetadata(hash: entry.hash.stringValue,
-                                            favorite: data.favorite, rating: data.rating,
-                                            caption: data.caption, tagsJSON: tags)
-            try catalog.setRotation(hash: entry.hash.stringValue, rotation: data.rotation)
+            let tags = String(data: try encoder.encode(data.tags), encoding: .utf8) ?? "[]"
+            batch.append(Catalog.SidecarMetadata(hash: entry.hash.stringValue, favorite: data.favorite,
+                                                 rating: data.rating, caption: data.caption,
+                                                 tagsJSON: tags, rotation: data.rotation))
         }
+        try catalog.applySidecarMetadata(batch)
     }
 
     // MARK: Browse
