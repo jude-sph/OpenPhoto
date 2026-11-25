@@ -400,6 +400,50 @@ final class AppState {
     var searching = false
     private var semanticIndex: SemanticIndex?
     private var semanticIndexDirty = true     // set true after an embed drain
+    /// THE CLIP encoder for the app's lifetime. Each `EmbedStage` instance lazily compiles the Core ML
+    /// models and parses the tokenizer vocab on first use, so a fresh instance per search re-paid that
+    /// cost on every query. Lock-protected + `@unchecked Sendable` in Core, i.e. built to be shared:
+    /// search (text side), the derivation runner (image side) and Tidy Up all use this one.
+    @ObservationIgnored let embedStage = EmbedStage()
+    /// Bumped per `runSearch`; a result is published only if it is still the newest request.
+    @ObservationIgnored private var searchGeneration = 0
+    /// Cooperative cancel for the in-flight search's off-main work (flipped when it is superseded).
+    @ObservationIgnored private var searchCancel: JobCancelFlag?
+    /// Bumped whenever the semantic index is invalidated, so a build that started BEFORE the
+    /// invalidation can't clear the dirty flag when it lands.
+    @ObservationIgnored private var semanticIndexEpoch = 0
+    /// The single in-flight semantic-index build (overlapping searches await this one, never start
+    /// a second) and the epoch it was started for.
+    @ObservationIgnored private var semanticIndexBuild: (epoch: Int, task: Task<SemanticIndex?, Never>)?
+
+    private func markSemanticIndexDirty() {
+        semanticIndexDirty = true
+        semanticIndexEpoch &+= 1
+    }
+
+    /// The semantic index for a query: the cached one when clean, else the (shared) rebuild. Returns
+    /// nil when the embeddings can't be read. Never runs two builds for the same epoch.
+    private func currentSemanticIndex(lib: LibraryService) async -> SemanticIndex? {
+        if !semanticIndexDirty, let idx = semanticIndex { return idx }
+        let epoch = semanticIndexEpoch
+        let task: Task<SemanticIndex?, Never>
+        if let b = semanticIndexBuild, b.epoch == epoch {
+            task = b.task
+        } else {
+            let cat = lib.catalog, model = embedStage.modelID
+            task = Task.detached(priority: .userInitiated) { try? SemanticIndex(catalog: cat, model: model) }
+            semanticIndexBuild = (epoch, task)
+        }
+        let built = await task.value
+        if semanticIndexBuild?.epoch == epoch { semanticIndexBuild = nil }
+        guard library === lib else { return nil }      // library closed/switched while building
+        if let built {
+            semanticIndex = built
+            // Embeddings may have grown while this was building → leave it dirty for the next search.
+            if semanticIndexEpoch == epoch { semanticIndexDirty = false }
+        }
+        return built
+    }
 
     // MARK: — Face Map state
     var faceMap = FaceMapData()
@@ -782,6 +826,7 @@ final class AppState {
         guard let lib = library else { return }
         let mode = cullMode
         let dupScope: Catalog.DuplicateScope = cullDuplicateScope == .anywhere ? .anywhere : .withinFolder
+        let embedModelID = embedStage.modelID
         cullLoadToken &+= 1
         let token = cullLoadToken
         cullGroups = []          // drop the previous mode's groups now — don't show them stale under the new label
@@ -810,7 +855,7 @@ final class AppState {
                     // KeeperSelector (sharpest/highest-res), mapped to its tile's instanceID.
                     let raw: [[String]]
                     if mode == .bursts {
-                        let emb = (try? lib.catalog.embeddingsWithTakenAt(model: EmbedStage().modelID)) ?? []
+                        let emb = (try? lib.catalog.embeddingsWithTakenAt(model: embedModelID)) ?? []
                         raw = BurstGrouper.group(emb, windowMs: 60_000, cosineThreshold: 0.93)
                     } else {
                         let rows = (try? lib.catalog.phashRowsWithDirPath()) ?? []
@@ -1111,53 +1156,58 @@ final class AppState {
         guard let lib = library else { return }
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         let filters = searchFilters
-        guard !q.isEmpty || !filters.isEmpty else { searchResults = []; return }
+        // Supersede whatever is in flight: its off-main work stops at the next checkpoint and its
+        // result is dropped (generation check below), so an older, slower search can never overwrite
+        // a newer one.
+        searchGeneration &+= 1
+        let gen = searchGeneration
+        searchCancel?.cancel()
+        searchCancel = nil
+        guard !q.isEmpty || !filters.isEmpty else { searchResults = []; searching = false; return }
         searching = true
-        // Capture current index state on the main actor before going off-main.
-        let needsRebuild = semanticIndexDirty || semanticIndex == nil
-        let currentIndex = semanticIndex
+        let cancel = JobCancelFlag()
+        searchCancel = cancel
+        let embed = embedStage
         Task {
+            // Semantic index: cached, or ONE shared rebuild (only a text query needs it).
+            let idx: SemanticIndex? = q.isEmpty ? nil : await self.currentSemanticIndex(lib: lib)
+            guard gen == self.searchGeneration else { return }
             // Run all heavy work (SQL + Accelerate + Core ML) off the main actor.
-            let (items, freshIndex): ([TimelineItem], SemanticIndex?) = await Task.detached(priority: .userInitiated) {
-                let structured: [String]
-                if filters.isEmpty {
-                    structured = q.isEmpty ? [] : (try? lib.catalog.allHashesNewestFirst()) ?? []
-                } else {
-                    structured = (try? lib.catalog.structuredFilter(filters)) ?? []
-                }
+            let items: [TimelineItem] = await Task.detached(priority: .userInitiated) {
+                // No active filters → no allow-set. (It used to be every browsable hash, built per
+                // query; the final `items(forHashes:)` applies the very same browse + locked gate, so
+                // dropping it changes nothing but the cost.)
+                let structured: [String]? = filters.isEmpty ? nil : ((try? lib.catalog.structuredFilter(filters)) ?? [])
                 guard !q.isEmpty else {
-                    let its = (try? lib.catalog.items(forHashes: structured, preservingOrder: true)) ?? []
-                    return (its, nil)
+                    return (try? lib.catalog.items(forHashes: structured ?? [], preservingOrder: true)) ?? []
                 }
+                if cancel.isCancelled { return [] }
                 let text = (try? lib.catalog.textMatches(q)) ?? []
-                // Rebuild semantic index if dirty.
-                let idx: SemanticIndex?
-                let builtFresh: SemanticIndex?
-                if needsRebuild {
-                    builtFresh = try? SemanticIndex(catalog: lib.catalog, model: EmbedStage().modelID)
-                    idx = builtFresh
-                } else {
-                    builtFresh = nil
-                    idx = currentIndex
-                }
+                if cancel.isCancelled { return [] }
                 let semantic: [(hash: String, score: Float)]
-                if let idx, let qVec = EmbedStage().embedText(q) {
+                if let idx, let qVec = embed.embedText(q) {
                     semantic = idx.query(qVec, topN: 300)
                 } else {
                     semantic = []
                 }
-                let ranked = SearchRanker.combine(structured: structured, text: text,
+                if cancel.isCancelled { return [] }
+                let ranked: [String]
+                if let structured {
+                    ranked = SearchRanker.combine(structured: structured, text: text,
                                                   semantic: semantic, hasText: true)
-                let its = (try? lib.catalog.items(forHashes: ranked, preservingOrder: true)) ?? []
-                return (its, builtFresh)
+                } else {
+                    // Same lanes, same order as SearchRanker.combine — text first, then semantic.
+                    var seen = Set<String>(), out: [String] = []
+                    for h in text where seen.insert(h).inserted { out.append(h) }
+                    for (h, _) in semantic where seen.insert(h).inserted { out.append(h) }
+                    ranked = out
+                }
+                return (try? lib.catalog.items(forHashes: ranked, preservingOrder: true)) ?? []
             }.value
-            // Publish results + store fresh index (if rebuilt) back on the main actor.
+            // Publish only if this is still the newest search against the same open library.
+            guard gen == self.searchGeneration, self.library === lib else { return }
             self.searchResults = items
             self.searching = false
-            if let freshIndex {
-                self.semanticIndex = freshIndex
-                self.semanticIndexDirty = false
-            }
         }
     }
 
@@ -2173,7 +2223,7 @@ final class AppState {
             deviceWatcher.deviceConnected = { [weak self] _ in
                 Task { @MainActor in await self?.reverifySentToConnectedDevices() }
             }
-            try? library?.catalog.reconcileEmbeddingModel(current: EmbedStage().modelID)
+            try? library?.catalog.reconcileEmbeddingModel(current: embedStage.modelID)
             // One-time face re-derivation when the recognition model changes (e.g. after this update):
             // drops stale auto faces + face jobs so every photo re-embeds with the current model.
             // Named people are kept. The drain below repopulates the People view.
@@ -2249,7 +2299,8 @@ final class AppState {
         _sendRegistry = nil
         _deviceRegistry = nil
         semanticIndex = nil
-        semanticIndexDirty = true
+        markSemanticIndexDirty()
+        searchGeneration &+= 1; searchCancel?.cancel(); searchCancel = nil; searching = false
         derivationTask?.cancel(); derivationTask = nil
         jobCancelFlag?.cancel(); jobTask?.cancel(); jobTask = nil
         jobTickerTask?.cancel(); jobTickerTask = nil
@@ -2366,8 +2417,8 @@ final class AppState {
     /// inside `drainDerivation`. Order = perceived value: faces (People) + semantic (search) first,
     /// then the cheap catalog-only/quick stages, then OCR last (expensive Vision pass, niche text
     /// search) — so on a slow machine the visible features fill in early instead of after hours.
-    private let derivationStages: [any DerivationStage] =
-        [FaceDerivationStage(), EmbedStage(), GeocodeStage(), PHashStage(), OCRDerivationStage()]
+    @ObservationIgnored private lazy var derivationStages: [any DerivationStage] =
+        [FaceDerivationStage(), embedStage, GeocodeStage(), PHashStage(), OCRDerivationStage()]
 
     /// Kick the background derivation runner if it isn't already draining. Called at library-open
     /// and after anything that adds assets (scan/ingest). Cheap + idempotent.
@@ -2445,7 +2496,7 @@ final class AppState {
         }
         derivationProgress = nil
         derivationStageName = nil
-        semanticIndexDirty = true   // embeddings may have grown → refresh the in-memory index
+        markSemanticIndexDirty()    // embeddings may have grown → refresh the in-memory index
         geocodeDirty = true         // geocoded places may have grown → inspector picks up new rows
         facesDirty = true
         loadPeople()                // final refresh so People reflects every newly-derived face
