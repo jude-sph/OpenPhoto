@@ -31,5 +31,10 @@ let package = Package(
             name: "OpenPhotoCoreTests",
             dependencies: ["OpenPhotoCore"]
         ),
+        // Pure, AppKit-free parts of the app target (grid layout maths, badge decisions, update diff).
+        .testTarget(
+            name: "OpenPhotoAppTests",
+            dependencies: ["OpenPhotoApp", "OpenPhotoCore"]
+        ),
     ]
 )
