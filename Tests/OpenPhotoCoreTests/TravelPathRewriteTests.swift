@@ -19,3 +19,10 @@ private func rec(_ id: String, _ folders: [String]) -> TravelRecord {
     #expect(moved.settings.travelsFolder == "Journeys" && moved.settings.hidden == ["Journeys/Old", "Journeys/Japan"])
     #expect(TravelResolver.rewritePaths(records: recs, settings: s, from: "Travel/Japanese", to: "X").changedRecordIDs.isEmpty)  // prefix ≠ sibling
 }
+
+// Merging folder "A" into "B": a trip spanning both ends up with B once, not twice.
+@Test func rewritePathsNormalisesAMergeOntoAnExistingFolder() {
+    let out = TravelResolver.rewritePaths(records: [rec("t", ["A", "B"])], settings: .defaults, from: "A", to: "B")
+    #expect(out.records[0].folders == ["B"])
+    #expect(out.changedRecordIDs == ["t"])
+}

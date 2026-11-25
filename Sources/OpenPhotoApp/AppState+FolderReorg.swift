@@ -166,6 +166,7 @@ extension AppState {
         }
         // 3. Prune the now-empty source tree (safe — never removes a dir that still holds photos).
         if let primary = library.vaults.first { VaultReorganizer.pruneEmptyDirs(in: primary, under: src) }
+        rewriteTravelPaths(from: src, to: dest)              // trips follow their merged folders
         await refreshQueriesAsync()
         photoMoveToken += 1
     }

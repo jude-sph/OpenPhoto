@@ -124,7 +124,9 @@ public enum TravelResolver {
         var changed = Set<String>()
         let recs = records.map { r -> TravelRecord in
             var r = r
-            let f = r.folders.map(remap)
+            let mapped = r.folders.map(remap)
+            // A merge can land one folder on another (or inside it): normalise only when something moved.
+            let f = mapped == r.folders ? mapped : TravelResolver.normalise(folders: mapped)
             if f != r.folders { r.folders = f; changed.insert(r.id) }
             return r
         }

@@ -2147,9 +2147,17 @@ final class AppState {
         guard !reconcilingDriveIDs.contains(vr.id), jobTask == nil else { return nil }
         reconcilingDriveIDs.insert(vr.id)
         defer { reconcilingDriveIDs.remove(vr.id) }
-        let result = await Task.detached(priority: .userInitiated) {
-            try? ReconcileService.reconcile(drive: drive, localVault: local, catalog: cat,
-                                            sourceBasenames: bases, macVaultID: macID)
+        let macRoot = local.rootURL
+        let result = await Task.detached(priority: .userInitiated) { () -> ReconcileExecutor.Result? in
+            let r = try? ReconcileService.reconcile(drive: drive, localVault: local, catalog: cat,
+                                                    sourceBasenames: bases, macVaultID: macID)
+            // A mirror includes the sovereign album/trip files (small; Sync… does the same). The
+            // catalog snapshot is left to Sync… — it is a large write and only a browse accelerator.
+            if let r, !r.blockedByBlastRadius {
+                try? AlbumStore.syncToDrive(libraryRoot: macRoot, driveStateDir: drive.stateDirURL)
+                try? TravelStore.syncToDrive(libraryRoot: macRoot, driveStateDir: drive.stateDirURL)
+            }
+            return r
         }.value
         // The op-queue is superseded only when reconcile actually ran to completion — a thrown error or
         // a blast-radius block leaves the drive unreconciled, so its queued ops must survive.
