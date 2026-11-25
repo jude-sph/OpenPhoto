@@ -11,13 +11,22 @@ struct AlbumGridView: View {
 
     private let space = "albumgrid"
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
-    private var orderedSelectable: [SelectableItem] { items.map { SelectableItem(id: $0.instanceID) } }
-    private var selectedItems: [TimelineItem] { items.filter { selection.contains($0.instanceID) } }
+    /// Rebuilt whenever `items` is assigned (see `setItems`), never per render.
+    @State private var index = SelectionIndex()
+    /// The selection as items, in album order — O(selection). `body` resolves it once.
+    private var selectedItems: [TimelineItem] {
+        index.selectedItems(selection, from: items) { $0.instanceID }
+    }
+    private func setItems(_ new: [TimelineItem]) {
+        items = new
+        index = SelectionIndex(ids: new.lazy.map(\.instanceID))
+    }
     private var currentAlbum: AlbumSummary? { state.albums.first { $0.id == state.selectedAlbumID } }
 
     var body: some View {
+        let selected = selectMode ? selectedItems : []   // resolved once per body pass
         VStack(spacing: 0) {
-            if selectMode { selectionBar } else { toolbar }
+            if selectMode { selectionBar(selected) } else { toolbar }
             Divider().overlay(Theme.hairline)
             content
         }
@@ -28,8 +37,8 @@ struct AlbumGridView: View {
     }
 
     private func reload() {
-        guard let id = state.selectedAlbumID else { items = []; return }
-        items = (try? state.library?.catalog.itemsInAlbum(id: id)) ?? []
+        guard let id = state.selectedAlbumID else { setItems([]); return }
+        setItems((try? state.library?.catalog.itemsInAlbum(id: id)) ?? [])
     }
 
     // MARK: Toolbars
@@ -50,13 +59,13 @@ struct AlbumGridView: View {
         .padding(.horizontal, 16).frame(height: Theme.toolbarHeight)
     }
 
-    private var selectionBar: some View {
+    private func selectionBar(_ selected: [TimelineItem]) -> some View {
         HStack(spacing: 12) {
             Text("\(selection.count) selected")
                 .font(.system(size: 13, weight: .medium).monospacedDigit()).foregroundStyle(Theme.textDim)
             Spacer()
-            if !selectedItems.isEmpty {
-                ShareLink(items: state.localFileURLs(for: selectedItems)) {
+            if !selected.isEmpty {
+                ShareLink(items: state.localFileURLs(for: selected)) {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }.controlSize(.small)
             }
@@ -94,7 +103,7 @@ struct AlbumGridView: View {
                 .padding(12)
             }
             .coordinateSpace(name: space)
-            .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
+            .modifier(RubberBandModifier(selection: $selection, items: index.ordered,
                                          space: space, enabled: selectMode))
             .pinchZoomGrid($state.gridMinSize)
         }
@@ -144,27 +153,33 @@ struct AlbumGridView: View {
 
     @ViewBuilder private func tile(_ item: TimelineItem) -> some View {
         if let library = state.library {
-            MediaTile(
+            // The same memoising cell as the timeline/folder grids (it builds exactly the MediaTile +
+            // badges this grid used to build inline), so a selection tick only re-renders the tiles
+            // whose inputs changed.
+            MediaGridCell(
                 id: item.instanceID,
+                item: item,
                 selectMode: selectMode,
                 selected: selection.contains(item.instanceID),
-                rubberBandSpace: space,
-                thumbnail: ThumbnailImage(timelineItem: item, library: library, targetPixel: thumbPixels),
-                badges: { TimelineTileBadges(item: item, backedUp: state.isBackedUpOnCanonical(item)) },
+                backedUp: state.isBackedUpOnCanonical(item),
+                thumbPixels: thumbPixels,
+                space: space,
+                library: library,
                 onTap: {
                     if selectMode {
-                        if let idx = items.firstIndex(where: { $0.instanceID == item.instanceID }) {
-                            selection.tap(index: idx, items: orderedSelectable,
+                        if let idx = index.position(of: item.instanceID) {
+                            selection.tap(index: idx, items: index.ordered,
                                           extendingRange: NSEvent.modifierFlags.contains(.shift))
                         }
                     } else {
                         state.openViewer(item, within: items)
                     }
                 })
+            .equatable()
             .contextMenu {
-                CopyMenuButton(state: state,
-                               items: selectMode && selection.contains(item.instanceID)
-                                   ? selectedItems : [item])
+                CopyMenuButton(state: state) {   // resolved when the menu is built
+                    selectMode && selection.contains(item.instanceID) ? selectedItems : [item]
+                }
                 Divider()
                 Button("Set as Album Cover", systemImage: "photo") {
                     if let id = state.selectedAlbumID { state.setAlbumCover(id: id, hash: item.hash) }

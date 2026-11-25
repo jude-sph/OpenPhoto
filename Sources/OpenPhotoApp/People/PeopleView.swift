@@ -1016,7 +1016,7 @@ private struct FaceTileMenu: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         content.contextMenu {
             // Selection here is face-centric, so Copy always acts on the right-clicked photo alone.
-            CopyMenuButton(state: state, items: [item])
+            CopyMenuButton(state: state) { [item] }
             if let onReassign {
                 Divider()
                 if let onUseAsThumbnail {

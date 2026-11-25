@@ -4,9 +4,14 @@ import OpenPhotoCore
 struct FolderGridView: View {
     @Bindable var state: AppState
     @State private var items: [TimelineItem] = []
-    /// Cached from `items` on reload so the rubber-band modifier + tile taps don't rebuild this
-    /// O(items) array on every selection tick.
-    @State private var orderedSelectable: [SelectableItem] = []
+    /// Rebuilt whenever `items` is assigned (see `setItems`) so the rubber-band modifier, tile taps
+    /// and the selection → items lookup never walk the whole folder on a selection tick.
+    @State private var index = SelectionIndex()
+    /// What a confirmation (bin / delete / force-evict) acts on + the only-copy count its message
+    /// quotes, captured when the confirmation is requested: alert titles and `message:` closures are
+    /// evaluated on every body pass, so they read these snapshots instead of re-deriving the selection.
+    @State private var pendingItems: [TimelineItem] = []
+    @State private var pendingOnlyCopy = 0
     @State private var selectMode = false
     @State private var selection = SelectionModel()
     @State private var showEvict = false
@@ -15,17 +20,24 @@ struct FolderGridView: View {
     @State private var showSend = false
     @State private var dragToMove = false
 
+    /// The selection as items, in grid order — O(selection). `body` resolves it once and hands the
+    /// result down; action closures call it when they fire.
     private var selectedItems: [TimelineItem] {
-        items.filter { selection.contains($0.instanceID) }
+        index.selectedItems(selection, from: items) { $0.instanceID }
     }
     /// Evict/move-to-bin only applies to local files; drive-only assets are view-only.
     private var evictableItems: [TimelineItem] { selectedItems.filter { $0.driveRelPath == nil } }
-    private var rehydratableItems: [TimelineItem] { state.rehydratableItems(selectedItems) }
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
 
+    private func setItems(_ new: [TimelineItem]) {
+        items = new
+        index = SelectionIndex(ids: new.lazy.map(\.instanceID))
+    }
+
     var body: some View {
+        let selected = selectMode ? selectedItems : []   // resolved once per body pass
         VStack(spacing: 0) {
-            if selectMode { selectionBar } else { toolbar }
+            if selectMode { selectionBar(selected) } else { toolbar }
             Divider().overlay(Theme.hairline)
             content
         }
@@ -39,24 +51,23 @@ struct FolderGridView: View {
         .task(id: state.refreshToken) { reload() }      // refresh after rescans (keep selection)
         .task(id: state.videoOnly) { reload() }          // re-filter when the video-only toggle flips
         .task(id: state.foldersRecursive) { reload() }   // re-query when include-subfolders flips
-        .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
+        .alert("Move \(pendingItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
-                let toEvict = evictableItems
+                let toEvict = pendingItems
                 Task {
                     await state.evict(toEvict)
                     selection.clear(); selectMode = false
                 }
             }
         } message: {
-            Text(evictAlertMessage(total: evictableItems.count,
-                                   onlyCopy: state.onlyCopyCount(evictableItems)))
+            Text(evictAlertMessage(total: pendingItems.count, onlyCopy: pendingOnlyCopy))
         }
-        .alert("Delete \(evictableItems.count) photo\(evictableItems.count == 1 ? "" : "s")?",
+        .alert("Delete \(pendingItems.count) photo\(pendingItems.count == 1 ? "" : "s")?",
                isPresented: $showDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                let toDelete = evictableItems
+                let toDelete = pendingItems
                 Task {
                     await state.delete(toDelete)
                     selection.clear(); selectMode = false
@@ -73,8 +84,8 @@ struct FolderGridView: View {
             }
         }
         .sheet(isPresented: $showForceEvict) {
-            ForceEvictSheet(count: evictableItems.count) {
-                let toEvict = evictableItems
+            ForceEvictSheet(count: pendingItems.count) {
+                let toEvict = pendingItems
                 Task { _ = await state.evict(toEvict, mode: .forced); selection.clear(); selectMode = false }
             }
         }
@@ -96,7 +107,7 @@ struct FolderGridView: View {
                 .padding(12)
             }
             .coordinateSpace(name: "foldergrid")
-            .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
+            .modifier(RubberBandModifier(selection: $selection, items: index.ordered,
                                          space: "foldergrid", enabled: selectMode && !dragToMove))
             .pinchZoomGrid($state.gridMinSize)
         }
@@ -133,8 +144,8 @@ struct FolderGridView: View {
                 library: library,
                 onTap: {
                     if selectMode {
-                        if let idx = items.firstIndex(where: { $0.instanceID == item.instanceID }) {
-                            selection.tap(index: idx, items: orderedSelectable,
+                        if let idx = index.position(of: item.instanceID) {
+                            selection.tap(index: idx, items: index.ordered,
                                           extendingRange: NSEvent.modifierFlags.contains(.shift))
                         }
                     } else {
@@ -142,7 +153,7 @@ struct FolderGridView: View {
                     }
                 })
             .equatable()
-            .copyContextMenu(state: state, items: copyTargets(for: item))
+            .copyContextMenu(state: state) { copyTargets(for: item) }   // resolved when the menu opens
         }
     }
 
@@ -154,33 +165,45 @@ struct FolderGridView: View {
 
     private func reload() {
         guard let lib = state.library, let dir = state.selectedFolder else {
-            items = []; orderedSelectable = []; return
+            setItems([]); return
         }
         let all = (try? lib.items(inDir: dir, recursive: state.foldersRecursive)) ?? []
-        items = state.videoOnly ? all.filter { $0.kind == MediaKind.video.rawValue } : all
-        orderedSelectable = items.map { SelectableItem(id: $0.instanceID) }
+        setItems(state.videoOnly ? all.filter { $0.kind == MediaKind.video.rawValue } : all)
     }
 
-    private var selectionBar: some View {
-        SelectionActionBar(
+    /// Snapshot what a confirmation acts on (see `pendingItems`). False when nothing in the selection
+    /// is a local file, in which case no confirmation is shown — as before.
+    private func confirm(onlyCopyCount: Bool) -> Bool {
+        let targets = evictableItems
+        guard !targets.isEmpty else { return false }
+        pendingItems = targets
+        pendingOnlyCopy = onlyCopyCount ? state.onlyCopyCount(targets) : 0
+        return true
+    }
+
+    /// `selected` is the selection resolved once by `body`; everything the bar RENDERS derives from
+    /// it. Button actions re-resolve when they fire, and snapshot what a confirmation needs.
+    private func selectionBar(_ selected: [TimelineItem]) -> some View {
+        let hashes = selected.map(\.hash)
+        return SelectionActionBar(
             count: selection.count,
             moveControls: AnyView(moveControls),
             sendTargetName: state.connectedSendTarget()?.name,
             onSend: { showSend = true },
-            onDelete: { if !evictableItems.isEmpty { showDelete = true } },
-            onEvict: { if !evictableItems.isEmpty { showEvict = true } },
-            onForceEvict: { if !evictableItems.isEmpty { showForceEvict = true } },
-            showRehydrate: !rehydratableItems.isEmpty,
-            onRehydrate: { let items = rehydratableItems
+            onDelete: { if confirm(onlyCopyCount: false) { showDelete = true } },
+            onEvict: { if confirm(onlyCopyCount: true) { showEvict = true } },
+            onForceEvict: { if confirm(onlyCopyCount: false) { showForceEvict = true } },
+            showRehydrate: !state.rehydratableItems(selected).isEmpty,
+            onRehydrate: { let items = state.rehydratableItems(selectedItems)
                            Task { _ = await state.rehydrate(items); selection.clear(); selectMode = false } },
             tagControls: AnyView(TagPersonMenu(
-                state: state, hashes: selectedItems.map(\.hash),
+                state: state, hashes: hashes,
                 onDone: { selection.clear(); selectMode = false; dragToMove = false })),
             albumControls: AnyView(AddToAlbumMenu(
-                state: state, hashes: selectedItems.map(\.hash),
+                state: state, hashes: hashes,
                 onDone: { selection.clear(); selectMode = false; dragToMove = false })),
             shareControls: AnyView(
-                ShareLink(items: state.localFileURLs(for: selectedItems)) {
+                ShareLink(items: state.localFileURLs(for: selected)) {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }.controlSize(.small)),
             onDeselect: { selection.clear() },
@@ -203,7 +226,7 @@ struct FolderGridView: View {
                             let ids = selection.selected
                             // Optimistic: the moved photos leave this folder's grid immediately; the
                             // actual file move + rescan run in the background and reconcile on refresh.
-                            items.removeAll { ids.contains($0.instanceID) }
+                            setItems(items.filter { !ids.contains($0.instanceID) })
                             selection.clear()
                             Task { await state.movePhotos(ids: Array(ids), into: f) }
                         }

@@ -64,9 +64,18 @@ enum ImageClipboard {
 /// "Copy 30 Files"), so a set too large for pixels never silently copies something else.
 struct CopyMenuButton: View {
     let state: AppState
-    let items: [TimelineItem]
+    /// Resolved in `body`, i.e. when the menu's content is built — never while the grid lays out its
+    /// cells. A grid hands every tile one of these, and for a tile inside the selection the answer is
+    /// the whole selection, so an eagerly built array cost one pass per selected tile per render.
+    let items: () -> [TimelineItem]
+
+    init(state: AppState, items: @escaping () -> [TimelineItem]) {
+        self.state = state
+        self.items = items
+    }
 
     var body: some View {
+        let items = items()
         let plan = ClipboardCopyPlan.make(for: items)
         Button(plan.title, systemImage: "doc.on.doc") {
             ImageClipboard.copy(plan, state: state)
@@ -77,7 +86,8 @@ struct CopyMenuButton: View {
 
 extension View {
     /// Right-click → Copy for a grid tile that has no context menu of its own.
-    func copyContextMenu(state: AppState, items: [TimelineItem]) -> some View {
+    /// `items` is a provider, called when the menu is built (see `CopyMenuButton.items`).
+    func copyContextMenu(state: AppState, items: @escaping () -> [TimelineItem]) -> some View {
         contextMenu { CopyMenuButton(state: state, items: items) }
     }
 

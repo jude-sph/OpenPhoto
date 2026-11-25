@@ -15,12 +15,29 @@ struct SearchView: View {
 
     private var thumbPixels: Int { gridThumbnailPixels(forCellMin: state.gridMinSize) }
     // Search results are deduped by content, so a tile is keyed by its `hash` (like the Timeline).
-    private var orderedSelectable: [SelectableItem] { state.searchResults.map { SelectableItem(id: $0.hash) } }
-    private var selectedItems: [TimelineItem] { state.searchResults.filter { selection.contains($0.hash) } }
+    /// Rebuilt once per change of `state.searchResults`, never per render.
+    @State private var index = SelectionIndex()
+    /// What a confirmation acts on + the only-copy count its message quotes, captured when it is
+    /// requested (alert titles/messages are evaluated on every body pass, so they read snapshots).
+    @State private var pendingItems: [TimelineItem] = []
+    @State private var pendingOnlyCopy = 0
+
+    /// The selection as items, in result order — O(selection). `body` resolves it once.
+    private var selectedItems: [TimelineItem] {
+        index.selectedItems(selection, from: state.searchResults) { $0.hash }
+    }
     private var evictableItems: [TimelineItem] { selectedItems.filter { $0.driveRelPath == nil } }
-    private var rehydratableItems: [TimelineItem] { state.rehydratableItems(selectedItems) }
+
+    private func confirm(onlyCopyCount: Bool) -> Bool {
+        let items = evictableItems
+        guard !items.isEmpty else { return false }
+        pendingItems = items
+        pendingOnlyCopy = onlyCopyCount ? state.onlyCopyCount(items) : 0
+        return true
+    }
 
     var body: some View {
+        let selected = selectMode ? selectedItems : []   // resolved once per body pass
         VStack(spacing: 0) {
             if case .unavailable = (state.mlStatus[.semanticSearch] ?? .unknown) {
                 HStack(spacing: 8) {
@@ -47,27 +64,30 @@ struct SearchView: View {
             }
             Divider().overlay(Theme.hairline)
             if selectMode {
-                selectionBar       // thin action bar below the search header, only while selecting
+                selectionBar(selected)   // thin action bar below the search header, only while selecting
                 Divider().overlay(Theme.hairline)
             }
             resultGrid
         }
+        .onChange(of: state.searchResults, initial: true) {
+            index = SelectionIndex(ids: state.searchResults.lazy.map(\.hash))
+        }
         .copyTargets(selectMode ? selectedItems : [], owner: "search", state: state,
                      changeKey: SelectionKey(selectMode: selectMode, selected: selection.selected))
-        .alert("Move \(evictableItems.count) to Bin?", isPresented: $showEvict) {
+        .alert("Move \(pendingItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
-                let items = evictableItems
+                let items = pendingItems
                 Task { await state.evict(items); selection.clear(); selectMode = false }
             }
         } message: {
-            Text(evictAlertMessage(total: evictableItems.count, onlyCopy: state.onlyCopyCount(evictableItems)))
+            Text(evictAlertMessage(total: pendingItems.count, onlyCopy: pendingOnlyCopy))
         }
-        .alert("Delete \(evictableItems.count) photo\(evictableItems.count == 1 ? "" : "s")?",
+        .alert("Delete \(pendingItems.count) photo\(pendingItems.count == 1 ? "" : "s")?",
                isPresented: $showDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                let items = evictableItems
+                let items = pendingItems
                 Task { await state.deletePhotos(items); selection.clear(); selectMode = false }
             }
         } message: {
@@ -86,15 +106,16 @@ struct SearchView: View {
             }
         }
         .sheet(isPresented: $showForceEvict) {
-            ForceEvictSheet(count: evictableItems.count) {
-                let items = evictableItems
+            ForceEvictSheet(count: pendingItems.count) {
+                let items = pendingItems
                 Task { _ = await state.evict(items, mode: .forced); selection.clear(); selectMode = false }
             }
         }
     }
 
-    private var selectionBar: some View {
-        SelectionActionBar(
+    private func selectionBar(_ selected: [TimelineItem]) -> some View {
+        let hashes = selected.map(\.hash)
+        return SelectionActionBar(
             count: selection.count,
             moveControls: AnyView(moveControls),
             sendTargetName: {
@@ -105,20 +126,20 @@ struct SearchView: View {
                 let targets = state.connectedSendTargets()
                 if targets.count <= 1 { showSend = true } else { sendChooser = true }
             },
-            onDelete: { if !evictableItems.isEmpty { showDelete = true } },
-            onEvict: { if !evictableItems.isEmpty { showEvict = true } },
-            onForceEvict: { if !evictableItems.isEmpty { showForceEvict = true } },
-            showRehydrate: !rehydratableItems.isEmpty,
-            onRehydrate: { let items = rehydratableItems
+            onDelete: { if confirm(onlyCopyCount: false) { showDelete = true } },
+            onEvict: { if confirm(onlyCopyCount: true) { showEvict = true } },
+            onForceEvict: { if confirm(onlyCopyCount: false) { showForceEvict = true } },
+            showRehydrate: !state.rehydratableItems(selected).isEmpty,
+            onRehydrate: { let items = state.rehydratableItems(selectedItems)
                            Task { _ = await state.rehydrate(items); selection.clear(); selectMode = false } },
             tagControls: AnyView(TagPersonMenu(
-                state: state, hashes: selectedItems.map(\.hash),
+                state: state, hashes: hashes,
                 onDone: { selection.clear(); selectMode = false })),
             albumControls: AnyView(AddToAlbumMenu(
-                state: state, hashes: selectedItems.map(\.hash),
+                state: state, hashes: hashes,
                 onDone: { selection.clear(); selectMode = false })),
             shareControls: AnyView(
-                ShareLink(items: state.localFileURLs(for: selectedItems)) {
+                ShareLink(items: state.localFileURLs(for: selected)) {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }.controlSize(.small)),
             onDeselect: { selection.clear() },
@@ -243,26 +264,22 @@ struct SearchView: View {
                     spacing: Theme.gridGap
                 ) {
                     ForEach(state.searchResults, id: \.hash) { item in   // search is deduped by content
-                        MediaTile(
+                        // The same memoising cell as the timeline/folder grids (it builds exactly the
+                        // MediaTile + badges this grid used to build inline), so a selection tick only
+                        // re-renders the tiles whose inputs changed.
+                        MediaGridCell(
                             id: item.hash,
+                            item: item,
                             selectMode: selectMode,
                             selected: selection.contains(item.hash),
-                            rubberBandSpace: "searchgrid",
-                            thumbnail: ThumbnailImage(
-                                timelineItem: item,
-                                library: state.library!,
-                                targetPixel: thumbPixels
-                            ),
-                            badges: {
-                                TimelineTileBadges(
-                                    item: item,
-                                    backedUp: state.isBackedUpOnCanonical(item)
-                                )
-                            },
+                            backedUp: state.isBackedUpOnCanonical(item),
+                            thumbPixels: thumbPixels,
+                            space: "searchgrid",
+                            library: state.library!,
                             onTap: {
                                 if selectMode {
-                                    if let idx = state.searchResults.firstIndex(where: { $0.hash == item.hash }) {
-                                        selection.tap(index: idx, items: orderedSelectable,
+                                    if let idx = index.position(of: item.hash) {
+                                        selection.tap(index: idx, items: index.ordered,
                                                       extendingRange: NSEvent.modifierFlags.contains(.shift))
                                     }
                                 } else {
@@ -270,15 +287,16 @@ struct SearchView: View {
                                 }
                             }
                         )
-                        .copyContextMenu(state: state,
-                                         items: selectMode && selection.contains(item.hash)
-                                             ? selectedItems : [item])
+                        .equatable()
+                        .copyContextMenu(state: state) {   // resolved when the menu opens
+                            selectMode && selection.contains(item.hash) ? selectedItems : [item]
+                        }
                     }
                 }
                 .padding(Theme.gridGap)
             }
             .coordinateSpace(name: "searchgrid")
-            .modifier(RubberBandModifier(selection: $selection, items: orderedSelectable,
+            .modifier(RubberBandModifier(selection: $selection, items: index.ordered,
                                          space: "searchgrid", enabled: selectMode))
             .pinchZoomGrid($state.gridMinSize)
         }
