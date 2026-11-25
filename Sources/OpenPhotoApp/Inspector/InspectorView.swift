@@ -54,6 +54,9 @@ struct InspectorView: View {
             let instanceID: String
             let driveRelPath: String?
             let refreshToken: Int
+            /// Connected drives: an eject / plug-in changes where the photo can be opened from (and
+            /// what the Copies rows say) without necessarily bumping `refreshToken`.
+            let presentDrives: Set<String>
         }
         private var key: Key?
         private var value = Lookups()
@@ -65,7 +68,8 @@ struct InspectorView: View {
 
     private func currentLookups() -> Lookups {
         let key = LookupMemo.Key(instanceID: item.instanceID, driveRelPath: item.driveRelPath,
-                                 refreshToken: state.refreshToken)
+                                 refreshToken: state.refreshToken,
+                                 presentDrives: Set(state.durableVaults.filter { state.driveIsPresent($0) }.map(\.id)))
         return lookups.value(for: key) {
             Lookups(
                 folders: state.folderPresences(for: item),
