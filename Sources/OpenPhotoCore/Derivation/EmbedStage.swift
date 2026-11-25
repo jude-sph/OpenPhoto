@@ -174,9 +174,26 @@ public final class EmbedStage: @unchecked Sendable {
     /// center crop, matching CLIP's resize+center-crop preprocessing). Returns nil if the image
     /// can't be decoded.
     static func makePixelBuffer(from url: URL, side: Int) -> CVPixelBuffer? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+        guard let cg = decodeForEmbedding(url) else { return nil }
         return makePixelBuffer(from: cg, side: side)
+    }
+
+    /// Longest side of the image decoded for the encoder. 1024 keeps the SHORT side ≥ 224 for aspect
+    /// ratios up to ~4.5:1, so the resize + centre-crop below sees the same framing as a full decode.
+    static let decodeMaxPixel = 1024
+
+    /// Decode `url` downsampled at the source and **upright** (EXIF orientation baked in). A full
+    /// decode (`CGImageSourceCreateImageAtIndex`) costs ~190 MB for a 48 MP photo only to be drawn
+    /// into 224×224, and ignores orientation — a photo stored rotated was embedded sideways.
+    /// Never upscales. Callers must be inside an autorelease pool (`embedImage` is).
+    static func decodeForEmbedding(_ url: URL) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: decodeMaxPixel,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
     }
 
     static func makePixelBuffer(from cg: CGImage, side: Int) -> CVPixelBuffer? {
