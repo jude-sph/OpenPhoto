@@ -95,3 +95,48 @@ private func uprightThumbnail(_ url: URL, maxPixel: Int) -> CGImage? {
     // Aspect preserved (3:2) so the centre crop frames the same region as a full decode.
     #expect(abs(Double(decoded.width) / Double(decoded.height) - 1.5) < 0.01)
 }
+
+// MARK: - Face decode (FaceStage) — coordinate-space evidence
+
+/// Establishes the frame face rectangles live in. Detection decodes WITHOUT the EXIF transform
+/// (the raw pixel grid), while every thumbnail the App crops faces from is decoded WITH it. For a
+/// photo stored rotated the two grids differ (dimensions swapped), so a rect that is normalised to
+/// the raw grid does not address the same region of the upright thumbnail.
+@Test(arguments: [UTType.jpeg, UTType.heic])
+func faceDetectionFrameIsTheRawGridNotTheUprightThumbnail(type: UTType) throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let url = t.root.appendingPathComponent("rot6.\(type.preferredFilenameExtension ?? "img")")
+    do { try writeOrientedImage(to: url, type: type, width: 400, height: 200, orientation: 6) }
+    catch { return }                                            // skip: no encoder for this type here
+    guard storedOrientation(url) == 6 else {
+        Issue.record("\(type.identifier): orientation tag not round-tripped by ImageIO")
+        return
+    }
+
+    let raw = try #require(rawDecode(url))
+    let upright = try #require(uprightThumbnail(url, maxPixel: 1024))
+    let detection = try #require(FaceStage.decodeForDetection(url))
+    print("orientation-6 \(type.identifier): raw \(raw.width)x\(raw.height), "
+          + "upright thumbnail \(upright.width)x\(upright.height), "
+          + "face-detection decode \(detection.width)x\(detection.height)")
+
+    #expect(raw.width == 400 && raw.height == 200)
+    #expect(upright.width == 200 && upright.height == 400)
+    // The detection decode keeps today's frame: the raw, un-rotated grid.
+    #expect(detection.width == raw.width && detection.height == raw.height)
+}
+
+/// The downsampled detection decode caps the long side, never upscales, and keeps the aspect ratio
+/// (so Vision's normalised rectangles are unchanged by it).
+@Test func faceDetectionDecodeIsCappedAndAspectPreserving() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let big = t.root.appendingPathComponent("big.jpg")
+    try writeOrientedImage(to: big, type: .jpeg, width: 4800, height: 3600, orientation: 1)
+    let d = try #require(FaceStage.decodeForDetection(big))
+    #expect(d.width == FaceStage.decodeMaxPixel && d.height == FaceStage.decodeMaxPixel * 3 / 4)
+
+    let small = t.root.appendingPathComponent("small.jpg")
+    try writeOrientedImage(to: small, type: .jpeg, width: 640, height: 480, orientation: 1)
+    let s = try #require(FaceStage.decodeForDetection(small))
+    #expect(s.width == 640 && s.height == 480)
+}

@@ -28,14 +28,35 @@ public enum FaceStage {
     static let minFaceFraction: CGFloat = 0.025   // shorter side ≥ 2.5% of the image's shorter side …
     static let minFacePixels: CGFloat = 48        // … and ≥ 48 px, whichever is larger
 
+    /// Longest side of the image decoded for detection + alignment. A 48 MP photo decodes to ~190 MB
+    /// at full size; at 3072 px it is ≤ ~28 MB. For 4:3 / 3:2 photos the short side stays ≥ 1920 px,
+    /// where the 2.5% fraction gate (not the 48 px floor) still decides, so gating is unchanged;
+    /// wider-than-16:10 photos above this size hit the 48 px floor slightly earlier.
+    static let decodeMaxPixel = 3072
+
+    /// Decode `url` for detection, downsampled at the source but **without** the EXIF transform —
+    /// i.e. the same raw, un-rotated pixel grid a plain `CGImageSourceCreateImageAtIndex` gives.
+    /// Stored rectangles are Vision-normalised (0…1) against that grid, so downsampling cannot move
+    /// them; applying the orientation here WOULD (it changes the frame every stored rect and sidecar
+    /// region is expressed in), which needs a format-doc change + re-derive and is deliberately not
+    /// done. Never upscales. Callers must be inside an autorelease pool (`detect` is).
+    static func decodeForDetection(_ url: URL) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: false,
+            kCGImageSourceThumbnailMaxPixelSize: decodeMaxPixel,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+    }
+
     /// Detect faces and embed the clusterable ones. Returns one DetectedFace per face ([] for a photo
     /// with no faces); nil only if the SOURCE image can't be decoded (runner records a retry-capped
     /// failure). Per-image and per-face work is wrapped in autorelease pools — bulk re-derivation over
     /// a whole library otherwise accumulates Vision/CoreImage buffers and has OOM'd before.
     public static func detect(in url: URL) -> [DetectedFace]? {
         autoreleasepool {
-            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+            guard let cg = decodeForDetection(url) else { return nil }
 
             let handler = VNImageRequestHandler(cgImage: cg, options: [:])
             let landmarksReq = VNDetectFaceLandmarksRequest()
