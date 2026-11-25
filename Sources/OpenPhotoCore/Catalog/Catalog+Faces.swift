@@ -19,6 +19,20 @@ public struct FaceRow: Sendable, Equatable {
     }
 }
 
+/// A face row WITHOUT its embedding vector — everything the UI needs (crop rect, hash, person,
+/// source) at a fraction of the cost: the ~1 KB Float16 blob is neither read from SQLite nor decoded.
+public struct FaceSummary: Sendable, Equatable {
+    public let id: Int64
+    public let hash: String
+    public let rect: CGRect            // Vision normalized boundingBox (bottom-left origin)
+    public let confidence: Float
+    public let source: String          // "auto" | "confirmed" | "manual"
+    public let personID: Int64?
+    public let quality: Float
+    /// Stored embedding dimensionality: 0 = not clusterable (gated / manual tag), 512 = current model.
+    public let embeddingDim: Int
+}
+
 public struct PersonRow: Sendable, Equatable {
     public let id: Int64
     public let name: String
@@ -99,35 +113,86 @@ extension Catalog {
     }
 
     /// Fetch a single face row by its primary-key id.  Returns nil when the id is not found.
+    ///
+    /// Loads and decodes the ~1 KB embedding blob. UI code that only needs hash / rect / person
+    /// should call `faceSummary(forID:)` instead.
     public func face(forID id: Int64) throws -> FaceRow? {
-        try dbQueue.read { db in
-            let rows = try Row.fetchAll(db,
+        // Rows are fetched (copied out of SQLite) inside the read; the Float16 → Float decode runs
+        // after the catalog's serial queue is released.
+        let rows = try dbQueue.read { db in
+            try Row.fetchAll(db,
                 sql: """
                     SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim,
                            personID, confidence, source, quality
                     FROM faces WHERE id = ?
                     """,
                 arguments: [id])
-            return rows.first.map { Self.faceRow(from: $0) }
         }
+        return rows.first.map { Self.faceRow(from: $0) }
     }
 
+    /// Full rows incl. decoded embeddings. Prefer `faceSummaries(forHash:)` when the vector is unused.
     public func faces(forHash hash: String) throws -> [FaceRow] {
-        try dbQueue.read { db in
+        let rows = try dbQueue.read { db in
             try Row.fetchAll(db,
                 sql: "SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim, personID, confidence, source, quality FROM faces WHERE hash = ?",
-                arguments: [hash]).map { Self.faceRow(from: $0) }
+                arguments: [hash])
         }
+        return rows.map { Self.faceRow(from: $0) }
     }
 
+    /// Full rows incl. decoded embeddings. Prefer `faceSummaries(forPerson:)` when the vector is unused.
     public func faces(forPerson personID: Int64) throws -> [FaceRow] {
         let lvc = lockedVisibilityClause(hashColumn: "faces.hash")
-        return try dbQueue.read { db in
+        let rows = try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT id, hash, rectX, rectY, rectW, rectH, embedding, dim, personID, confidence, source, quality
                 FROM faces WHERE personID = ? \(lvc)
-                """, arguments: [personID]).map { Self.faceRow(from: $0) }
+                """, arguments: [personID])
         }
+        return rows.map { Self.faceRow(from: $0) }
+    }
+
+    // MARK: Lightweight (no-embedding) reads
+
+    /// `face(forID:)` without the embedding blob — for crops, chips and hash lookups.
+    public func faceSummary(forID id: Int64) throws -> FaceSummary? {
+        try dbQueue.read { db in
+            try Row.fetchOne(db, sql: "SELECT \(Self.summaryColumns) FROM faces WHERE id = ?",
+                             arguments: [id]).map { Self.faceSummary(from: $0) }
+        }
+    }
+
+    /// `faces(forHash:)` without the embedding blobs (same rows, same order).
+    public func faceSummaries(forHash hash: String) throws -> [FaceSummary] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT \(Self.summaryColumns) FROM faces WHERE hash = ?",
+                             arguments: [hash]).map { Self.faceSummary(from: $0) }
+        }
+    }
+
+    /// `faces(forPerson:)` without the embedding blobs (same rows, same locked-folder filtering).
+    public func faceSummaries(forPerson personID: Int64) throws -> [FaceSummary] {
+        let lvc = lockedVisibilityClause(hashColumn: "faces.hash")
+        return try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT \(Self.summaryColumns) FROM faces WHERE personID = ? \(lvc)
+                """, arguments: [personID]).map { Self.faceSummary(from: $0) }
+        }
+    }
+
+    private static let summaryColumns =
+        "id, hash, rectX, rectY, rectW, rectH, dim, personID, confidence, source, quality"
+
+    private static func faceSummary(from row: Row) -> FaceSummary {
+        FaceSummary(
+            id: row["id"], hash: row["hash"],
+            rect: CGRect(x: row["rectX"] as Double, y: row["rectY"] as Double,
+                         width: row["rectW"] as Double, height: row["rectH"] as Double),
+            confidence: Float(row["confidence"] as Double),
+            source: row["source"], personID: row["personID"],
+            quality: Float((row["quality"] as Double?) ?? 1),
+            embeddingDim: row["dim"])
     }
 
     /// (id, vector) for every detected-but-unassigned auto face that is CLUSTERABLE — i.e. carries a
@@ -137,18 +202,17 @@ extension Catalog {
     /// are excluded. Hidden faces are also excluded (the user has ignored them).
     public func unassignedFacesWithEmbeddings() throws -> [(id: Int64, vector: [Float])] {
         let lvc = lockedVisibilityClause(hashColumn: "faces.hash")
-        return try dbQueue.read { db in
+        // Only the raw (id, dim, blob) triples are pulled inside the read; unpacking ~100k Float16
+        // blobs there held the catalog's single serial queue for about a second and stalled every
+        // main-thread read behind it.
+        let raw: [(id: Int64, dim: Int, blob: Data)] = try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT id, dim, embedding FROM faces
                 WHERE personID IS NULL AND source = 'auto' AND dim = \(FaceEmbedder.dimension) AND hidden = 0
                 \(lvc)
-                """).map { row -> (id: Int64, vector: [Float]) in
-                    let id: Int64 = row["id"]
-                    let dim: Int = row["dim"]
-                    let blob: Data = row["embedding"]
-                    return (id, Float16Codec.unpack(blob, dim: dim))
-                }
+                """).map { (id: $0["id"], dim: $0["dim"], blob: $0["embedding"]) }
         }
+        return raw.map { (id: $0.id, vector: Float16Codec.unpack($0.blob, dim: $0.dim)) }
     }
 
     /// Every unassigned AUTO face id (ANY quality), best-quality first. The Other-faces bucket uses
@@ -190,17 +254,14 @@ extension Catalog {
     /// per-person centroids. Faces with stale (dim ≠ 512) vectors are excluded, so a person whose faces
     /// haven't been re-embedded yet simply contributes no centroid until a rescan refreshes them.
     public func assignedFacesWithEmbeddings() throws -> [(personID: Int64, vector: [Float])] {
-        try dbQueue.read { db in
+        // Raw rows inside the read, Float16 decode outside it (see `unassignedFacesWithEmbeddings`).
+        let raw: [(personID: Int64, dim: Int, blob: Data)] = try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT personID, dim, embedding FROM faces
                 WHERE personID IS NOT NULL AND source = 'confirmed' AND dim = \(FaceEmbedder.dimension)
-                """).map { row -> (personID: Int64, vector: [Float]) in
-                    let pid: Int64 = row["personID"]
-                    let dim: Int = row["dim"]
-                    let blob: Data = row["embedding"]
-                    return (pid, Float16Codec.unpack(blob, dim: dim))
-                }
+                """).map { (personID: $0["personID"], dim: $0["dim"], blob: $0["embedding"]) }
         }
+        return raw.map { (personID: $0.personID, vector: Float16Codec.unpack($0.blob, dim: $0.dim)) }
     }
 
     public func createPerson(name: String) throws -> Int64 {
