@@ -2708,7 +2708,9 @@ final class AppState {
 
     /// Refresh every browse surface after the locked set / reveal state changes.
     private func refreshAfterLockChange() {
-        try? refreshQueries()   // timeline / folders / bin (also re-derives trips, locked gate and all)
+        // Synchronous on purpose: after locking/relocking, the very next frame must not still show
+        // the now-hidden photos (an async refresh would leave them visible for its duration).
+        refreshQueriesNow()     // timeline / folders / bin (also re-derives trips, locked gate and all)
         loadPeople()            // faces (catalog face queries also honour the locked gate)
         refreshToken += 1       // nudge map markers, search results, inspector, dependent views
     }
@@ -2772,24 +2774,57 @@ final class AppState {
         guard let library else { return }
         queryRefreshGeneration &+= 1
         let gen = queryRefreshGeneration
-        let pendingGen = pendingDeletionsGeneration
-        let travelsGen = travelsGeneration
-        let grouping = self.grouping, videoOnly = self.videoOnly
-        let presentDriveIDs = durableVaults.filter { driveIsPresent($0) }.map(\.id)
-        let travelsRoot = library.vaults.first?.rootURL
-        let placeSearch = loadedPlaceSearch
+        let inputs = querySnapshotInputs(library)
         let snap: QuerySnapshot? = await Task.detached(priority: .userInitiated) {
-            guard let s = try? library.timelineSections(grouping: grouping, videoOnly: videoOnly),
-                  let f = try? library.folderTree(videoOnly: videoOnly),
-                  let b = try? library.binItems() else { return nil }
-            let pending = AppState.computePendingDeletions(catalog: library.catalog, presentDriveIDs: presentDriveIDs)
-            let travels = travelsRoot.map {
-                AppState.computeTravels(root: $0, catalog: library.catalog, folderTree: f, placeSearch: placeSearch)
-            }
-            return QuerySnapshot(sections: s, folders: f, bin: b, pending: pending, travels: travels)
+            AppState.computeQuerySnapshot(library: library, inputs: inputs)
         }.value
-        // Stale: the library was closed/switched, or a newer refresh already landed.
+        // Stale: the library was closed/switched, or a newer (sync) refresh already landed.
         guard let snap, self.library === library, gen == queryRefreshGeneration else { return }
+        applyQuerySnapshot(snap, inputs: inputs)
+    }
+
+    /// The old synchronous refresh, for the few sites whose very next frame must not show stale
+    /// browse data (locking / hiding folders). Supersedes any pass in flight (its result is dropped;
+    /// requests queued behind it still run).
+    func refreshQueriesNow() {
+        guard let library else { return }
+        queryRefreshGeneration &+= 1
+        let inputs = querySnapshotInputs(library)
+        guard let snap = Self.computeQuerySnapshot(library: library, inputs: inputs) else { return }
+        applyQuerySnapshot(snap, inputs: inputs)
+    }
+
+    /// Main-actor inputs captured at the start of a pass (all Sendable).
+    private struct QuerySnapshotInputs: Sendable {
+        let grouping: TimelineGrouping
+        let videoOnly: Bool
+        let presentDriveIDs: [String]
+        let travelsRoot: URL?
+        let placeSearch: PlaceSearch?
+        let pendingGen: Int
+        let travelsGen: Int
+    }
+
+    private func querySnapshotInputs(_ library: LibraryService) -> QuerySnapshotInputs {
+        QuerySnapshotInputs(grouping: grouping, videoOnly: videoOnly,
+                            presentDriveIDs: durableVaults.filter { driveIsPresent($0) }.map(\.id),
+                            travelsRoot: library.vaults.first?.rootURL, placeSearch: loadedPlaceSearch,
+                            pendingGen: pendingDeletionsGeneration, travelsGen: travelsGeneration)
+    }
+
+    nonisolated private static func computeQuerySnapshot(library: LibraryService,
+                                                         inputs: QuerySnapshotInputs) -> QuerySnapshot? {
+        guard let s = try? library.timelineSections(grouping: inputs.grouping, videoOnly: inputs.videoOnly),
+              let f = try? library.folderTree(videoOnly: inputs.videoOnly),
+              let b = try? library.binItems() else { return nil }
+        let pending = computePendingDeletions(catalog: library.catalog, presentDriveIDs: inputs.presentDriveIDs)
+        let travels = inputs.travelsRoot.map {
+            computeTravels(root: $0, catalog: library.catalog, folderTree: f, placeSearch: inputs.placeSearch)
+        }
+        return QuerySnapshot(sections: s, folders: f, bin: b, pending: pending, travels: travels)
+    }
+
+    private func applyQuerySnapshot(_ snap: QuerySnapshot, inputs: QuerySnapshotInputs) {
         sections = snap.sections
         flatItems = snap.sections.flatMap(\.items)
         folderTree = snap.folders
@@ -2801,10 +2836,8 @@ final class AppState {
         }
         binEntries = snap.bin
         // A synchronous recompute that ran while this pass was off-main is newer — keep it.
-        if pendingGen == pendingDeletionsGeneration { applyPendingDeletions(snap.pending) }
-        if travelsGen == travelsGeneration {
-            if let t = snap.travels { applyTravels(t) } else { applyTravels(nil) }
-        }
+        if inputs.pendingGen == pendingDeletionsGeneration { applyPendingDeletions(snap.pending) }
+        if inputs.travelsGen == travelsGeneration { applyTravels(snap.travels) }
         refreshToken += 1
     }
 
