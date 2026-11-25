@@ -35,7 +35,7 @@ public enum FullResImage {
 
     /// Apply the user's display rotation to an already-oriented CGImage, via the shared CIContext.
     /// (Mirrors the viewer's prior orientation mapping.)
-    private static func applyRotation(_ image: CGImage, degreesCW: Int) -> CGImage {
+    public static func applyRotation(_ image: CGImage, degreesCW: Int) -> CGImage {
         let d = ((degreesCW % 360) + 360) % 360
         guard d != 0 else { return image }
         let orient: CGImagePropertyOrientation = d == 90 ? .right : (d == 180 ? .down : .left)

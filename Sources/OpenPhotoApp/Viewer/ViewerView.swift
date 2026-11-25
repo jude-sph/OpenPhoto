@@ -89,7 +89,23 @@ final class ViewerDecoder {
 
 struct ViewerView: View {
     @Bindable var state: AppState
-    @State private var fullImage: CGImage?
+    /// What the stage draws for a photo: the full-res decode once it lands, and until then the
+    /// photo's grid thumbnail (`shownIsFull == false`). ONE view shows both, laid out aspect-fit by the
+    /// image's own shape, so the swap from thumbnail to full-res changes sharpness only — never size
+    /// or position. (The old placeholder was an aspect-FILL thumbnail stretched over the whole stage,
+    /// keyed at a size the grid never caches: a held arrow key flashed blank, then a huge cropped
+    /// blur, then the photo.)
+    @State private var shown: CGImage?
+    @State private var shownIsFull = false
+    /// "instanceID|rotation" of the photo `shown` belongs to — the zoom/pan reset key.
+    @State private var shownKey = ""
+    /// Non-rendering navigation bookkeeping (a class, so updating it never re-renders the viewer).
+    @State private var nav = NavState()
+    final class NavState {
+        var indexHint: Int?
+        var lastDelta = 0
+        var lastStepAt = Date.distantPast
+    }
     @State private var playingLive = false
     @State private var player: AVPlayer?
     @FocusState private var stageFocused: Bool
@@ -105,10 +121,24 @@ struct ViewerView: View {
     @State private var liveRotation = 0
     /// Position of the open item. Compares the fields `instanceID` is made of — `instanceID` itself
     /// is a computed string concatenation, which the old lookup built twice per element.
+    /// Stepping moves by one, so the last known position (±1) is checked before the O(n) search —
+    /// which was run several times per key press over the whole library.
     private var index: Int? {
         guard let open = state.openedItem else { return nil }
         let vaultID = open.vaultID, relPath = open.relPath
-        return flatItems.firstIndex { $0.relPath == relPath && $0.vaultID == vaultID }
+        let items = flatItems
+        func matches(_ i: Int) -> Bool {
+            items.indices.contains(i) && items[i].relPath == relPath && items[i].vaultID == vaultID
+        }
+        if let h = nav.indexHint {
+            for i in [h, h + 1, h - 1] where matches(i) {
+                nav.indexHint = i
+                return i
+            }
+        }
+        let found = items.firstIndex { $0.relPath == relPath && $0.vaultID == vaultID }
+        nav.indexHint = found
+        return found
     }
 
     var body: some View {
@@ -257,19 +287,14 @@ struct ViewerView: View {
                 if let player {
                     PlayerView(player: player)
                 }
-            } else if let fullImage {
+            } else if let shown {
                 // GPU-composited zoom/pan via a CALayer — no SwiftUI re-render during gestures, so it
-                // stays smooth on full-res photos. Rotation is baked into fullImage so pan/zoom stay
-                // in the upright frame. Keyed per photo + rotation.
-                ZoomableImageView(image: fullImage)
-                    .id("\(state.openedItem?.instanceID ?? "")|\(state.openedItem?.rotation ?? 0)")
-            } else if let library = state.library {
-                // Full-res not decoded yet (a cache miss) — show the instant thumbnail as a soft
-                // placeholder instead of a blank spinner, then swap to full-res when it lands.
-                ThumbnailImage(timelineItem: item, library: library)
-                    .id(item.instanceID)
+                // stays smooth on full-res photos. Rotation is baked into the image so pan/zoom stay
+                // in the upright frame. ONE persistent view for every photo (no `.id`): stepping swaps
+                // the layer's contents instead of tearing down and rebuilding an NSView per key press.
+                ZoomableImageView(image: shown, resetKey: shownKey, isPreview: !shownIsFull)
             } else {
-                ProgressView().controlSize(.large)
+                Color.clear
             }
         }
     }
@@ -314,7 +339,14 @@ struct ViewerView: View {
             // Start on the opened photo (no animation); later navigation animates.
             .onAppear { if let openID { proxy.scrollTo(openID, anchor: .center) } }
             .onChange(of: state.openedItem?.instanceID) { _, id in
-                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                guard let id else { return }
+                // Animate a single step; while a key is held (steps arriving faster than the
+                // animation runs) jump instead, or the scroll animations queue up behind the photos.
+                if Date().timeIntervalSince(nav.lastStepAt) < 0.25 {
+                    proxy.scrollTo(id, anchor: .center)
+                } else {
+                    withAnimation { proxy.scrollTo(id, anchor: .center) }
+                }
             }
         }
         .frame(height: 70)
@@ -326,6 +358,9 @@ struct ViewerView: View {
         let j = i + delta
         guard flatItems.indices.contains(j) else { return }
         playingLive = false
+        nav.lastDelta = delta
+        nav.lastStepAt = Date()
+        nav.indexHint = j
         state.openedItem = flatItems[j]
     }
 
@@ -350,7 +385,7 @@ struct ViewerView: View {
         liveURL = nil
         driveUnplugged = false
         guard let item = state.openedItem else {
-            fullImage = nil
+            clearShown()
             ViewerDecoder.shared.keepOnly([])
             return
         }
@@ -359,12 +394,12 @@ struct ViewerView: View {
         // Read the rotation from the catalog (source of truth), not the possibly-stale `item`.
         liveRotation = rotation(for: item)
         guard let url = state.fullResURL(for: item) else {
-            fullImage = nil
+            clearShown()
             if state.isDriveOnly(item) { driveUnplugged = true }   // drive-only, not connected
             return
         }
         if item.kind == MediaKind.video.rawValue {
-            fullImage = nil
+            clearShown()
             // Bake any user display-rotation into the video itself (composition) so the player's
             // native controls stay upright — a .rotationEffect rotated the whole player, controls too.
             player = Self.makeVideoPlayer(url: url, rotationCW: liveRotation)
@@ -381,27 +416,97 @@ struct ViewerView: View {
             }
         }
         let rot = liveRotation
-        let key = ViewerDecoder.key(instanceID: item.instanceID, rotation: rot) as NSString
-        // Cache hit (e.g. a prefetched neighbor) → show instantly. No blank, no decode.
-        if let cached = viewerImageCache.object(forKey: key)?.image {
-            fullImage = cached
+        let key = ViewerDecoder.key(instanceID: item.instanceID, rotation: rot)
+        if let cached = viewerImageCache.object(forKey: key as NSString)?.image {
+            // Cache hit (a prefetched neighbour, or a revisit) → full-res instantly.
+            show(cached, key: key, full: true)
         } else {
-            // Miss → decode full-res OFF the main thread via ImageIO (the fast, Quick-Look path). While
-            // it decodes, the placeholder shows the instant thumbnail, not a spinner. Full resolution.
-            // The decoder dedupes against a prefetch already in flight for this photo and caches the
-            // result itself.
-            fullImage = nil
+            // Miss. Show the grid thumbnail NOW — synchronously from the shared tile cache, at the
+            // photo's own shape — and sharpen in place when the decode lands. If the thumbnail isn't
+            // in memory either, the previous photo stays up for the few ms it takes to read it
+            // (never a blank stage).
+            if let thumb = Self.cachedThumbnail(for: item) {
+                show(FullResImage.applyRotation(thumb, degreesCW: rot), key: key, full: false)
+            } else if let lib = state.library {
+                Task {
+                    let thumb = await Task.detached(priority: .userInitiated) {
+                        await Self.loadThumbnail(for: item, library: lib)
+                    }.value
+                    // Only if still on this photo and the full-res hasn't beaten us to it.
+                    guard let thumb, state.openedItem?.instanceID == item.instanceID,
+                          liveRotation == rot, !(shownKey == key && shownIsFull) else { return }
+                    show(FullResImage.applyRotation(thumb, degreesCW: rot), key: key, full: false)
+                }
+            }
+            // While a key is held this task is cancelled by the next step before the decode returns,
+            // so start the photo AHEAD (in the direction of travel) decoding now: by the time the user
+            // gets there it is already in flight or cached. The decoder dedupes, caps concurrency at
+            // two, runs newest-first, and drops queued work once it leaves the neighbourhood.
+            prefetch(offset: nav.lastDelta)
             let decoded = await ViewerDecoder.shared.image(
                 instanceID: item.instanceID, url: url, rotation: rot, priority: .userInitiated)
             // Ignore a result that arrived after the user already navigated away.
             guard state.openedItem?.instanceID == item.instanceID, liveRotation == rot else { return }
-            if let decoded { fullImage = decoded }
+            if let decoded { show(decoded, key: key, full: true) }
         }
-        // Prefetch only once navigation has paused: this task is cancelled by the next step, so a held
-        // arrow key never gets here.
+        prefetch(offset: nav.lastDelta)
+        // The other neighbour only once navigation has paused: this task is cancelled by the next
+        // step, so a held arrow key never gets here.
         try? await Task.sleep(for: .milliseconds(150))
         guard !Task.isCancelled, state.openedItem?.instanceID == item.instanceID else { return }
         prefetchNeighbors()
+    }
+
+    private func show(_ image: CGImage, key: String, full: Bool) {
+        shown = image; shownKey = key; shownIsFull = full
+    }
+    private func clearShown() { shown = nil; shownKey = ""; shownIsFull = false }
+
+    /// The largest thumbnail of `item` already decoded in the shared tile cache (the grid the user
+    /// just came from, or the filmstrip, has almost always put one there).
+    private static func cachedThumbnail(for item: TimelineItem) -> CGImage? {
+        for px in [512, 256, 128] {
+            if let hit = tileMemoryCache.object(forKey: "\(item.instanceID)@\(px)" as NSString)?.image {
+                return hit
+            }
+        }
+        return nil
+    }
+
+    /// Read (or generate) the 512 px thumbnail off the main thread and share it with the tile cache.
+    private nonisolated static func loadThumbnail(for item: TimelineItem,
+                                                  library lib: LibraryService) async -> CGImage? {
+        let hash = ContentHash(stringValue: item.hash)
+        let kind = MediaKind(rawValue: item.kind) ?? .photo
+        let px = ThumbnailStore.maxPixel
+        var image: CGImage?
+        if let url = lib.absoluteURL(for: item) {
+            image = try? await lib.thumbnails.displayImage(for: hash, sourceURL: url, kind: kind, maxPixel: px)
+        }
+        if image == nil { image = await lib.thumbnails.cachedDisplayImage(for: hash, maxPixel: px) }
+        if let image { cacheTileImage(image, forKey: "\(item.instanceID)@\(px)" as NSString) }
+        return image
+    }
+
+    /// Start decoding the photo `offset` steps away (±1), if there is one and it isn't cached.
+    private func prefetch(offset: Int) {
+        guard offset != 0, let i = index else { return }
+        let items = flatItems
+        guard items.indices.contains(i + offset) else { return }
+        prefetch(items[i + offset])
+    }
+
+    private func prefetch(_ it: TimelineItem) {
+        guard it.kind != MediaKind.video.rawValue else { return }   // photos only
+        let rot = rotation(for: it)
+        let key = ViewerDecoder.key(instanceID: it.instanceID, rotation: rot) as NSString
+        guard viewerImageCache.object(forKey: key) == nil,
+              let url = state.fullResURL(for: it) else { return }
+        let id = it.instanceID
+        Task {
+            _ = await ViewerDecoder.shared.image(instanceID: id, url: url, rotation: rot,
+                                                 priority: .utility)
+        }
     }
 
     /// The open item and its immediate neighbours (the only photos worth decoding right now).
@@ -421,18 +526,7 @@ struct ViewerView: View {
     /// cancelled if the viewer moves on before it starts). Bounded by the cache's count/byte limits.
     private func prefetchNeighbors() {
         guard let open = state.openedItem else { return }
-        for it in neighbourhood() where it.instanceID != open.instanceID {
-            guard it.kind != MediaKind.video.rawValue else { continue }   // photos only
-            let rot = rotation(for: it)
-            let key = ViewerDecoder.key(instanceID: it.instanceID, rotation: rot) as NSString
-            guard viewerImageCache.object(forKey: key) == nil,
-                  let url = state.fullResURL(for: it) else { continue }
-            let id = it.instanceID
-            Task {
-                _ = await ViewerDecoder.shared.image(instanceID: id, url: url, rotation: rot,
-                                                     priority: .utility)
-            }
-        }
+        for it in neighbourhood() where it.instanceID != open.instanceID { prefetch(it) }
     }
 
     /// Build a video player, baking a user display-rotation into the frames via a video composition
@@ -499,15 +593,22 @@ struct ViewerView: View {
 /// (a GPU transform), so there is no per-frame rasterization or SwiftUI re-render.
 struct ZoomableImageView: NSViewRepresentable {
     let image: CGImage
+    /// Identity of the PHOTO being shown. Zoom/pan reset when it changes; a new image under the same
+    /// key (thumbnail → full-res of the same photo) keeps them. nil → reset on every new image.
+    var resetKey: String? = nil
+    /// true while `image` is a low-res stand-in: "Copy Image" is withheld until the real one lands.
+    var isPreview = false
     func makeNSView(context: Context) -> ZoomPanLayerView {
         let v = ZoomPanLayerView()
-        v.setImageIfChanged(image)
+        v.setImageIfChanged(image, resetKey: resetKey, isPreview: isPreview)
         return v
     }
     // Only (re)set when the image instance actually changes — otherwise an
     // incidental SwiftUI re-render would re-decode the bitmap and reset the zoom
     // mid-gesture, which is what made zooming feel laggy.
-    func updateNSView(_ v: ZoomPanLayerView, context: Context) { v.setImageIfChanged(image) }
+    func updateNSView(_ v: ZoomPanLayerView, context: Context) {
+        v.setImageIfChanged(image, resetKey: resetKey, isPreview: isPreview)
+    }
 }
 
 final class ZoomPanLayerView: NSView {
@@ -516,6 +617,8 @@ final class ZoomPanLayerView: NSView {
     private var pan = CGPoint.zero
     private var imageSize: CGSize = .zero
     private var currentImage: CGImage?
+    private var currentKey: String?
+    private var isPreview = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -528,13 +631,20 @@ final class ZoomPanLayerView: NSView {
 
     override var isFlipped: Bool { true }   // top-left origin → CGImage renders upright
 
-    func setImageIfChanged(_ image: CGImage) {
+    func setImageIfChanged(_ image: CGImage, resetKey: String? = nil, isPreview: Bool = false) {
+        self.isPreview = isPreview
         guard image !== currentImage else { return }
+        let samePhoto = resetKey != nil && resetKey == currentKey
         currentImage = image
+        currentKey = resetKey
         // Already fully decoded (off-main) — just hand the CGImage to the layer. No main-thread decode.
+        CATransaction.begin(); CATransaction.setDisableActions(true)   // no implicit cross-fade/resize
         imageLayer.contents = image
+        CATransaction.commit()
+        // Layout uses only the image's SHAPE, so a thumbnail and the full-res of one photo land on
+        // exactly the same frame.
         imageSize = CGSize(width: image.width, height: image.height)
-        zoom = 1; pan = .zero
+        if !samePhoto { zoom = 1; pan = .zero }
         relayout()
     }
 
@@ -580,7 +690,7 @@ final class ZoomPanLayerView: NSView {
     // decoded full-res CGImage), so it works regardless of SwiftUI's context-menu quirks over an
     // NSViewRepresentable.
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard currentImage != nil else { return nil }
+        guard currentImage != nil, !isPreview else { return nil }
         let menu = NSMenu()
         let copyItem = NSMenuItem(title: "Copy Image",
                                   action: #selector(copyImage(_:)), keyEquivalent: "")
