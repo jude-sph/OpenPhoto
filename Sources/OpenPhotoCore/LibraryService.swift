@@ -218,6 +218,14 @@ public final class LibraryService: Sendable {
         return dirs
     }
 
+    /// Sibling folders in the order Finder shows them: case-insensitive, numbers in natural order
+    /// ("Trip 2" before "Trip 10"). A plain string sort put every capitalised name first.
+    static func folderNameOrder(_ a: String, _ b: String) -> Bool {
+        let l = (a as NSString).lastPathComponent, r = (b as NSString).lastPathComponent
+        let c = l.localizedStandardCompare(r)
+        return c == .orderedSame ? a < b : c == .orderedAscending
+    }
+
     public func folderTree(videoOnly: Bool = false) throws -> [FolderNode] {
         var counts = try catalog.folderCounts(videoOnly: videoOnly)
         // Union in real filesystem directories from the primary vault (so empty dirs appear).
@@ -253,10 +261,10 @@ public final class LibraryService: Sendable {
         }
         func build(_ path: String) -> FolderNode {
             var node = byPath[path]!
-            node.children = (childPaths[path] ?? []).sorted().map(build)
+            node.children = (childPaths[path] ?? []).sorted(by: Self.folderNameOrder).map(build)
             return node
         }
-        var tree = rootPaths.sorted().map(build)
+        var tree = rootPaths.sorted(by: Self.folderNameOrder).map(build)
         // Photos sitting directly in the library root (dirPath "") have no subfolder node, so they'd
         // be invisible in the Folders view. Surface them as a top-level node named after the library
         // folder; selecting it browses the loose root photos via `items(inDir: "")`.
