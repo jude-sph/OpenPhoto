@@ -34,7 +34,7 @@ extension AppState {
                 .filter { wanted.contains($0.item.hash) }
             // Batched: one bin-log rewrite and one rescan per vault (was a full rescan per photo).
             let restored = ((try? await library.restore(entries)) ?? []).count
-            try? refreshQueries()
+            await refreshQueriesAsync()
             // Failures: entries that errored + hashes with no bin entry left at all.
             let foundHashes = Set(entries.map(\.item.hash))
             let failures = (entries.count - restored) + wanted.subtracting(foundHashes).count
@@ -60,8 +60,9 @@ extension AppState {
             }
             // movePhotos already alerts its own failures and is stale-safe (.missing skips).
             for group in groups {
-                await movePhotos(ids: group.ids, into: group.destDir)
+                await movePhotos(ids: group.ids, into: group.destDir, refresh: false)
             }
+            if !groups.isEmpty { await refreshQueriesAsync() }   // once for the whole undo, not per group
             if unresolved > 0 {
                 let alert = NSAlert()
                 alert.messageText = "Couldn't undo Move for \(unresolved) item\(unresolved == 1 ? "" : "s")"
@@ -90,7 +91,7 @@ extension AppState {
             }
             do {
                 try await library.rename(item, to: oldName)
-                try refreshQueries()
+                await refreshQueriesAsync()
             } catch {
                 let alert = NSAlert()
                 alert.messageText = "Couldn't undo Rename"

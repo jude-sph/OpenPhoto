@@ -157,7 +157,7 @@ extension AppState {
         let plan = (try? library.mergeFolderPlan(src: src, into: dest)) ?? MergeFolderPlan()
         // 1. Move the uniques, grouped by their destination sub-dir.
         for (dir, group) in Dictionary(grouping: plan.moves, by: \.intoDir) {
-            await movePhotos(ids: group.map(\.instanceID), into: dir)
+            await movePhotos(ids: group.map(\.instanceID), into: dir, refresh: false)
         }
         // 2. Bin the exact duplicates (recoverable; connected drives queue removal for review).
         if !plan.binInstanceIDs.isEmpty {
@@ -166,7 +166,7 @@ extension AppState {
         }
         // 3. Prune the now-empty source tree (safe — never removes a dir that still holds photos).
         if let primary = library.vaults.first { VaultReorganizer.pruneEmptyDirs(in: primary, under: src) }
-        try? refreshQueries()
+        await refreshQueriesAsync()
         photoMoveToken += 1
     }
 
@@ -227,7 +227,9 @@ extension AppState {
     /// durable drives now (exact targets keep basenames aligned) and queue ("moveFile")
     /// for offline ones. Drive-only items re-key their presence row immediately and move
     /// on (or queue for) their drive. One rescan at the end; the user stays in the folder.
-    func movePhotos(ids: [String], into dest: String) async {
+    /// `refresh: false` lets a caller that moves several groups in a row (merge, undo) skip the
+    /// per-group browse refresh and run ONE itself at the end.
+    func movePhotos(ids: [String], into dest: String, refresh: Bool = true) async {
         guard let library, !ids.isEmpty else { return }
         let items = (try? library.catalog.items(instanceIDs: ids)) ?? []
         guard !items.isEmpty else { return }
@@ -335,7 +337,7 @@ extension AppState {
         // Re-derive the locked flag (a photo may have moved into/out of a locked folder), then just
         // rebuild the queries.
         try? library.catalog.applyLockedFolders(lockedFolders)
-        try? refreshQueries()
+        if refresh { await refreshQueriesAsync() }
         photoMoveToken += 1
         if !undoMoves.isEmpty { recordUndo(.movePhotos(moves: undoMoves)) }
 
@@ -387,7 +389,7 @@ extension AppState {
 
         // A create adds no assets, so the timeline/folder queries just need a refresh (no full
         // rescan): `folderTree()` unions in real filesystem dirs from the primary vault.
-        try? refreshQueries()
+        await refreshQueriesAsync()
         selectedFolder = relPath
         expandedFolders.insert(relPath)
         if let parent, !parent.isEmpty { expandedFolders.insert(parent) }
@@ -504,7 +506,7 @@ extension AppState {
             try? library.catalog.clearFolderOp(id: op.id)
             try? refreshCanonicalPresence(driveVault: drive)
         }
-        try? refreshQueries()
+        await refreshQueriesAsync()
     }
 
     /// Propagate MANY queued ops with the O(whole-library) reconcile done ONCE at the end, not per op
@@ -527,7 +529,7 @@ extension AppState {
         }
         guard !touched.isEmpty else { return }
         for d in connected where touched.contains(d.id) { try? refreshCanonicalPresence(driveVault: d.vault) }
-        try? refreshQueries()                  // ONCE, not per op
+        await refreshQueriesAsync()                  // ONCE, not per op
     }
 
     /// Review "Undo" (drive = ground truth): cancel a file move. Revert the Mac (file + instance) once,
@@ -547,7 +549,7 @@ extension AppState {
         }
         try? library.catalog.applyLockedFolders(lockedFolders)
         reloadCanonicalPresence()
-        try? refreshQueries()
+        await refreshQueriesAsync()
     }
 
     // MARK: - Reconnect review payload + auto-present

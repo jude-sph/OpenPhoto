@@ -134,6 +134,6 @@ extension AppState {
             if let v = openVault(for: vr) { try? refreshCanonicalPresence(driveVault: v) }
         }
         reloadCanonicalPresence()
-        try? refreshQueries()
+        await refreshQueriesAsync()
     }
 }

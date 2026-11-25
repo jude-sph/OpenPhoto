@@ -12,13 +12,42 @@ extension AppState {
     // MARK: - Derive
 
     /// Reload settings + records, resolve against the folder tree, derive stats/places per trip.
+    /// Synchronous: the Travels mutations below re-read `travels` right after (chained edits,
+    /// selection follow-up), so they keep this path. The browse refresh computes the same thing
+    /// off-main (`computeTravels`) and lands it through `applyTravels`.
     func refreshTravels() {
-        guard let root = travelsRoot, let cat = library?.catalog else { travels = []; return }
-        travelSettings = TravelStore.loadSettings(libraryRoot: root)
-        let defs = TravelResolver.resolve(settings: travelSettings,
+        travelsGeneration &+= 1
+        guard let root = travelsRoot, let cat = library?.catalog else { applyTravels(nil); return }
+        applyTravels(Self.computeTravels(root: root, catalog: cat, folderTree: folderTree,
+                                         placeSearch: loadedPlaceSearch))   // non-forcing place index
+    }
+
+    /// Off-main trips refresh (no caller ordering depends on it) — e.g. after the place index warms.
+    func refreshTravelsAsync() async {
+        guard let root = travelsRoot, let cat = library?.catalog else { return }
+        travelsGeneration &+= 1
+        let gen = travelsGeneration
+        let tree = folderTree, search = loadedPlaceSearch
+        let snap = await Task.detached(priority: .utility) {
+            AppState.computeTravels(root: root, catalog: cat, folderTree: tree, placeSearch: search)
+        }.value
+        guard gen == travelsGeneration, library?.catalog === cat else { return }
+        applyTravels(snap)
+    }
+
+    struct TravelsSnapshot: Sendable {
+        var settings: TravelSettings
+        var travels: [TravelSummary]
+    }
+
+    /// Pure (any thread): reload settings + records, resolve against the folder tree, derive
+    /// stats/places per trip.
+    nonisolated static func computeTravels(root: URL, catalog cat: Catalog, folderTree: [FolderNode],
+                                           placeSearch search: PlaceSearch?) -> TravelsSnapshot {
+        let settings = TravelStore.loadSettings(libraryRoot: root)
+        let defs = TravelResolver.resolve(settings: settings,
                                           records: TravelStore.loadAll(libraryRoot: root),
                                           folderTree: folderTree)
-        let search = loadedPlaceSearch   // non-forcing: the warm-up fills it in a moment
         let sums = defs.compactMap { def -> TravelSummary? in
             let stats = (try? cat.travelStats(dirPaths: def.folders))
                 ?? TravelStats(count: 0, minTakenAtMs: nil, maxTakenAtMs: nil, earliestHash: nil)
@@ -30,9 +59,20 @@ extension AppState {
             }
             return TravelResolver.summarise(def, stats: stats, detectedPlaces: detected)
         }
-        travels = TravelResolver.sorted(sums)
+        return TravelsSnapshot(settings: settings, travels: TravelResolver.sorted(sums))
+    }
+
+    /// Land a computed trips snapshot (nil = no library → empty). Assigns only what changed, so an
+    /// unchanged refresh doesn't invalidate the Travels views.
+    func applyTravels(_ snap: TravelsSnapshot?) {
+        if let snap {
+            if travelSettings != snap.settings { travelSettings = snap.settings }
+            if travels != snap.travels { travels = snap.travels }
+        } else if !travels.isEmpty {
+            travels = []
+        }
         if let sel = selectedTravelID, !travels.contains(where: { $0.id == sel }) { selectedTravelID = nil }
-        if selectedTravelID == nil { selectedTravelID = travels.first?.id }
+        if selectedTravelID == nil, let first = travels.first?.id { selectedTravelID = first }
     }
 
     /// The trip's photos, oldest first (the Travels detail grid).

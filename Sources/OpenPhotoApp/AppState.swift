@@ -83,6 +83,13 @@ final class AppState {
     var folderTree: [FolderNode] = []
     var expandedFolders: Set<String> = []
     var binEntries: [LibraryService.BinEntry] = []
+    // Coalesced off-main browse refresh (see `refreshQueriesAsync`).
+    @ObservationIgnored var queryRefreshTask: Task<Void, Never>?
+    @ObservationIgnored var queryRefreshRequested = false
+    @ObservationIgnored var queryRefreshWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored var queryRefreshGeneration = 0
+    /// Bumped by every trips recompute so an older off-main one can't overwrite a newer result.
+    @ObservationIgnored var travelsGeneration = 0
     var deviceWatcher = DeviceWatcher()
     var openedDevice: ConnectedDevice?      // non-nil → ImportView is shown
     /// Non-nil while a Quick View peek is open. Ephemeral — its tempDir is deleted on teardown.
@@ -228,7 +235,7 @@ final class AppState {
             }.value
             guard let self, self._placeSearch == nil else { return }
             self._placeSearch = search
-            refreshTravels()   // detected places gain coordinates one tick after the load
+            await refreshTravelsAsync()   // detected places gain coordinates one tick after the load
         }
     }
 
@@ -1417,7 +1424,7 @@ final class AppState {
         try? lib.catalog.setCanonical(vr.id, demoting: oldVR.id)   // atomic catalog flip
         _ = try? newVault.writingRole(.canonical)                  // best-effort on-disk self-describe
         _ = try? oldVault.writingRole(.backup)
-        reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
+        reloadDrives(); reloadCanonicalPresence(); await refreshQueriesAsync()
         return true
     }
 
@@ -1484,7 +1491,7 @@ final class AppState {
                 try? TravelStore.syncToDrive(libraryRoot: macRoot, driveStateDir: newVault.stateDirURL)
             }
         }.value
-        reloadDrives(); reloadCanonicalPresence(); try? refreshQueries()
+        reloadDrives(); reloadCanonicalPresence(); await refreshQueriesAsync()
     }
 
     /// Clone the canonical onto `vr` (both must be connected): copy the diff hash-verified, then
@@ -1509,7 +1516,7 @@ final class AppState {
         _ = try? target.writingRole(.backup)   // self-describe on disk so any Mac identifies it correctly
         try? refreshCanonicalPresence(driveVault: target)
         reloadDrives()
-        try? refreshQueries()
+        await refreshQueriesAsync()
         let cat = lib.catalog, thumbs = lib.thumbnails
         let macRoot = lib.vaults.first?.rootURL
         await Task.detached(priority: .utility) {
@@ -1759,7 +1766,7 @@ final class AppState {
         }.value
         reloadCanonicalPresence()
         reloadDrives()
-        try? refreshQueries()
+        await refreshQueriesAsync()
     }
 
     /// Full-res URL for an item: local file, or the drive file when the drive is connected.
@@ -1803,22 +1810,44 @@ final class AppState {
     /// Catalog-only; recomputed alongside drivePendingDeletions. Drives the "Updates to sync" status.
     private(set) var drivePendingSync: [String: Int] = [:]
 
+    /// Bumped by every synchronous `refreshPendingDeletions()` so an off-main refresh pass computed
+    /// BEFORE it can't overwrite its (newer) result when it lands.
+    @ObservationIgnored var pendingDeletionsGeneration = 0
+
+    struct PendingDeletionsSnapshot: Sendable {
+        var deletions: [String: [PendingDeletion]] = [:]
+        var sync: [String: Int] = [:]
+    }
+
+    /// Synchronous recompute — used right after a presence change where the caller (a review sheet,
+    /// a drift scan) reads the result immediately. The browse refresh computes the same thing off-main.
     func refreshPendingDeletions() {
-        guard let lib = library else { drivePendingDeletions = [:]; drivePendingSync = [:]; return }
-        let queue = (try? lib.catalog.pendingDeletions()) ?? []
-        let local = (try? lib.catalog.instanceHashes()) ?? []
-        var out: [String: [PendingDeletion]] = [:]
-        var pendingSync: [String: Int] = [:]
-        for vr in durableVaults where driveIsPresent(vr) {
-            let presence = (try? lib.catalog.vaultPresenceRows(forVault: vr.id)) ?? []
+        pendingDeletionsGeneration &+= 1
+        guard let lib = library else { applyPendingDeletions(PendingDeletionsSnapshot()); return }
+        let present = durableVaults.filter { driveIsPresent($0) }.map(\.id)
+        applyPendingDeletions(Self.computePendingDeletions(catalog: lib.catalog, presentDriveIDs: present))
+    }
+
+    func applyPendingDeletions(_ s: PendingDeletionsSnapshot) {
+        if drivePendingDeletions != s.deletions { drivePendingDeletions = s.deletions }
+        if drivePendingSync != s.sync { drivePendingSync = s.sync }
+    }
+
+    /// Pure catalog computation (any thread): eligible pending deletions + "behind" counts per
+    /// connected drive.
+    nonisolated static func computePendingDeletions(catalog: Catalog, presentDriveIDs: [String]) -> PendingDeletionsSnapshot {
+        let queue = (try? catalog.pendingDeletions()) ?? []
+        let local = (try? catalog.instanceHashes()) ?? []
+        var out = PendingDeletionsSnapshot()
+        for id in presentDriveIDs {
+            let presence = (try? catalog.vaultPresenceRows(forVault: id)) ?? []
             let eligible = DeletionPropagator().eligible(queue: queue, localHashes: local, presence: presence)
-            if !eligible.isEmpty { out[vr.id] = eligible }
+            if !eligible.isEmpty { out.deletions[id] = eligible }
             // Mac photos this drive doesn't hold yet → a Sync would add them.
             let behind = local.subtracting(presence.map(\.hash)).count
-            if behind > 0 { pendingSync[vr.id] = behind }
+            if behind > 0 { out.sync[id] = behind }
         }
-        drivePendingDeletions = out
-        drivePendingSync = pendingSync
+        return out
     }
 
     /// Move the selected drive copies into the drive's bin (off the main thread), then refresh
@@ -1835,7 +1864,7 @@ final class AppState {
                 ?? DeletionPropagator.Result()
         }.value
         _ = driftScan(driveVault)        // re-derives presence + badges + drift from the updated manifest
-        try? refreshQueries()            // also calls refreshPendingDeletions()
+        await refreshQueriesAsync()       // also recomputes pending deletions
         return result
     }
 
@@ -1848,7 +1877,7 @@ final class AppState {
             // File already restored/gone from the bin — just drop the intent.
             try? lib.catalog.dequeuePendingDeletion(hash: e.hash)
         }
-        try? refreshQueries()
+        await refreshQueriesAsync()
     }
 
     /// Run a fast drift scan, set this drive's presence to verified reality, refresh badges + status.
@@ -2072,8 +2101,7 @@ final class AppState {
         // NB: leave driveDrift as the scan found it — reconcile fixes sync state (moves/copies/deletes),
         // not corruption/unadopted drift, so those must keep surfacing in the row.
         reloadCanonicalPresence()
-        refreshPendingDeletions()
-        try? refreshQueries()
+        await refreshQueriesAsync()   // includes the pending-deletions recompute (off-main)
         return result
     }
 
@@ -2117,7 +2145,7 @@ final class AppState {
                                                sourceBasenames: bases, progress: progress)
         }.value
         // 3. Reconcile on the main actor.
-        try? refreshQueries()
+        await refreshQueriesAsync()
         pokeDerivation()
         return driftScan(driveVault)
     }
@@ -2291,6 +2319,7 @@ final class AppState {
         library = nil
         openedItem = nil; openedDevice = nil; peekContext = nil
         sections = []; flatItems = []; folderTree = []; binEntries = []
+        queryRefreshGeneration &+= 1; travelsGeneration &+= 1; pendingDeletionsGeneration &+= 1
         selectedFolder = nil; selection = .timeline
         refreshToken &+= 1
 
@@ -2581,51 +2610,98 @@ final class AppState {
         refreshToken += 1       // nudge map markers, search results, inspector, dependent views
     }
 
+    /// SCHEDULE a refresh of every browse query (timeline, folder tree, bin, pending deletions,
+    /// trips) and return immediately — the work runs off the main actor (see `refreshQueriesAsync`)
+    /// and bursts coalesce. Kept `throws` + sync so existing `try? state.refreshQueries()` callers
+    /// (views, `didSet`s, sync methods) compile unchanged; it never actually throws now. Code that
+    /// needs the refreshed `sections`/`flatItems`/`folderTree`/`binEntries` must instead
+    /// `await refreshQueriesAsync()`.
     func refreshQueries() throws {
-        guard let library else { return }
-        sections = try library.timelineSections(grouping: grouping, videoOnly: videoOnly)
-        flatItems = sections.flatMap(\.items)
-        folderTree = try library.folderTree(videoOnly: videoOnly)
-        if expandedFolders.isEmpty && !folderTree.isEmpty {
-            var paths: Set<String> = []
-            func collect(_ nodes: [FolderNode]) {
-                for n in nodes { paths.insert(n.path); collect(n.children) }
-            }
-            collect(folderTree)
-            expandedFolders = paths
-        }
-        binEntries = try library.binItems()
-        refreshPendingDeletions()
-        refreshTravels()   // trips resolve against the folder tree just rebuilt above
-        refreshToken += 1
+        scheduleQueryRefresh()
     }
 
-    /// Off-main variant of `refreshQueries`: run the heavy timeline / folder-tree / bin DB reads on a
-    /// background thread, then assign the (Sendable) results on the main actor. Used by the scan loop
-    /// so re-indexing a large library doesn't beachball the UI.
+    /// Refresh every browse query off the main actor and return once a refresh that STARTED AFTER
+    /// this call has been applied (so the caller sees the effect of whatever it just mutated). The
+    /// single source of truth for the refresh: requests coalesce — while one pass is in flight, any
+    /// number of further requests collapse into exactly one more pass after it, and nothing is ever
+    /// dropped. A pass whose result is stale (library closed/switched) is discarded.
     func refreshQueriesAsync() async {
+        guard library != nil else { return }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            queryRefreshWaiters.append(c)
+            scheduleQueryRefresh()
+        }
+    }
+
+    private func scheduleQueryRefresh() {
+        guard library != nil else { return }
+        queryRefreshRequested = true
+        guard queryRefreshTask == nil else { return }   // the running loop will pick the request up
+        queryRefreshTask = Task { [weak self] in await self?.runQueryRefreshLoop() }
+    }
+
+    private func runQueryRefreshLoop() async {
+        while queryRefreshRequested {
+            queryRefreshRequested = false
+            // Waiters registered up to now are satisfied by this pass (it starts after their request).
+            let waiters = queryRefreshWaiters
+            queryRefreshWaiters = []
+            await performQueryRefresh()
+            for w in waiters { w.resume() }
+        }
+        queryRefreshTask = nil
+        // Belt-and-braces: never strand a waiter (e.g. a request that raced the library closing).
+        let leftover = queryRefreshWaiters
+        queryRefreshWaiters = []
+        for w in leftover { w.resume() }
+    }
+
+    /// Everything one refresh pass computes off-main. All Sendable.
+    private struct QuerySnapshot: Sendable {
+        var sections: [TimelineSection]
+        var folders: [FolderNode]
+        var bin: [LibraryService.BinEntry]
+        var pending: PendingDeletionsSnapshot
+        var travels: TravelsSnapshot?
+    }
+
+    private func performQueryRefresh() async {
         guard let library else { return }
+        queryRefreshGeneration &+= 1
+        let gen = queryRefreshGeneration
+        let pendingGen = pendingDeletionsGeneration
+        let travelsGen = travelsGeneration
         let grouping = self.grouping, videoOnly = self.videoOnly
-        let result: (sections: [TimelineSection], folders: [FolderNode], bin: [LibraryService.BinEntry])? =
-            await Task.detached(priority: .userInitiated) {
-                guard let s = try? library.timelineSections(grouping: grouping, videoOnly: videoOnly),
-                      let f = try? library.folderTree(videoOnly: videoOnly),
-                      let b = try? library.binItems() else { return nil }
-                return (s, f, b)
-            }.value
-        guard let result else { return }
-        sections = result.sections
-        flatItems = result.sections.flatMap(\.items)
-        folderTree = result.folders
+        let presentDriveIDs = durableVaults.filter { driveIsPresent($0) }.map(\.id)
+        let travelsRoot = library.vaults.first?.rootURL
+        let placeSearch = loadedPlaceSearch
+        let snap: QuerySnapshot? = await Task.detached(priority: .userInitiated) {
+            guard let s = try? library.timelineSections(grouping: grouping, videoOnly: videoOnly),
+                  let f = try? library.folderTree(videoOnly: videoOnly),
+                  let b = try? library.binItems() else { return nil }
+            let pending = AppState.computePendingDeletions(catalog: library.catalog, presentDriveIDs: presentDriveIDs)
+            let travels = travelsRoot.map {
+                AppState.computeTravels(root: $0, catalog: library.catalog, folderTree: f, placeSearch: placeSearch)
+            }
+            return QuerySnapshot(sections: s, folders: f, bin: b, pending: pending, travels: travels)
+        }.value
+        // Stale: the library was closed/switched, or a newer refresh already landed.
+        guard let snap, self.library === library, gen == queryRefreshGeneration else { return }
+        sections = snap.sections
+        flatItems = snap.sections.flatMap(\.items)
+        folderTree = snap.folders
         if expandedFolders.isEmpty && !folderTree.isEmpty {
             var paths: Set<String> = []
             func collect(_ nodes: [FolderNode]) { for n in nodes { paths.insert(n.path); collect(n.children) } }
             collect(folderTree)
             expandedFolders = paths
         }
-        binEntries = result.bin
-        refreshPendingDeletions()
-        refreshTravels()   // trips resolve against the folder tree just rebuilt above
+        binEntries = snap.bin
+        // A synchronous recompute that ran while this pass was off-main is newer — keep it.
+        if pendingGen == pendingDeletionsGeneration { applyPendingDeletions(snap.pending) }
+        if travelsGen == travelsGeneration {
+            if let t = snap.travels { applyTravels(t) } else { applyTravels(nil) }
+        }
         refreshToken += 1
     }
 
@@ -2702,7 +2778,7 @@ final class AppState {
         // gate can wrongly drop drive-only rows (exFAT mtime granularity), vanishing the photos.
         for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { try? refreshCanonicalPresence(driveVault: v) } }
         reloadCanonicalPresence()
-        try? refreshQueries()
+        await refreshQueriesAsync()
         return outcome
     }
 
@@ -2729,7 +2805,7 @@ final class AppState {
         // gate can wrongly drop drive-only rows (exFAT mtime granularity), making evicted photos vanish.
         for vr in durableVaults where driveIsPresent(vr) { if let v = openVault(for: vr) { try? refreshCanonicalPresence(driveVault: v) } }
         reloadCanonicalPresence()
-        try? refreshQueries()
+        await refreshQueriesAsync()
         return outcome
     }
 
@@ -2757,7 +2833,7 @@ final class AppState {
         do {
             _ = try await library.delete(items)
             recordUndo(.deletePhotos(hashes: hashes, count: count))
-            try refreshQueries()
+            await refreshQueriesAsync()
         } catch {
             NSAlert(error: error).runModal()
         }
@@ -2773,7 +2849,7 @@ final class AppState {
             let finalName = try await library.rename(item, to: newName)
             let newRel = dir.isEmpty ? finalName : dir + "/" + finalName
             recordUndo(.rename(vaultID: item.vaultID, relPath: newRel, oldName: oldName))
-            try refreshQueries()
+            await refreshQueriesAsync()
         } catch { NSAlert(error: error).runModal() }
     }
 
@@ -2822,6 +2898,7 @@ final class AppState {
     /// device". Never writes to the device (only enumeratePresent(), never send()).
     func reverifySentToConnectedDevices() async {
         guard let sends = sendRegistry else { return }
+        var changed = false
         for device in connectedSendTargets() {
             guard let dest = sendDestination(for: device) else { continue }
             let entries = sends.entries(forDestinationKey: dest.destinationKey)
@@ -2833,9 +2910,14 @@ final class AppState {
             }.result
             guard let present = try? enumeration.get() else { continue }
             let verdicts = SendReverifier().reconcile(entries: entries, present: present)
-            for (hash, verdict) in verdicts { reverified["\(dest.destinationKey)|\(hash)"] = verdict }
+            for (hash, verdict) in verdicts {
+                let key = "\(dest.destinationKey)|\(hash)"
+                if reverified[key] != verdict { reverified[key] = verdict; changed = true }
+            }
         }
-        try? refreshQueries()   // re-render the inspector/panel against the updated cache
+        // Only the in-memory verdict cache changed (no catalog/browse data) → a full query refresh
+        // was pure waste. Nudge the dependent views only when a verdict actually changed.
+        if changed { refreshToken += 1 }
     }
 
     /// Build a SendDestination for a connected device: AirDrop for an iPhone,
@@ -2870,7 +2952,7 @@ final class AppState {
               let destination = sendDestination(for: device) else { return nil }
         let engine = SendEngine(library: library, sends: sends, devices: devices)
         let result = await engine.run(destination: destination, items: sendItems, vault: vault, progress: progress)
-        try? refreshQueries()
+        await refreshQueriesAsync()
         return result
     }
 
