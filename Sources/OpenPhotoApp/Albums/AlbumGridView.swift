@@ -165,6 +165,7 @@ struct AlbumGridView: View {
                 thumbPixels: thumbPixels,
                 space: space,
                 library: library,
+                density: GridCellDensity(cellMin: state.gridMinSize),
                 onTap: {
                     if selectMode {
                         if let idx = index.position(of: item.instanceID) {

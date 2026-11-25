@@ -20,11 +20,14 @@ struct MediaGridCell: View, Equatable {
     let thumbPixels: Int
     let space: String
     let library: LibraryService
+    /// Coarse (two flags), so a zoom tick only re-renders the tiles when a threshold is crossed.
+    var density: GridCellDensity = .regular
     var onTap: () -> Void = {}
 
     nonisolated static func == (l: MediaGridCell, r: MediaGridCell) -> Bool {
         l.id == r.id && l.item == r.item && l.selectMode == r.selectMode && l.selected == r.selected
             && l.backedUp == r.backedUp && l.thumbPixels == r.thumbPixels && l.space == r.space
+            && l.density == r.density
     }
 
     var body: some View {
@@ -33,8 +36,11 @@ struct MediaGridCell: View, Equatable {
             selectMode: selectMode,
             selected: selected,
             rubberBandSpace: space,
-            thumbnail: ThumbnailImage(timelineItem: item, library: library, targetPixel: thumbPixels),
-            badges: { TimelineTileBadges(item: item, backedUp: backedUp) },
+            squareCorners: density.squareCorners,
+            // MediaTile clips the thumbnail to the cell, so the thumbnail doesn't clip itself too.
+            thumbnail: ThumbnailImage(timelineItem: item, library: library, targetPixel: thumbPixels,
+                                      clips: false),
+            badges: { if density.showBadges { TimelineTileBadges(item: item, backedUp: backedUp) } },
             onTap: onTap)
     }
 }
@@ -48,29 +54,35 @@ struct MediaTile<Thumb: View, Badges: View>: View {
     var selectMode: Bool = false
     var selected: Bool = false
     var rubberBandSpace: String? = nil
+    /// Small cells: clip (and ring) with square corners. One clip shape either way — only its radius
+    /// changes, so crossing the threshold never rebuilds the tile (which would reload its thumbnail).
+    var squareCorners: Bool = false
     let thumbnail: Thumb
     @ViewBuilder var badges: () -> Badges
     var onTap: () -> Void = {}
 
     var body: some View {
+        let radius: CGFloat = squareCorners ? 0 : Theme.cellRadius
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay { thumbnail }
-            .clipShape(RoundedRectangle(cornerRadius: Theme.cellRadius))   // OUTER rounding
+            .clipShape(RoundedRectangle(cornerRadius: radius))             // OUTER rounding
             .overlay { badges() }                                          // glyphs on the rounded frame
             .overlay {
                 if selectMode && selected {
-                    RoundedRectangle(cornerRadius: Theme.cellRadius)
+                    RoundedRectangle(cornerRadius: radius)
                         .strokeBorder(Theme.accent, lineWidth: 3)
                 }
             }
             .overlay(alignment: .topLeading) {
                 if selectMode {
+                    // No drop shadow (an offscreen blur pass per tile): the palette symbol carries its
+                    // own contrast — white ring/tick over an accent or dark disc.
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 20, weight: .bold))
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white, selected ? Theme.accent : .black.opacity(0.45))
-                        .shadow(radius: 2).padding(7)
+                        .padding(7)
                 }
             }
             .modifier(CellFrameIfNeeded(id: id, space: rubberBandSpace, active: selectMode))
@@ -137,9 +149,12 @@ struct TimelineTileBadges: View {
         }
     }
 
+    /// A flat dark disc behind the glyph keeps it readable on bright photos. It replaces a
+    /// `.shadow(radius: 2)` — an offscreen blur pass per glyph per tile — at the same 6 pt inset.
     private func glyph(_ symbol: String, size: CGFloat, color: Color) -> some View {
         Image(systemName: symbol).font(.system(size: size))
-            .foregroundStyle(color).shadow(radius: 2).padding(6)
+            .foregroundStyle(color)
+            .padding(3).background(.black.opacity(0.4), in: Circle()).padding(3)
     }
 
     private func capsule(symbol: String, text: String? = nil) -> some View {

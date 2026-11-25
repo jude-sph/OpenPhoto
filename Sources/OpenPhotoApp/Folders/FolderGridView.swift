@@ -142,6 +142,7 @@ struct FolderGridView: View {
                 thumbPixels: thumbPixels,
                 space: "foldergrid",
                 library: library,
+                density: GridCellDensity(cellMin: state.gridMinSize),
                 onTap: {
                     if selectMode {
                         if let idx = index.position(of: item.instanceID) {

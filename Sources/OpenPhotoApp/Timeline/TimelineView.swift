@@ -136,6 +136,7 @@ struct TimelineView: View {
                 thumbPixels: thumbPixels,
                 space: "timelinegrid",
                 library: library,
+                density: GridCellDensity(cellMin: state.gridMinSize),
                 onTap: {
                     if selectMode {
                         if let idx = index.position(of: item.hash) {

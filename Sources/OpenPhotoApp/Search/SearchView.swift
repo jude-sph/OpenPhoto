@@ -276,6 +276,7 @@ struct SearchView: View {
                             thumbPixels: thumbPixels,
                             space: "searchgrid",
                             library: state.library!,
+                            density: GridCellDensity(cellMin: state.gridMinSize),
                             onTap: {
                                 if selectMode {
                                     if let idx = index.position(of: item.hash) {
