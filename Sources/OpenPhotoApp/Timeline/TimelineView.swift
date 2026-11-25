@@ -99,7 +99,30 @@ struct TimelineView: View {
         }
     }
 
-    private var grid: some View {
+    /// The AppKit grid (`NativePhotoGrid`: NSCollectionView, recycled layer-backed cells). Set to
+    /// false to fall back to the SwiftUI `LazyVGrid` path below, unchanged.
+    private static let useNativeGrid = true
+
+    @ViewBuilder private var grid: some View {
+        if Self.useNativeGrid { nativeGrid } else { swiftUIGrid }
+    }
+
+    private var nativeGrid: some View {
+        NativePhotoGrid(
+            sections: state.sections,
+            showHeaders: state.grouping != .none,
+            minCellSize: state.gridMinSize,
+            setMinCellSize: { state.gridMinSize = $0 },
+            library: state.library,
+            selectMode: selectMode,
+            selection: $selection,
+            selectionIndex: index,
+            backedUp: state.canonicalPresence,
+            onOpen: { item in state.openViewer(item, within: state.flatItems) },
+            contextMenu: { item in ImageClipboard.contextMenu(for: copyTargets(for: item), state: state) })
+    }
+
+    private var swiftUIGrid: some View {
         ScrollView {
             LazyVStack(spacing: Theme.gridGap, pinnedViews: [.sectionHeaders]) {
                 ForEach(state.sections, id: \.dayStartMs) { section in
