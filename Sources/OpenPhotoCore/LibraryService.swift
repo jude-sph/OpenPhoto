@@ -24,6 +24,19 @@ public final class LibraryService: Sendable {
     public let thumbnails: ThumbnailStore
     private let sidecarStores: [String: SidecarStore]   // vaultID → store
     private let binStores: [String: BinStore]
+    /// Parsed sidecars by absolute sidecar path, valid while the file's size + mtime are unchanged.
+    /// `ingestSidecars` runs after EVERY scan (watcher tick, import batch, folder move) and used to
+    /// re-read and re-parse every sidecar in the library each time — ~70% of a rescan on a 25k-photo
+    /// library, and the reason a folder move sat on "Indexing library". In-memory only: the first
+    /// scan after launch reads them all, later scans stat them and parse only what changed.
+    private let sidecarCache = SidecarCache()
+    private final class SidecarCache: @unchecked Sendable {
+        struct Entry { let size: Int64; let mtimeSec: Int; let mtimeNsec: Int; let data: SidecarData }
+        private let lock = NSLock()
+        private var entries: [String: Entry] = [:]
+        func get(_ path: String) -> Entry? { lock.lock(); defer { lock.unlock() }; return entries[path] }
+        func set(_ path: String, _ e: Entry?) { lock.lock(); defer { lock.unlock() }; entries[path] = e }
+    }
 
     public init(vaultRoots: [URL], appSupportDir: URL) throws {
         var vs: [Vault] = []
@@ -75,9 +88,29 @@ public final class LibraryService: Sendable {
         var batch: [Catalog.SidecarMetadata] = []
         var regions: [String: [FaceRegion]] = [:]
         let encoder = JSONEncoder()
+        _ = store
+        let root = vault.rootURL.path
         for entry in try Manifest.read(from: vault.manifestURL) {
-            guard let data = try? store.read(forMediaRelPath: entry.path),
-                  data != .empty else { continue }
+            // <dir>/.openphoto/<name>.xmp (format §5), built as a plain path: one stat per photo, and
+            // a read + parse only when the sidecar is new or its size/mtime changed.
+            let rel = entry.path as NSString
+            let dir = rel.deletingLastPathComponent
+            let path = root + "/" + (dir.isEmpty ? "" : dir + "/") + Vault.stateDirName + "/"
+                + rel.lastPathComponent + ".xmp"
+            var st = stat()
+            guard stat(path, &st) == 0 else { sidecarCache.set(path, nil); continue }   // no sidecar
+            let size = Int64(st.st_size), sec = Int(st.st_mtimespec.tv_sec), nsec = Int(st.st_mtimespec.tv_nsec)
+            let data: SidecarData
+            if let hit = sidecarCache.get(path), hit.size == size, hit.mtimeSec == sec, hit.mtimeNsec == nsec {
+                data = hit.data
+            } else {
+                // A corrupt/unreadable sidecar is skipped (and not cached, so a repair is picked up).
+                guard let raw = FileManager.default.contents(atPath: path),
+                      let parsed = try? XMP.parse(raw) else { continue }
+                sidecarCache.set(path, .init(size: size, mtimeSec: sec, mtimeNsec: nsec, data: parsed))
+                data = parsed
+            }
+            guard data != .empty else { continue }
             let tags = String(data: try encoder.encode(data.tags), encoding: .utf8) ?? "[]"
             batch.append(Catalog.SidecarMetadata(hash: entry.hash.stringValue, favorite: data.favorite,
                                                  rating: data.rating, caption: data.caption,

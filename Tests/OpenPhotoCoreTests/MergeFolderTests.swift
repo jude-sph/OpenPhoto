@@ -95,3 +95,31 @@ private func mergeLibrary(_ t: TestDirs, _ files: [(rel: String, date: String)])
     #expect(try Manifest.read(from: vault.manifestURL).map(\.path).sorted()
             == ["a/one.jpg", "b/three.jpg", "c/four.jpg"])
 }
+
+// Sidecars are cached between scans (parsed once, re-read only when size/mtime change): an edit made
+// outside the app must still be picked up by the next scan, and a moved folder's sidecars re-read.
+@Test func cachedSidecarsStillPickUpExternalEditsAndMoves() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try await mergeLibrary(t, [("a/one.jpg", "01"), ("b/two.jpg", "02")])
+    let vault = try #require(lib.vaults.first)
+    let one = try #require(try lib.items(inDir: "a").first)
+    try lib.updateMetadata(for: one, rating: 2, favorite: false, caption: nil, tags: ["x"])
+    try await lib.scanAll()                                           // caches a/one's sidecar
+    #expect(try lib.items(inDir: "a").first?.rating == 2)
+
+    // External edit: rewrite the sidecar in place with a different rating (and a later mtime).
+    let sidecar = vault.sidecarURL(forMediaAt: vault.absoluteURL(forRelativePath: "a/one.jpg"))
+    var data = try XMP.parse(try Data(contentsOf: sidecar)); data.rating = 5; data.favorite = true
+    try Data(XMP.serialize(data).utf8).write(to: sidecar)
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)],
+                                          ofItemAtPath: sidecar.path)
+    try await lib.scanAll()
+    let after = try #require(try lib.items(inDir: "a").first)
+    #expect(after.rating == 5 && after.favorite)
+
+    // A moved folder carries its sidecars to new paths; metadata survives the rescan.
+    _ = try VaultReorganizer.moveFolder(in: vault, relPath: "a", intoParentRelPath: "b")
+    try await lib.scanAll()
+    let moved = try #require(try lib.items(inDir: "b/a").first)
+    #expect(moved.rating == 5 && moved.favorite && moved.relPath == "b/a/one.jpg")
+}
