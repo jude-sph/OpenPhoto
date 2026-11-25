@@ -22,7 +22,8 @@ extension Catalog {
     private static func driveSelect(notExists: String, dedup: String) -> String { """
         SELECT a.hash, a.kind, a.takenAtMs, a.pixelWidth, a.pixelHeight, a.latitude, a.longitude,
                a.cameraModel, a.lensModel, a.durationSeconds, a.livePairHash, a.favorite, a.rating,
-               a.caption, a.tagsJSON, a.rotation, vp.vaultID, vp.relPath, vp.dirPath, vp.size, 0 AS locked, vp.driveRelPath
+               a.caption, a.tagsJSON, a.rotation, vp.vaultID, vp.relPath, vp.dirPath, vp.size,
+               CASE WHEN \(lockedDirMatch("vp.dirPath")) THEN 1 ELSE 0 END AS locked, vp.driveRelPath
         FROM assets a JOIN vault_presence vp ON vp.hash = a.hash
         WHERE a.isLivePairedVideo = 0
           AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.hash = a.hash\(notExists))
@@ -52,6 +53,14 @@ extension Catalog {
 
     // MARK: Locked-folder visibility gate
 
+    /// SQL predicate: `dirColumn` (a code-controlled column ref) is a locked folder or nested under
+    /// one, per the applied lock list in `temp.locked_dirs`. Drive-only (evicted) rows carry no
+    /// `instances.locked` flag, so they are gated by their Mac folder path through this.
+    static func lockedDirMatch(_ dirColumn: String) -> String {
+        "EXISTS (SELECT 1 FROM temp.locked_dirs ld WHERE \(dirColumn) = ld.dirPath" +
+            " OR substr(\(dirColumn), 1, length(ld.dirPath) + 1) = ld.dirPath || '/')"
+    }
+
     /// When false (default), user-facing browse methods hide locked rows. The App flips it true for
     /// the session after Touch ID. In-memory only — re-locks naturally on quit.
     /// This is visibility-gating, not encryption.
@@ -67,19 +76,35 @@ extension Catalog {
     /// the session is revealed. `hashColumn` is a code-controlled column ref like "f.hash" (not user input).
     /// Photos with NO instances at all (orphans / drive-only / test fixtures) are not filtered — they have
     /// never been placed in a locked folder, so the lock check is vacuously satisfied.
+    /// A photo with no instance but drive presence (evicted) is visible only if one of its presence
+    /// rows lies outside every locked folder.
     func lockedVisibilityClause(hashColumn: String) -> String {
-        revealLocked ? "" :
-            "AND (NOT EXISTS (SELECT 1 FROM instances vi WHERE vi.hash = \(hashColumn))" +
-            " OR EXISTS (SELECT 1 FROM instances vi WHERE vi.hash = \(hashColumn) AND vi.locked = 0))"
+        guard !revealLocked else { return "" }
+        let noInstance = "NOT EXISTS (SELECT 1 FROM instances vi WHERE vi.hash = \(hashColumn))"
+        let unlockedInstance = "EXISTS (SELECT 1 FROM instances vi WHERE vi.hash = \(hashColumn) AND vi.locked = 0)"
+        guard hasLockedDirs else { return "AND (\(noInstance) OR \(unlockedInstance))" }
+        let presenceOK = "(NOT EXISTS (SELECT 1 FROM vault_presence vq WHERE vq.hash = \(hashColumn))" +
+            " OR EXISTS (SELECT 1 FROM vault_presence vq WHERE vq.hash = \(hashColumn)" +
+            " AND NOT \(Self.lockedDirMatch("vq.dirPath"))))"
+        return "AND ((\(noInstance) AND \(presenceOK)) OR \(unlockedInstance))"
     }
+
+    /// Whether the applied lock list is non-empty (lets the common no-locks case skip the
+    /// drive-presence half of `lockedVisibilityClause`).
+    var hasLockedDirs: Bool { lockedLock.withLock { _hasLockedDirs } }
 
     /// Re-derive `instances.locked` from the locked-folder list: clear all, then mark instances
     /// whose dirPath equals or is nested under a locked folder (same GLOB the Folders view uses).
     /// Rebuildable — re-calling with the same list is idempotent.
+    /// The list is also kept in `temp.locked_dirs` so drive-only (evicted) rows are gated by path.
     public func applyLockedFolders(_ dirPaths: [String]) throws {
+        defer { lockedLock.withLock { _hasLockedDirs = !dirPaths.isEmpty } }
         try dbQueue.write { db in
             try db.execute(sql: "UPDATE instances SET locked = 0")
+            try db.execute(sql: "DELETE FROM temp.locked_dirs")
             for p in dirPaths {
+                try db.execute(sql: "INSERT OR IGNORE INTO temp.locked_dirs (dirPath) VALUES (?)",
+                               arguments: [p])
                 try db.execute(sql: "UPDATE instances SET locked = 1 WHERE dirPath = ? OR dirPath GLOB ?",
                                arguments: [p, p + "/*"])
             }
@@ -182,12 +207,13 @@ extension Catalog {
                 counts[r["d"], default: 0] += (r["n"] as Int)
             }
             // Drive-only branch (only when not restricted to a local vault)
-            // Drive-only rows are never locked (v1), so no lock filter needed here.
+            // Drive-only rows are gated by their Mac folder path against the lock list.
             if vaultID == nil {
+                let dlf = lockedFilter.isEmpty ? "" : " AND NOT \(Self.lockedDirMatch("vp.dirPath"))"
                 let dsql = """
                     SELECT vp.dirPath AS d, COUNT(*) AS n FROM vault_presence vp
                     JOIN assets a ON a.hash = vp.hash
-                    WHERE a.isLivePairedVideo = 0\(vf)
+                    WHERE a.isLivePairedVideo = 0\(vf)\(dlf)
                       AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.hash = vp.hash AND i.relPath = vp.relPath)
                       AND vp.rowid = (SELECT MIN(rowid) FROM vault_presence v2 WHERE v2.relPath = vp.relPath)
                     GROUP BY vp.dirPath
@@ -203,18 +229,23 @@ extension Catalog {
     /// Every local original (one row per `instances` row), built as a `TimelineItem` with
     /// `driveRelPath == nil`. This is the local branch of the browse union, undeduped — the same
     /// content in two folders yields two rows. Storage's evict-all gather filters this set.
+    /// Locked-folder instances are left out unless the session is revealed (bulk evict skips them).
     public func allLocalInstances() throws -> [TimelineItem] {
-        try dbQueue.read { db in
-            try TimelineItem.fetchAll(db, sql: Self.localSelect)
+        let lf = lockedFilter.isEmpty ? "" : " AND i.locked = 0"
+        return try dbQueue.read { db in
+            try TimelineItem.fetchAll(db, sql: Self.localSelect + lf)
         }
     }
 
     /// Every asset present on a drive but absent from the Mac (no local `instances` row), one row per
     /// asset (deduped via MIN(rowid) when on multiple drives), built with `driveRelPath` set. The exact
     /// drive-only branch the Folders view surfaces. Storage's rehydrate-all gather uses this set.
+    /// Items in a locked folder are left out unless the session is revealed (bulk rehydrate skips them).
     public func allDriveOnlyItems() throws -> [TimelineItem] {
-        try dbQueue.read { db in
-            try TimelineItem.fetchAll(db, sql: Self.driveSelectByLocation)
+        let lf = lockedFilter
+        return try dbQueue.read { db in
+            try TimelineItem.fetchAll(db, sql: lf.isEmpty ? Self.driveSelectByLocation
+                                                         : "SELECT * FROM (\(Self.driveSelectByLocation)) WHERE 1=1 \(lf)")
         }
     }
 

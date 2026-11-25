@@ -28,6 +28,7 @@ public final class Catalog: Sendable {
     let lockedLock = NSLock()
     // `nonisolated(unsafe)` because all access is guarded by `lockedLock` above.
     nonisolated(unsafe) var _revealLocked = false
+    nonisolated(unsafe) var _hasLockedDirs = false
 
     public init(at url: URL) throws {
         try FileManager.default.createDirectory(
@@ -308,6 +309,13 @@ public final class Catalog: Sendable {
             }
         }
         try migrator.migrate(dbQueue)
+        // The locked-folder list, for gating drive-only (evicted) rows by their Mac folder path —
+        // they have no `instances.locked` flag. A TEMP table: per-connection, so it is never written
+        // to the catalog file or a catalog snapshot (VACUUM INTO copies `main` only); the App
+        // re-applies the list on every open via `applyLockedFolders`.
+        try dbQueue.write { db in
+            try db.execute(sql: "CREATE TEMP TABLE IF NOT EXISTS locked_dirs (dirPath TEXT PRIMARY KEY)")
+        }
     }
 
     public func registerVault(id: String, role: String, rootPath: String) throws {
@@ -708,9 +716,12 @@ public final class Catalog: Sendable {
             // on EVERY scan, exposing locked folders in the grid, timeline, faces and search until a
             // manual lock/unlock re-applied it. Capture the locked folders first, then re-mark them
             // (recursively) after re-insert, so a scan can no longer leak locked content.
-            let lockedDirs = try String.fetchAll(db, sql:
-                "SELECT DISTINCT dirPath FROM instances WHERE vaultID = ? AND locked = 1",
-                arguments: [vaultID])
+            // Plus the applied lock list itself: a locked folder whose photos were all evicted has
+            // no locked instance left to remember it by, and a rehydrate must land back locked.
+            let lockedDirs = try String.fetchAll(db, sql: """
+                SELECT DISTINCT dirPath FROM instances WHERE vaultID = ? AND locked = 1
+                UNION SELECT dirPath FROM temp.locked_dirs
+                """, arguments: [vaultID])
             // Apply as a DIFF against the rows already there: a rescan that found nothing new touches
             // no rows at all (was DELETE-all + re-insert of every row, on every scan). The end state
             // is identical to the wholesale replace — the catalog may be empty or stale (it is
