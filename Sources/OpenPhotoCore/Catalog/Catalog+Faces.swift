@@ -103,6 +103,70 @@ extension Catalog {
         }
     }
 
+    /// Reconstitute confirmed person assignments from sidecar `mwg-rs:Regions` (hash → regions), the
+    /// durable record of them — so a catalog rebuilt from scratch gets its named people back.
+    /// Additive and idempotent, one write transaction. Per region, on an asset the catalog knows:
+    ///  • a named row (any source) already overlapping it (IoU > 0.4) → skip; the catalog's existing
+    ///    human decision is never overwritten;
+    ///  • else an unassigned auto face overlapping it → promote it (person + 'confirmed'; keeps its
+    ///    detected rect and embedding);
+    ///  • else insert it: a full-image region (what a manual tag writes) as `source='manual'`, anything
+    ///    else as `source='confirmed'`; both without an embedding (dim 0) — a later detection of the same
+    ///    face refreshes a confirmed row's embedding in place via `replaceFaces`.
+    /// People are matched by exact name (lowest id wins) and created only when a row actually needs one.
+    public func applySidecarFaceRegions(_ regionsByHash: [String: [FaceRegion]]) throws {
+        let work = regionsByHash.filter { !$0.value.isEmpty }
+        guard !work.isEmpty else { return }
+        try dbQueue.write { db in
+            var personByName: [String: Int64] = [:]
+            for r in try Row.fetchAll(db, sql: "SELECT id, name FROM people ORDER BY id DESC") {
+                personByName[r["name"]] = r["id"]       // descending → the lowest id is written last
+            }
+            func person(_ name: String) throws -> Int64 {
+                if let id = personByName[name] { return id }
+                try db.execute(sql: "INSERT INTO people (name, createdAtMs) VALUES (?, ?)",
+                               arguments: [name, Int64(Date().timeIntervalSince1970 * 1000)])
+                personByName[name] = db.lastInsertedRowID
+                return db.lastInsertedRowID
+            }
+            for (hash, regions) in work {
+                guard try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM assets WHERE hash = ?)",
+                                        arguments: [hash]) == true else { continue }
+                var rows: [(id: Int64, rect: CGRect, named: Bool)] = []
+                for row in try Row.fetchAll(db, sql: """
+                    SELECT id, rectX, rectY, rectW, rectH, personID FROM faces WHERE hash = ?
+                    """, arguments: [hash]) {
+                    let x: Double = row["rectX"], y: Double = row["rectY"]
+                    let w: Double = row["rectW"], h: Double = row["rectH"]
+                    let pid: Int64? = row["personID"]
+                    let id: Int64 = row["id"]
+                    rows.append((id: id, rect: CGRect(x: x, y: y, width: w, height: h), named: pid != nil))
+                }
+                for region in regions where !region.name.isEmpty {
+                    let r = region.visionRect
+                    if rows.contains(where: { $0.named && Self.iou($0.rect, r) > 0.4 }) { continue }
+                    let pid = try person(region.name)
+                    if let i = rows.firstIndex(where: { !$0.named && Self.iou($0.rect, r) > 0.4 }) {
+                        try db.execute(sql: """
+                            UPDATE faces SET personID = ?, source = 'confirmed', hidden = 0 WHERE id = ?
+                            """, arguments: [pid, rows[i].id])
+                        rows[i].named = true
+                        continue
+                    }
+                    let nearOrigin = abs(r.minX) < 1e-4 && abs(r.minY) < 1e-4
+                    let isFullImage = nearOrigin && abs(r.width - 1) < 1e-4 && abs(r.height - 1) < 1e-4
+                    try db.execute(sql: """
+                        INSERT INTO faces (hash, rectX, rectY, rectW, rectH, embedding, dim,
+                                           personID, confidence, source, quality)
+                        VALUES (?,?,?,?,?,?,0,?,0,?,0)
+                        """, arguments: [hash, r.minX, r.minY, r.width, r.height, Data(), pid,
+                                         isFullImage ? "manual" : "confirmed"])
+                    rows.append((id: db.lastInsertedRowID, rect: r, named: true))
+                }
+            }
+        }
+    }
+
     /// Intersection-over-union of two boxes (0 = disjoint, 1 = identical).
     private static func iou(_ a: CGRect, _ b: CGRect) -> Double {
         let i = a.intersection(b)

@@ -73,6 +73,7 @@ public final class LibraryService: Sendable {
         // Read every sidecar, then apply in ONE write transaction that only touches rows whose
         // values actually differ (was two write transactions per sidecar, on every rescan).
         var batch: [Catalog.SidecarMetadata] = []
+        var regions: [String: [FaceRegion]] = [:]
         let encoder = JSONEncoder()
         for entry in try Manifest.read(from: vault.manifestURL) {
             guard let data = try? store.read(forMediaRelPath: entry.path),
@@ -81,8 +82,11 @@ public final class LibraryService: Sendable {
             batch.append(Catalog.SidecarMetadata(hash: entry.hash.stringValue, favorite: data.favorite,
                                                  rating: data.rating, caption: data.caption,
                                                  tagsJSON: tags, rotation: data.rotation))
+            if !data.faces.isEmpty { regions[entry.hash.stringValue, default: []] += data.faces }
         }
         try catalog.applySidecarMetadata(batch)
+        // Confirmed people (mwg-rs:Regions) — additive/idempotent, so a rebuilt catalog gets them back.
+        try catalog.applySidecarFaceRegions(regions)
     }
 
     // MARK: Browse
