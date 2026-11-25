@@ -166,7 +166,7 @@ struct SearchView: View {
         var paths: [String] = []
         func walk(_ nodes: [FolderNode]) { for n in nodes { paths.append(n.path); walk(n.children) } }
         walk(state.folderTree)
-        return paths.sorted()
+        return paths.sortedAsFolderPaths()
     }
     private func folderMenuLabel(_ path: String) -> String {
         if path.isEmpty { return state.folderTree.first { $0.path == "" }?.name ?? "Library Root" }

@@ -372,7 +372,7 @@ struct ImportView: View {
     }
 
     /// Their folders, sorted; checking a folder includes its whole subtree.
-    private var foreignFolderList: [String] { foreignFolderCounts.keys.sorted() }
+    private var foreignFolderList: [String] { foreignFolderCounts.keys.sortedAsFolderPaths() }
 
     private var folderPanel: some View {
         List {
@@ -408,7 +408,7 @@ struct ImportView: View {
         var paths: [String] = []
         func walk(_ nodes: [FolderNode]) { for n in nodes { paths.append(n.path); walk(n.children) } }
         walk(state.folderTree)
-        return paths.sorted()
+        return paths.sortedAsFolderPaths()
     }
     /// Picker options including a just-typed new folder, so selecting it never shows a blank menu.
     private var pickerFolders: [String] {

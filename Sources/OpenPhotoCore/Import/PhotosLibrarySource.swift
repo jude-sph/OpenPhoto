@@ -101,10 +101,16 @@ public final class PhotosLibrarySource: ImportSource, @unchecked Sendable {
             // error stands.
             guard item.id.hasSuffix(":\(Role.edited.rawValue)") else { throw error }
             try? FileManager.default.removeItem(at: url)   // a failed write may leave a partial file
+            let resourceError = error
             do {
                 if entry.kind == .video { try await Self.renderCurrentVideo(entry.asset, to: url) }
                 else { try await Self.renderCurrentPhoto(entry.asset, to: url) }
-            } catch { throw error }   // report the render's own failure
+            } catch {
+                try? FileManager.default.removeItem(at: url)
+                // Say what this is: only the EDITED copy failed (the original is its own item), and
+                // keep both underlying errors so the cause can be diagnosed.
+                throw EditedRenditionUnavailable(resource: resourceError, render: error)
+            }
         }
         if entry.favorite, item.kind == .photo {
             try? EmbeddedMetadata.embed(
@@ -113,8 +119,55 @@ public final class PhotosLibrarySource: ImportSource, @unchecked Sendable {
         }
     }
 
-    /// Export the asset's current (edited) video as Photos renders it, at the highest quality.
+    /// Photos could not supply an asset's edited version by any route.
+    struct EditedRenditionUnavailable: LocalizedError, CustomStringConvertible {
+        var description: String { errorDescription ?? "edited version unavailable" }
+        let resource: any Error, render: any Error
+        var errorDescription: String? {
+            func short(_ e: any Error) -> String { let n = e as NSError; return "\(n.domain) \(n.code)" }
+            return "Apple Photos couldn't provide the edited version (the original is imported separately). "
+                + "Stored copy: \(short(resource)); render: \(short(render))."
+        }
+    }
+
+    /// The asset's current (edited) video. First the playable asset Photos hands out for the current
+    /// version — a finished file is copied as is, an on-the-fly composition (slo-mo, trims) is
+    /// exported — and only then Photos' own export session, which is the route that fails most.
     private static func renderCurrentVideo(_ asset: PHAsset, to url: URL) async throws {
+        do {
+            try await renderViaAVAsset(asset, to: url)
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            try await renderViaExportSession(asset, to: url)
+        }
+    }
+
+    private static func renderViaAVAsset(_ asset: PHAsset, to url: URL) async throws {
+        let opts = PHVideoRequestOptions()
+        opts.version = .current
+        opts.deliveryMode = .highQualityFormat
+        opts.isNetworkAccessAllowed = true
+        let av: AVAsset = try await withCheckedThrowingContinuation { c in
+            PHImageManager.default().requestAVAsset(forVideo: asset, options: opts) { av, _, info in
+                if let av {
+                    nonisolated(unsafe) let a = av
+                    c.resume(returning: a)
+                } else {
+                    c.resume(throwing: (info?[PHImageErrorKey] as? Error) ?? CocoaError(.fileReadUnknown))
+                }
+            }
+        }
+        if let file = av as? AVURLAsset {
+            try FileManager.default.copyItem(at: file.url, to: url)
+            return
+        }
+        guard let session = AVAssetExportSession(asset: av, presetName: AVAssetExportPresetHighestQuality) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try await session.export(to: url, as: .mov)
+    }
+
+    private static func renderViaExportSession(_ asset: PHAsset, to url: URL) async throws {
         let opts = PHVideoRequestOptions()
         opts.version = .current
         opts.deliveryMode = .highQualityFormat

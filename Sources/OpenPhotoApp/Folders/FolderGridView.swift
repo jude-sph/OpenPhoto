@@ -262,7 +262,7 @@ struct FolderGridView: View {
         var paths: [String] = []
         func walk(_ nodes: [FolderNode]) { for n in nodes { paths.append(n.path); walk(n.children) } }
         walk(state.folderTree)
-        return paths.sorted()
+        return paths.sortedAsFolderPaths()
     }
     /// Human label for a folder path in the move menu ("" = library root).
     private func folderMenuLabel(_ path: String) -> String {
