@@ -222,7 +222,11 @@ struct ViewerView: View {
             } else {
                 VStack(spacing: 0) {
                     topBar
-                    content.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // `content` can resolve to NO view (a video whose player isn't built yet); a frame
+                    // on nothing takes no space, so the stack collapsed and the filmstrip jumped to the
+                    // middle of the window until the player appeared. The clear fill always holds it.
+                    ZStack { Color.clear; content }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     galleryBar
                 }
             }
