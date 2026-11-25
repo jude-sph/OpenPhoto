@@ -105,7 +105,7 @@ struct BinView: View {
         restoring = true
         Task {
             _ = try? await state.library?.restore(entries)   // batched: one rescan per vault
-            try? state.refreshQueries()
+            await state.refreshQueriesAsync()   // wait, so the button re-enables once the list is empty
             restoring = false
         }
     }
