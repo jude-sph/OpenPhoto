@@ -14,6 +14,14 @@ import Foundation
 public enum ReconcilePlanner {
 
     /// The library's placements as drive paths.
+    ///
+    /// Drive-only content follows the Mac's moves of it: moving an evicted photo (or a folder holding
+    /// some) re-keys that drive's presence rows onto the new path (`relPath` and `driveRelPath`) and
+    /// queues an op, while the drive's manifest still lists the old path. For a drive-only hash, each
+    /// manifest path with no presence row is paired (sorted, like relocations) with a presence path the
+    /// manifest lacks, and the content is desired at the presence path — so the plan relocates it
+    /// rather than the post-reconcile presence projection silently reverting the move. Unpaired
+    /// manifest paths stay desired as they are (conservative: an evicted original is never dropped).
     public static func desired(drive: Vault, localVault: Vault, catalog: Catalog) throws -> Set<Placement> {
         var out = Set<Placement>()
         var localHashes = Set<String>()
@@ -24,10 +32,24 @@ public enum ReconcilePlanner {
         // Drive-only content: keep (evicted original) unless it's a queued deletion (honor it). Read
         // from the manifest — the faithful multi-path record (vault_presence is deduped per hash).
         let deleted = Set(try catalog.pendingDeletions().map(\.hash))
+        var manifestPaths: [String: Set<String>] = [:]          // drive-only hash -> manifest paths
         for e in try Manifest.read(from: drive.manifestURL) {
             let h = e.hash.stringValue
             if localHashes.contains(h) || deleted.contains(h) { continue }
-            out.insert(Placement(hash: h, path: e.path))
+            manifestPaths[h, default: []].insert(e.path)
+        }
+        var presencePaths: [String: Set<String>] = [:]
+        for row in try catalog.vaultPresenceRows(forVault: drive.id) where manifestPaths[row.hash] != nil {
+            presencePaths[row.hash, default: []].insert(row.driveRelPath)
+        }
+        for (h, m) in manifestPaths {
+            let p = presencePaths[h] ?? []
+            let moved = m.subtracting(p).sorted(), movedTo = p.subtracting(m).sorted()
+            let paired = min(moved.count, movedTo.count)
+            for path in m where !moved.prefix(paired).contains(path) {
+                out.insert(Placement(hash: h, path: path))
+            }
+            for path in movedTo.prefix(paired) { out.insert(Placement(hash: h, path: path)) }
         }
         return out
     }
