@@ -221,7 +221,8 @@ struct MapView: View {
 
     private func zoomIntoCluster(_ cluster: MapCluster) {
         // Compute bounding box of the cluster's assets, then animate to it
-        let assets = allAssets.filter { cluster.hashes.contains($0.hash) }
+        let members = Set(cluster.hashes)   // O(1) membership; Array.contains made this O(N·k)
+        let assets = allAssets.filter { members.contains($0.hash) }
         guard !assets.isEmpty else { return }
         let minLat = assets.map(\.lat).min()!
         let maxLat = assets.map(\.lat).max()!
