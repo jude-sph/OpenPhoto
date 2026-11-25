@@ -437,6 +437,17 @@ public final class Catalog: Sendable {
         }
     }
 
+    /// Drop queued deletions whose content is still (or again) in the local library. A deletion is
+    /// queued by HASH, so deleting one of two duplicate copies — or deleting a photo and re-importing
+    /// it — leaves a row for content the user still has. Left in place, that row makes a LATER evict
+    /// of the remaining copy look like a deletion, and reconcile bins the drive's only copy. The drive
+    /// copy of a deleted duplicate is still cleaned up — by path, as a stale removal.
+    public func purgePendingDeletionsStillInLibrary() throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM pending_deletions WHERE hash IN (SELECT hash FROM instances)")
+        }
+    }
+
     public func clearPendingDeletions(hashes: [String]) throws {
         guard !hashes.isEmpty else { return }
         try dbQueue.write { db in

@@ -51,3 +51,20 @@ private func mergeLibrary(_ t: TestDirs, _ files: [(rel: String, date: String)])
     #expect(plan.moves.count == 1)                            // one copy moves into b
     #expect(plan.binInstanceIDs.count == 1)                   // the intra-src duplicate is binned
 }
+
+// Merging a folder INTO ITS PARENT: the parent's recursive listing contains the source's own photos,
+// which used to make every one an "exact duplicate" of itself → the whole folder was binned.
+@Test func mergeIntoParentMovesPhotosInsteadOfBinningThem() async throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let lib = try await mergeLibrary(t, [
+        ("Trips/Japan/a.jpg", "01"),
+        ("Trips/Japan/day2/b.jpg", "02"),
+        ("Trips/Japan/dupe.jpg", "03"),   // same bytes as Trips/other.jpg → a REAL duplicate
+        ("Trips/other.jpg", "03"),
+    ])
+    let plan = try lib.mergeFolderPlan(src: "Trips/Japan", into: "Trips")
+    let moves = Dictionary(uniqueKeysWithValues: plan.moves.map {
+        (($0.instanceID as NSString).lastPathComponent, $0.intoDir) })
+    #expect(moves == ["a.jpg": "Trips", "b.jpg": "Trips/day2"])
+    #expect(plan.binInstanceIDs.count == 1 && plan.binInstanceIDs[0].hasSuffix("|Trips/Japan/dupe.jpg"))
+}

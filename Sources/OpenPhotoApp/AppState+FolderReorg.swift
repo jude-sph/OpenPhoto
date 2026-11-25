@@ -580,6 +580,16 @@ extension AppState {
         }
         if let sel = selectedFolder { selectedFolder = remap(sel) }
         expandedFolders = Set(expandedFolders.map(remap))
+        // A lock is stored by PATH: moving or renaming a locked folder (or any ancestor) must carry
+        // the lock to the new path, or the folder silently unlocks and stays unlocked.
+        let remappedLocks = lockedFolders.map(remap)
+        if remappedLocks != lockedFolders {
+            lockedFolders = remappedLocks
+            if let root = library?.vaults.first?.rootURL {
+                try? LockedFolderStore.save(lockedFolders, libraryRoot: root)
+            }
+            try? library?.catalog.applyLockedFolders(lockedFolders)
+        }
     }
 }
 

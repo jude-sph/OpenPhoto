@@ -60,6 +60,7 @@ public final class LibraryService: Sendable {
             try await Task.detached(priority: .utility) { [catalog] in
                 _ = try await Scanner.scan(vault: vault, catalog: catalog) { p?($0) }
             }.value
+            try? catalog.purgePendingDeletionsStillInLibrary()
             try ingestSidecars(vault: v)
         }
     }
@@ -313,8 +314,29 @@ public final class LibraryService: Sendable {
     }
 
     /// Rename a file on disk (explicit user action). Sidecar moves with it.
-    public func rename(_ item: TimelineItem, to newFileName: String) async throws {
-        guard let vault = vault(id: item.vaultID) else { return }
+    /// The name actually used for a rename: the typed name with the ORIGINAL extension re-attached when
+    /// it was dropped or changed (a file without a media extension is skipped by the scanner and would
+    /// vanish from the library). Throws for names that are empty, hidden, or contain a path separator.
+    public static func sanitizedRename(_ typed: String, original: String) throws -> String {
+        let name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.hasPrefix("."), !name.contains("/"), !name.contains(":"),
+              name != ".." else { throw CocoaError(.fileWriteInvalidFileName) }
+        let origExt = (original as NSString).pathExtension
+        guard !origExt.isEmpty else { return name }
+        if (name as NSString).pathExtension.lowercased() == origExt.lowercased() {
+            guard !(name as NSString).deletingPathExtension.isEmpty else {
+                throw CocoaError(.fileWriteInvalidFileName)
+            }
+            return name
+        }
+        return name + "." + origExt
+    }
+
+    @discardableResult
+    public func rename(_ item: TimelineItem, to typedName: String) async throws -> String {
+        let newFileName = try Self.sanitizedRename(
+            typedName, original: (item.relPath as NSString).lastPathComponent)
+        guard let vault = vault(id: item.vaultID) else { return newFileName }
         let oldURL = vault.absoluteURL(forRelativePath: item.relPath)
         let dir = (item.relPath as NSString).deletingLastPathComponent
         let newRel = dir.isEmpty ? newFileName : dir + "/" + newFileName
@@ -329,6 +351,7 @@ public final class LibraryService: Sendable {
                                              to: vault.sidecarURL(forMediaAt: newURL))
         }
         try await rescan(vaultID: item.vaultID)
+        return newFileName
     }
 
     // MARK: Delete / restore
@@ -477,6 +500,7 @@ public final class LibraryService: Sendable {
         try await Task.detached(priority: .utility) { [catalog] in
             _ = try await Scanner.scan(vault: v, catalog: catalog)
         }.value
+        try? catalog.purgePendingDeletionsStillInLibrary()
         try ingestSidecars(vault: v)
     }
 

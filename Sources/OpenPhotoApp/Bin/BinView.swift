@@ -104,7 +104,7 @@ struct BinView: View {
         guard !entries.isEmpty else { return }
         restoring = true
         Task {
-            for entry in entries { try? await state.library?.restore(entry) }
+            _ = try? await state.library?.restore(entries)   // batched: one rescan per vault
             try? state.refreshQueries()
             restoring = false
         }

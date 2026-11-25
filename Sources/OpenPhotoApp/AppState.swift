@@ -2323,6 +2323,9 @@ final class AppState {
                 try await library.scanAll { [weak self] p in
                     Task { @MainActor in if p.total > 50 { self?.scanProgress = p } }
                 }
+                // New folders created under a locked parent have no locked rows yet — re-apply the
+                // lock list so they never show before the next launch.
+                if !lockedFolders.isEmpty { try? library.catalog.applyLockedFolders(lockedFolders) }
                 await refreshQueriesAsync()   // off-main DB reads → no beachball after a big scan
                 pokeDerivation()
             } catch {
@@ -2714,9 +2717,10 @@ final class AppState {
         guard let library else { return }
         let dir = (item.relPath as NSString).deletingLastPathComponent
         let oldName = (item.relPath as NSString).lastPathComponent
-        let newRel = dir.isEmpty ? newName : dir + "/" + newName
         do {
-            try await library.rename(item, to: newName)
+            // The library may adjust the typed name (it re-attaches the media extension).
+            let finalName = try await library.rename(item, to: newName)
+            let newRel = dir.isEmpty ? finalName : dir + "/" + finalName
             recordUndo(.rename(vaultID: item.vaultID, relPath: newRel, oldName: oldName))
             try refreshQueries()
         } catch { NSAlert(error: error).runModal() }

@@ -25,7 +25,12 @@ extension LibraryService {
             s.precomposedStringWithCanonicalMapping.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         }
         let s = norm(src), d = norm(dest)
-        var seen = Set((try items(inDir: d, recursive: true)).map(\.hash))   // content already in dest
+        // Content already in dest — EXCLUDING the source's own subtree. When `dest` is an ancestor of
+        // `src`, the recursive listing of dest contains every source photo; counting those made each
+        // one an "exact duplicate" of itself and binned the whole folder.
+        func underSource(_ dir: String) -> Bool { s.isEmpty || dir == s || dir.hasPrefix(s + "/") }
+        var seen = Set((try items(inDir: d, recursive: true))
+            .filter { !underSource($0.dirPath) }.map(\.hash))
         var plan = MergeFolderPlan()
         for item in try items(inDir: s, recursive: true) {
             guard item.driveRelPath == nil else { continue }        // only local instances can move

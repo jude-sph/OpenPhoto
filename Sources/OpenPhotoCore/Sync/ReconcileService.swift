@@ -18,6 +18,7 @@ public enum ReconcileService {
     public static func reconcile(drive: Vault, localVault: Vault, catalog: Catalog,
                                  sourceBasenames: [String], macVaultID: String,
                                  maxDeletionFraction: Double = 0.25) throws -> ReconcileExecutor.Result {
+        try catalog.purgePendingDeletionsStillInLibrary()   // never honour a deletion of content still here
         let plan = try ReconcilePlanner.plan(drive: drive, localVault: localVault, catalog: catalog)
         let actualCount = try Manifest.read(from: drive.manifestURL).count
         let result = try ReconcileExecutor.apply(plan: plan, drive: drive, localVault: localVault,

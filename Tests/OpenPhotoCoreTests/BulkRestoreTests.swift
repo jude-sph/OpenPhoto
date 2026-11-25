@@ -86,3 +86,46 @@ private func makeTripLibrary(_ t: TestDirs, count: Int) throws -> (LibraryServic
     #expect(restored.count == 1)
     #expect(try lib.catalog.pendingDeletions().isEmpty)
 }
+
+// MARK: - Regression tests for bugs found in the Nov 2026 hunt
+
+@Test func renameReattachesDroppedExtensionAndRejectsPathEscapes() throws {
+    #expect(try LibraryService.sanitizedRename("Beach sunset", original: "IMG_1.HEIC") == "Beach sunset.HEIC")
+    #expect(try LibraryService.sanitizedRename("  beach.heic ", original: "IMG_1.HEIC") == "beach.heic")
+    #expect(try LibraryService.sanitizedRename("beach.jpg", original: "IMG_1.HEIC") == "beach.jpg.HEIC")
+    #expect(try LibraryService.sanitizedRename("v1.2 final", original: "a.mov") == "v1.2 final.mov")
+    for bad in ["", "   ", "../x.jpg", "a/b.jpg", ".hidden.jpg", ".HEIC"] {
+        #expect(throws: (any Error).self) { try LibraryService.sanitizedRename(bad, original: "IMG_1.HEIC") }
+    }
+}
+
+@Test func verifiedCopyCarriesMtimeAndFinderTags() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let src = t.root.appendingPathComponent("src.jpg"), dst = t.root.appendingPathComponent("out/dst.jpg")
+    try Data("payload".utf8).write(to: src)
+    let old = Date(timeIntervalSince1970: 1_500_000_000)
+    try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: src.path)
+    let tagBytes: [UInt8] = Array("fake-tag-plist".utf8)
+    #expect(setxattr(src.path, "com.apple.metadata:_kMDItemUserTags", tagBytes, tagBytes.count, 0, 0) == 0)
+
+    let hash = try ContentHash.ofFile(at: src).stringValue
+    #expect(VerifiedCopy.copy(from: src, to: dst, expectedHash: hash) == .copied)
+
+    let m = try FileManager.default.attributesOfItem(atPath: dst.path)[.modificationDate] as? Date
+    #expect(abs((m ?? .distantFuture).timeIntervalSince(old)) < 1)
+    var buf = [UInt8](repeating: 0, count: 64)
+    let n = getxattr(dst.path, "com.apple.metadata:_kMDItemUserTags", &buf, 64, 0, 0)
+    #expect(n == tagBytes.count && Array(buf[0..<max(n, 0)]) == tagBytes)
+}
+
+@Test func pendingDeletionOfContentStillInLibraryIsPurged() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let cat = try Catalog(at: t.root.appendingPathComponent("c.sqlite"))
+    try cat.registerVault(id: "mac", role: "local", rootPath: "/tmp/mac")
+    try cat.upsert(instances: [InstanceRecord(hash: "sha256:keep", vaultID: "mac", relPath: "B/x.jpg",
+                                              dirPath: "B", size: 1, mtimeMs: 0)])
+    try cat.enqueuePendingDeletion(hash: "sha256:keep", relPath: "A/x.jpg", deletedAtMs: 1)   // duplicate deleted
+    try cat.enqueuePendingDeletion(hash: "sha256:gone", relPath: "C/y.jpg", deletedAtMs: 1)   // really deleted
+    try cat.purgePendingDeletionsStillInLibrary()
+    #expect(try cat.pendingDeletions().map(\.hash) == ["sha256:gone"])
+}

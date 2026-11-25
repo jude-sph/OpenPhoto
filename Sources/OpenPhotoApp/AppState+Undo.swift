@@ -32,10 +32,8 @@ extension AppState {
             let wanted = Set(hashes)
             let entries = ((try? library.binItems()) ?? [])
                 .filter { wanted.contains($0.item.hash) }
-            var restored = 0
-            for entry in entries {
-                do { try await library.restore(entry); restored += 1 } catch { continue }
-            }
+            // Batched: one bin-log rewrite and one rescan per vault (was a full rescan per photo).
+            let restored = ((try? await library.restore(entries)) ?? []).count
             try? refreshQueries()
             // Failures: entries that errored + hashes with no bin entry left at all.
             let foundHashes = Set(entries.map(\.item.hash))
