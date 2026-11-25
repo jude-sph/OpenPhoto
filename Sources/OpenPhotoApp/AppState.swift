@@ -473,6 +473,18 @@ final class AppState {
     /// Hidden auto-face IDs (user-dismissed faces that should not appear in the Other bucket).
     var hiddenFaceIDs: [Int64] = []
     private var facesDirty = true
+    // Single-flight + generation for the People / Face Map loaders (see loadPeople).
+    @ObservationIgnored private var peopleGeneration = 0
+    @ObservationIgnored private var peopleLoadInFlight = false
+    @ObservationIgnored private var peopleLoadPending = false
+    @ObservationIgnored private var suggestionsInFlight = false
+    @ObservationIgnored private var suggestionsPending = false
+    /// True once a full People load landed for this library — the derivation drain still runs the
+    /// first one even when it derived no faces (launch), and skips it otherwise.
+    @ObservationIgnored private var peopleEverLoaded = false
+    @ObservationIgnored private var faceMapGeneration = 0
+    @ObservationIgnored private var faceMapLoadInFlight = false
+    @ObservationIgnored private var faceMapLoadPending = false
     private var geocodeDirty = true
     /// Grouping sensitivity (0 = Strict … 1 = Loose), persisted. Drives the DBSCAN / centroid-match
     /// params. Releasing the slider re-groups instantly over the already-embedded faces (see
@@ -492,7 +504,14 @@ final class AppState {
     /// "Other faces" bucket (everything left). Every unassigned face lands in exactly one of the three.
     func loadPeople() {
         guard let lib = library else { return }
+        // Single-flight: a request while a full load runs collapses into ONE re-run after it (that
+        // re-run reads the catalog afresh, so nothing requested meanwhile is lost).
+        if peopleLoadInFlight { peopleLoadPending = true; return }
+        peopleLoadInFlight = true
         facesLoading = true
+        peopleGeneration &+= 1
+        let gen = peopleGeneration
+        suggestionsPending = false   // this full load reads after any earlier fast re-match request
         let eps = faceClusterEps, minPts = faceClusterMinPts, matchThreshold = faceMatchThreshold
         Task {
             let result: (people: [PersonRow], clusters: [FaceCluster],
@@ -533,12 +552,23 @@ final class AppState {
                     let other = allUnassigned.filter { !matchedIDs.contains($0) && !clusteredIDs.contains($0) }
                     return (ppl, conf, additions, other)
                 }.value
-            self.people = result.people
-            self.suggestedClusters = result.clusters
-            self.suggestedAdditions = result.additions
-            self.otherFaceIDs = preservingOtherOrder(result.other)
-            self.facesLoading = false
-            self.facesDirty = false
+            self.peopleLoadInFlight = false
+            // Publish only the newest result for the still-open library.
+            if gen == self.peopleGeneration, self.library === lib {
+                self.people = result.people
+                self.suggestedClusters = result.clusters
+                self.suggestedAdditions = result.additions
+                self.otherFaceIDs = preservingOtherOrder(result.other)
+                self.facesDirty = false
+                self.peopleEverLoaded = true
+            }
+            if self.peopleLoadPending {
+                self.peopleLoadPending = false
+                self.loadPeople()                 // keeps facesLoading on
+            } else {
+                self.facesLoading = false
+                if self.suggestionsPending { self.suggestionsPending = false; self.refreshSuggestions() }
+            }
         }
     }
 
@@ -546,7 +576,11 @@ final class AppState {
     /// resemblance analyses off the main actor. Cheap on repeat opens (reads cached `face_layout`).
     func loadFaceMap() {
         guard let lib = library else { return }
+        if faceMapLoadInFlight { faceMapLoadPending = true; return }   // one re-run after, never stacked
+        faceMapLoadInFlight = true
         faceMapLoading = true
+        faceMapGeneration &+= 1
+        let gen = faceMapGeneration
         Task {
             let data = await Task.detached(priority: .userInitiated) { () -> FaceMapData in
                 let cat = lib.catalog
@@ -601,8 +635,14 @@ final class AppState {
                 d.lookalikes = look; d.typicalityByID = typ; d.centroidsByID = centroids
                 return d
             }.value
-            self.faceMap = data
-            self.faceMapLoading = false
+            self.faceMapLoadInFlight = false
+            if gen == self.faceMapGeneration, self.library === lib { self.faceMap = data }
+            if self.faceMapLoadPending {
+                self.faceMapLoadPending = false
+                self.loadFaceMap()
+            } else {
+                self.faceMapLoading = false
+            }
         }
     }
 
@@ -627,6 +667,12 @@ final class AppState {
     /// matches, with no "Rescan Faces" needed. Existing clusters are pruned of now-assigned faces.
     func refreshSuggestions() {
         guard let lib = library else { return }
+        // A full load in flight will be followed by this re-match (it may predate the change that
+        // asked for it); a re-match in flight is followed by exactly one more. Never stacked.
+        if peopleLoadInFlight || suggestionsInFlight { suggestionsPending = true; return }
+        suggestionsInFlight = true
+        peopleGeneration &+= 1
+        let gen = peopleGeneration
         let matchThreshold = faceMatchThreshold, minPts = faceClusterMinPts
         let existingClusters = suggestedClusters
         Task {
@@ -666,10 +712,18 @@ final class AppState {
                     let other = allUnassigned.filter { !matchedIDs.contains($0) && !clusteredIDs.contains($0) }
                     return (ppl, clusters, additions, other)
                 }.value
-            self.people = result.people
-            self.suggestedClusters = result.clusters
-            self.suggestedAdditions = result.additions
-            self.otherFaceIDs = preservingOtherOrder(result.other)
+            self.suggestionsInFlight = false
+            // A full loadPeople started meanwhile supersedes this (it bumped the generation).
+            if gen == self.peopleGeneration, self.library === lib {
+                self.people = result.people
+                self.suggestedClusters = result.clusters
+                self.suggestedAdditions = result.additions
+                self.otherFaceIDs = preservingOtherOrder(result.other)
+            }
+            if self.suggestionsPending, !self.peopleLoadInFlight {
+                self.suggestionsPending = false
+                self.refreshSuggestions()
+            }
         }
     }
 
@@ -2344,6 +2398,8 @@ final class AppState {
         drivePendingSync = [:]
         people = []
         suggestedClusters = []
+        peopleGeneration &+= 1; faceMapGeneration &+= 1; peopleEverLoaded = false
+        peopleLoadPending = false; suggestionsPending = false; faceMapLoadPending = false
         cullGroups = []
         searchResults = []
         openedPerson = nil
@@ -2441,6 +2497,15 @@ final class AppState {
         for w in waiters { w.resume() }
     }
 
+    /// Thread-safe per-stage completion tally for the derivation drain (ops run concurrently off-main).
+    private final class DrainTally: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _ran = 0, _ok = 0
+        func record(ok: Bool) { lock.lock(); _ran += 1; if ok { _ok += 1 }; lock.unlock() }
+        var ran: Int { lock.lock(); defer { lock.unlock() }; return _ran }
+        var ok: Int { lock.lock(); defer { lock.unlock() }; return _ok }
+    }
+
     private var derivationTask: Task<Void, Never>?
     /// Stage registry: each stage's whole pending set is drained in order, with bounded concurrency
     /// inside `drainDerivation`. Order = perceived value: faces (People) + semantic (search) first,
@@ -2473,19 +2538,41 @@ final class AppState {
         // decoders are now autorelease-pooled, so memory stays bounded (~250 MB/slot); cap at 8
         // (≈ physical cores on a hyperthreaded i9, where activeProcessorCount reports the 16 logical).
         let maxConcurrent = max(2, min(ProcessInfo.processInfo.activeProcessorCount - 2, 8))
-        for stage in derivationStages {
+        let catalog = lib.catalog
+        // Only stages whose backing resources exist (e.g. the embed model package) run; the others
+        // are skipped whole — jobs left pending so they resume once the model ships. Never marked
+        // failed (that would permanently exclude them from retries). They're also left out of the
+        // progress total, since their pending jobs won't move.
+        let stages = derivationStages.filter { $0.isAvailable }
+        let stageIDs = stages.map(\.id)
+        // Progress = in-memory counters: (done, total) per stage read ONCE per stage start (off-main),
+        // then `done` advanced from completions — no COUNT queries on the main actor mid-drain.
+        var progressByStage = await Task.detached(priority: .utility) { () -> [String: (done: Int, total: Int)] in
+            var out: [String: (done: Int, total: Int)] = [:]
+            for id in stageIDs { if let p = try? catalog.derivationProgress(stage: id) { out[id] = p } }
+            return out
+        }.value
+        func combined() -> (done: Int, total: Int)? {
+            let done = progressByStage.values.reduce(0) { $0 + $1.done }
+            let total = progressByStage.values.reduce(0) { $0 + $1.total }
+            return total > 0 ? (done, total) : nil
+        }
+        var embedsDerived = 0, facesDerived = 0
+        for stage in stages {
             if Task.isCancelled { break }
-            // If the stage's backing resources (e.g. the embed model package) are absent on this
-            // machine, skip the whole stage — leave its jobs pending so they resume once the model
-            // ships. Do NOT mark anything failed; that would permanently exclude jobs from retries.
-            guard stage.isAvailable else { continue }
-            let pending = (try? lib.catalog.pendingDerivation(stage: stage.id)) ?? []
-            guard !pending.isEmpty else { continue }
-            let catalog = lib.catalog
             let stageID = stage.id
             let needsFile = stage.needsFile
+            // Pending set + a fresh progress baseline for this stage, off-main.
+            let (pending, baseline) = await Task.detached(priority: .utility) {
+                ((try? catalog.pendingDerivation(stage: stageID)) ?? [],
+                 try? catalog.derivationProgress(stage: stageID))
+            }.value
+            guard library === lib, !Task.isCancelled else { break }
+            if let baseline { progressByStage[stageID] = baseline }
+            guard !pending.isEmpty else { continue }
             derivationStageName = Self.analysisActivity(forStageID: stage.id)
-            derivationProgress = combinedProgress()
+            derivationProgress = combined()
+            let tally = DrainTally()
             var index = 0, completed = 0
             // Sendable snapshots so per-item file resolution runs OFF the main actor (below), instead
             // of hitting the main-actor DB + filesystem once per item — the old cause of the beachball.
@@ -2511,38 +2598,43 @@ final class AppState {
                     let ok = await stage.run(hash: hash, url: runURL, catalog: catalog)
                     if ok { try? catalog.markDerived(hash: hash, stage: stageID) }
                     else { try? catalog.markDerivationFailed(hash: hash, stage: stageID) }
+                    tally.record(ok: ok)
                 }
             }, onComplete: {
                 completed += 1
-                // Progressive People refresh while faces re-derive so unassigned faces appear as
-                // they're found; the !facesLoading guard self-throttles the O(n²) clustering.
-                if stageID == FaceStage.id, completed % 200 == 0, !self.facesLoading { self.loadPeople() }
-                // Refresh the progress line sparingly — each combinedProgress() reads the DB on the
-                // main actor, so keep it off the per-item hot path (was every 4 items).
-                if completed % 48 == 0 { self.derivationProgress = self.combinedProgress() }
+                // Progressive People visibility while faces derive, via the CHEAP path only: the
+                // centroid re-match (no O(n²) DBSCAN) surfaces new faces as suggestions / Other. The
+                // full clustering runs once when the face stage ends (below).
+                if stageID == FaceStage.id, completed % 200 == 0, tally.ran > 0 { self.refreshSuggestions() }
+                // Progress line sparingly (was a DB read on main every 48): pure in-memory now.
+                if completed % 48 == 0, var p = progressByStage[stageID] {
+                    p.done = (baseline?.done ?? p.done) + tally.ok
+                    progressByStage[stageID] = p
+                    self.derivationProgress = combined()
+                }
             })
-            derivationProgress = combinedProgress()
+            if var p = progressByStage[stageID] {
+                p.done = (baseline?.done ?? p.done) + tally.ok
+                progressByStage[stageID] = p
+            }
+            derivationProgress = combined()
+            // Stage-end consequences only when the stage actually derived something — a drain
+            // follows every rescan / watcher tick, and unreachable (drive-only) items no-op forever.
+            if stageID == FaceStage.id, tally.ran > 0 {
+                facesDerived += tally.ran
+                facesDirty = true
+                loadPeople()   // the one full re-cluster for this face pass
+            }
+            if stageID == embedStage.id, tally.ran > 0 { embedsDerived += tally.ran }
+            if stageID == "geocode", tally.ran > 0 { geocodeDirty = true }   // inspector picks up new places
         }
         derivationProgress = nil
         derivationStageName = nil
-        markSemanticIndexDirty()    // embeddings may have grown → refresh the in-memory index
-        geocodeDirty = true         // geocoded places may have grown → inspector picks up new rows
-        facesDirty = true
-        loadPeople()                // final refresh so People reflects every newly-derived face
-    }
-
-    /// Combined remaining work across all stages (sidebar shows the sum).
-    /// Only includes stages whose backing resources are available — unavailable stages are skipped
-    /// by the runner and their pending jobs won't move, so adding them would inflate the total.
-    private func combinedProgress() -> (done: Int, total: Int)? {
-        guard let lib = library else { return nil }
-        var done = 0, total = 0
-        for stage in derivationStages where stage.isAvailable {
-            if let p = try? lib.catalog.derivationProgress(stage: stage.id) {
-                done += p.done; total += p.total
-            }
-        }
-        return total > 0 ? (done, total) : nil
+        // Embeddings grew → the in-memory semantic index is stale. Otherwise keep it (a rebuild
+        // reads every embedding).
+        if embedsDerived > 0 { markSemanticIndexDirty() }
+        // First drain after open still loads People once (launch), even with nothing derived.
+        if facesDerived == 0, !peopleEverLoaded, library === lib { loadPeople() }
     }
 
     /// Friendly name for the analysis stage currently draining, shown in the sidebar so the user
