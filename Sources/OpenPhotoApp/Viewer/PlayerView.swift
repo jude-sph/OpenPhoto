@@ -11,9 +11,19 @@ import AVKit
 /// - click-drag, only while zoomed → pan
 struct PlayerView: NSViewRepresentable {
     let player: AVPlayer
+    /// Called (on the main actor) when the player view starts or stops having a video frame on
+    /// screen — lets the caller hold a poster image over it until the first frame is really there.
+    var onReadyForDisplay: ((Bool) -> Void)? = nil
 
-    func makeNSView(context: Context) -> ZoomablePlayerView { ZoomablePlayerView(player: player) }
-    func updateNSView(_ v: ZoomablePlayerView, context: Context) { v.setPlayer(player) }
+    func makeNSView(context: Context) -> ZoomablePlayerView {
+        let v = ZoomablePlayerView(player: player)
+        v.onReadyForDisplay = onReadyForDisplay
+        return v
+    }
+    func updateNSView(_ v: ZoomablePlayerView, context: Context) {
+        v.onReadyForDisplay = onReadyForDisplay
+        v.setPlayer(player)
+    }
 }
 
 final class ZoomablePlayerView: NSView, NSGestureRecognizerDelegate {
@@ -21,6 +31,8 @@ final class ZoomablePlayerView: NSView, NSGestureRecognizerDelegate {
     private var zoom: CGFloat = 1
     private var pan = CGPoint.zero
     private var panGesture: NSPanGestureRecognizer!
+    var onReadyForDisplay: ((Bool) -> Void)?
+    private var readyObservation: NSKeyValueObservation?
 
     init(player: AVPlayer) {
         super.init(frame: .zero)
@@ -36,6 +48,11 @@ final class ZoomablePlayerView: NSView, NSGestureRecognizerDelegate {
         pg.delegate = self
         playerView.addGestureRecognizer(pg)
         panGesture = pg
+        // KVO may fire off the main thread; report on the main actor.
+        readyObservation = playerView.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] _, change in
+            let ready = change.newValue ?? false
+            DispatchQueue.main.async { self?.onReadyForDisplay?(ready) }
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
 

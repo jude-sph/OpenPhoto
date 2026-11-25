@@ -99,6 +99,10 @@ struct ViewerView: View {
     @State private var shownIsFull = false
     /// "instanceID|rotation" of the photo `shown` belongs to — the zoom/pan reset key.
     @State private var shownKey = ""
+    /// A video's thumbnail, held over the player until its first frame is actually on screen, so
+    /// stepping onto a video shows the clip's picture immediately instead of a black stage.
+    @State private var videoPoster: CGImage?
+    @State private var videoReady = false
     /// Non-rendering navigation bookkeeping (a class, so updating it never re-renders the viewer).
     @State private var nav = NavState()
     final class NavState {
@@ -202,7 +206,7 @@ struct ViewerView: View {
 
     private var stage: some View {
         Group {
-            if isFullWindowVideo, let player {
+            if isFullWindowVideo {
                 // Video fills the whole stage — over the top bar, under the gallery — matching the
                 // immersive full-window look of a zoomed photo (the gallery is the only overlay).
                 // Back: Esc; toggle inspector: i.
@@ -211,8 +215,19 @@ struct ViewerView: View {
                     // own controls sit above the gallery (like a photo rests above it), not hidden
                     // under it — with the top bar floating over the video.
                     ZStack(alignment: .top) {
-                        PlayerView(player: player)
-                            .ignoresSafeArea(.container, edges: .top)   // still reaches the top edge
+                        ZStack {
+                            Color.clear   // holds the stage while the player is still being built
+                            if let player {
+                                PlayerView(player: player) { ready in videoReady = ready }
+                            }
+                            // Same aspect-fit box as the player's video, so the poster and the first
+                            // frame coincide; it never takes clicks meant for the player.
+                            if !videoReady, let videoPoster {
+                                Image(decorative: videoPoster, scale: 1).resizable().scaledToFit()
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .ignoresSafeArea(.container, edges: .top)   // still reaches the top edge
                         // A tight drop shadow on the controls keeps them legible over bright video
                         // without the top-of-window vignette a gradient background created.
                         topBar.shadow(color: .black.opacity(0.7), radius: 4)
@@ -237,8 +252,10 @@ struct ViewerView: View {
     /// True only for actual video clips (not playing Live Photos, which keep the bar visible for the
     /// Live/Photo toggle), and only once the player is ready.
     private var isFullWindowVideo: Bool {
-        guard let item = state.openedItem, !driveUnplugged, player != nil else { return false }
-        return item.kind == MediaKind.video.rawValue
+        // Not gated on the player existing: the layout must be the video layout from the first frame
+        // (the poster shows in it), or everything shifts when the player arrives.
+        guard let item = state.openedItem, !driveUnplugged else { return false }
+        return item.kind == MediaKind.video.rawValue && state.fullResURL(for: item) != nil
     }
 
     private var topBar: some View {
@@ -397,6 +414,7 @@ struct ViewerView: View {
         ViewerDecoder.shared.keepOnly(Set(neighbourhood().map(\.instanceID)))
         // Read the rotation from the catalog (source of truth), not the possibly-stale `item`.
         liveRotation = rotation(for: item)
+        if item.kind != MediaKind.video.rawValue { videoPoster = nil }
         guard let url = state.fullResURL(for: item) else {
             clearShown()
             if state.isDriveOnly(item) { driveUnplugged = true }   // drive-only, not connected
@@ -404,9 +422,26 @@ struct ViewerView: View {
         }
         if item.kind == MediaKind.video.rawValue {
             clearShown()
+            videoReady = false
+            let rot = liveRotation
+            if let thumb = Self.cachedThumbnail(for: item) {
+                videoPoster = FullResImage.applyRotation(thumb, degreesCW: rot)
+            } else if let lib = state.library {
+                videoPoster = nil
+                Task {
+                    let thumb = await Task.detached(priority: .userInitiated) {
+                        await Self.loadThumbnail(for: item, library: lib)
+                    }.value
+                    guard let thumb, state.openedItem?.instanceID == item.instanceID, !videoReady else { return }
+                    videoPoster = FullResImage.applyRotation(thumb, degreesCW: rot)
+                }
+            }
             // Bake any user display-rotation into the video itself (composition) so the player's
             // native controls stay upright — a .rotationEffect rotated the whole player, controls too.
             player = Self.makeVideoPlayer(url: url, rotationCW: liveRotation)
+            // Safety net: never leave the poster covering a video should the ready signal not arrive.
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled, state.openedItem?.instanceID == item.instanceID { videoReady = true }
             return
         }
         // The Live-pair lookup is a catalog read + up to four `fileExists` calls — off the main thread.
