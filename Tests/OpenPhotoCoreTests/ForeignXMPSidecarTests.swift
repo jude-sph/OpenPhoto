@@ -84,3 +84,44 @@ private let subjectXMP = """
     try Data("<x/>".utf8).write(to: appended)
     #expect(ForeignXMPSidecar.sidecarURL(forMediaAt: media) == appended)
 }
+
+// Lightroom / Adobe XMP Toolkit write simple properties as ATTRIBUTES of rdf:Description.
+private let attributeXMP = """
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0">
+   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about=""
+            xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+            xmlns:exif="http://ns.adobe.com/exif/1.0/"
+            xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+            xmp:Rating="4"
+            photoshop:DateCreated="2021-06-30T19:31:25+01:00"
+            exif:GPSLatitude="51.5"
+            exif:GPSLatitudeRef="S"/>
+   </rdf:RDF>
+</x:xmpmeta>
+"""
+
+@Test func foreignXMPReadsAttributeFormProperties() throws {
+    let d = try #require(ForeignXMPSidecar.parse(Data(attributeXMP.utf8)))
+    #expect(d.rating == 4)
+    #expect(d.takenAt == ForeignXMPSidecar.parseDate("2021-06-30T19:31:25+01:00"))
+    #expect(abs((d.latitude ?? 0) - -51.5) < 1e-9)
+}
+
+// Adobe's toolkit may split one packet into several rdf:Description elements (one per namespace).
+@Test func xmpParseReadsPropertiesFromEveryDescription() throws {
+    let x = """
+    <x:xmpmeta xmlns:x="adobe:ns:meta/">
+     <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+       <dc:subject><rdf:Bag><rdf:li>beach</rdf:li></rdf:Bag></dc:subject>
+      </rdf:Description>
+      <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+          xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmp:Rating="5" xmp:Label="Favorite" tiff:Orientation="6"/>
+     </rdf:RDF>
+    </x:xmpmeta>
+    """
+    let d = try XMP.parse(Data(x.utf8))
+    #expect(d.tags == ["beach"])
+    #expect(d.rating == 5 && d.favorite && d.rotation == 90)
+}

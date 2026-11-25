@@ -38,10 +38,14 @@ public enum ForeignXMPSidecar {
 
     public static func parse(_ data: Data) -> ForeignSidecarData? {
         guard let doc = try? XMLDocument(data: data, options: []) else { return nil }
+        // A simple property may be a child element (`<xmp:Rating>4</xmp:Rating>`, Apple's export) or
+        // an attribute of rdf:Description (`xmp:Rating="4"`, Lightroom / Adobe's XMP toolkit).
         func firstText(_ local: String) -> String? {
-            let v = (try? doc.nodes(forXPath: "//*[local-name()='\(local)']"))?.first?.stringValue
-            let t = v?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (t?.isEmpty == false) ? t : nil
+            for xpath in ["//*[local-name()='\(local)']", "//*[local-name()='Description']/@*[local-name()='\(local)']"] {
+                let v = (try? doc.nodes(forXPath: xpath))?.first?.stringValue
+                if let t = v?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { return t }
+            }
+            return nil
         }
         func listItems(_ container: String) -> [String] {
             ((try? doc.nodes(forXPath:

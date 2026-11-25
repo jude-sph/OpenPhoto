@@ -87,27 +87,33 @@ public enum XMP {
 
     public static func parse(_ data: Data) throws -> SidecarData {
         let doc = try XMLDocument(data: data)
-        guard let desc = try doc.nodes(forXPath: "//*[local-name()='Description']").first
-            as? XMLElement else { return .empty }
-        // xmp:Rating / xmp:Label may be an attribute (our serializer) OR a child
-        // element (ImageIO's re-serialization). Accept both.
-        let ratingStr = attr(desc, "Rating")
-            ?? (try? desc.nodes(forXPath: "./*[local-name()='Rating']").first?.stringValue) ?? nil
-        let rating = Int(ratingStr ?? "0") ?? 0
-        let labelStr = attr(desc, "Label")
-            ?? (try? desc.nodes(forXPath: "./*[local-name()='Label']").first?.stringValue) ?? nil
-        let favorite = (labelStr == "Favorite")
-        let caption = try desc.nodes(forXPath:
-            ".//*[local-name()='description']//*[local-name()='li']")
+        // Usually one rdf:Description (ours always), but Adobe's toolkit may split a packet into one
+        // per namespace — read every one, the first occurrence of a property winning.
+        let descs = try doc.nodes(forXPath: "//*[local-name()='Description']").compactMap { $0 as? XMLElement }
+        guard !descs.isEmpty else { return .empty }
+        // xmp:Rating / xmp:Label / tiff:Orientation may be an attribute (our serializer, Lightroom)
+        // OR a child element (ImageIO's re-serialization). Accept both.
+        func simple(_ name: String) -> String? {
+            for d in descs {
+                if let a = attr(d, name) { return a }
+                if let e = (try? d.nodes(forXPath: "./*[local-name()='\(name)']"))?.first?.stringValue { return e }
+            }
+            return nil
+        }
+        func nodes(_ xpath: String) throws -> [XMLNode] {
+            for d in descs { let n = try d.nodes(forXPath: xpath); if !n.isEmpty { return n } }
+            return []
+        }
+        let rating = Int(simple("Rating") ?? "0") ?? 0
+        let favorite = (simple("Label") == "Favorite")
+        let caption = try nodes(".//*[local-name()='description']//*[local-name()='li']")
             .first?.stringValue
-        let tags = try desc.nodes(forXPath:
-            ".//*[local-name()='subject']//*[local-name()='li']")
+        let tags = try nodes(".//*[local-name()='subject']//*[local-name()='li']")
             .compactMap(\.stringValue)
 
         // Parse mwg-rs:Regions — each rdf:li inside RegionList that has Type=Face.
         var faces: [FaceRegion] = []
-        let liNodes = try desc.nodes(forXPath:
-            ".//*[local-name()='RegionList']//*[local-name()='li']")
+        let liNodes = try nodes(".//*[local-name()='RegionList']//*[local-name()='li']")
         for liNode in liNodes {
             guard let li = liNode as? XMLElement else { continue }
             // Only handle Type=Face regions; skip others.
@@ -132,9 +138,7 @@ public enum XMP {
         }
 
         // tiff:Orientation may be an attribute (our serializer) or a child element.
-        let orientStr = attr(desc, "Orientation")
-            ?? (try? desc.nodes(forXPath: "./*[local-name()='Orientation']").first?.stringValue) ?? nil
-        let rot = rotation(fromExifOrientation: Int(orientStr ?? "1") ?? 1)
+        let rot = rotation(fromExifOrientation: Int(simple("Orientation") ?? "1") ?? 1)
 
         return SidecarData(rating: rating, favorite: favorite, caption: caption,
                            tags: tags, faces: faces, rotation: rot)
