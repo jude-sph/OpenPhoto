@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import AppKit
 @preconcurrency import Photos
+import AVFoundation
 
 /// ImportSource for the Mac's Apple Photos library (which is also the iCloud
 /// library — network-allowed requests pull iCloud-only originals down on demand).
@@ -86,16 +87,65 @@ public final class PhotosLibrarySource: ImportSource, @unchecked Sendable {
         guard let entry = lock.withLock({ entries[item.id] }) else { throw CocoaError(.fileNoSuchFile) }
         let opts = PHAssetResourceRequestOptions()
         opts.isNetworkAccessAllowed = true
-        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-            PHAssetResourceManager.default().writeData(for: entry.resource, toFile: url, options: opts) { error in
-                if let error { c.resume(throwing: error) } else { c.resume() }
+        do {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                PHAssetResourceManager.default().writeData(for: entry.resource, toFile: url, options: opts) { error in
+                    if let error { c.resume(throwing: error) } else { c.resume() }
+                }
             }
+        } catch {
+            // An EDITED rendition is often listed as a resource without existing as a file: Photos
+            // applies some edits (trim, slo-mo, filters on video; non-destructive photo edits) on the
+            // fly, and writing that resource fails with PHPhotosError 3302 "invalid resource". Ask
+            // Photos to RENDER the current version instead. Originals have no such fallback — their
+            // error stands.
+            guard item.id.hasSuffix(":\(Role.edited.rawValue)") else { throw error }
+            try? FileManager.default.removeItem(at: url)   // a failed write may leave a partial file
+            do {
+                if entry.kind == .video { try await Self.renderCurrentVideo(entry.asset, to: url) }
+                else { try await Self.renderCurrentPhoto(entry.asset, to: url) }
+            } catch { throw error }   // report the render's own failure
         }
         if entry.favorite, item.kind == .photo {
             try? EmbeddedMetadata.embed(
                 SidecarData(rating: 0, favorite: true, caption: nil, tags: [], faces: []),
                 exifDate: nil, latitude: nil, longitude: nil, intoImageAt: url)
         }
+    }
+
+    /// Export the asset's current (edited) video as Photos renders it, at the highest quality.
+    private static func renderCurrentVideo(_ asset: PHAsset, to url: URL) async throws {
+        let opts = PHVideoRequestOptions()
+        opts.version = .current
+        opts.deliveryMode = .highQualityFormat
+        opts.isNetworkAccessAllowed = true
+        let session: AVAssetExportSession = try await withCheckedThrowingContinuation { c in
+            PHImageManager.default().requestExportSession(
+                forVideo: asset, options: opts, exportPreset: AVAssetExportPresetHighestQuality) { session, info in
+                if let session {
+                    nonisolated(unsafe) let s = session
+                    c.resume(returning: s)
+                } else {
+                    c.resume(throwing: (info?[PHImageErrorKey] as? Error) ?? CocoaError(.fileReadUnknown))
+                }
+            }
+        }
+        try await session.export(to: url, as: .mov)
+    }
+
+    /// Write the asset's current (edited) photo exactly as Photos renders it.
+    private static func renderCurrentPhoto(_ asset: PHAsset, to url: URL) async throws {
+        let opts = PHImageRequestOptions()
+        opts.version = .current
+        opts.deliveryMode = .highQualityFormat
+        opts.isNetworkAccessAllowed = true
+        let data: Data = try await withCheckedThrowingContinuation { c in
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: opts) { data, _, _, info in
+                if let data { c.resume(returning: data) }
+                else { c.resume(throwing: (info?[PHImageErrorKey] as? Error) ?? CocoaError(.fileReadUnknown)) }
+            }
+        }
+        try data.write(to: url)
     }
 
     public func delete(_ items: [ImportItem]) async throws -> [DeleteResult] {
