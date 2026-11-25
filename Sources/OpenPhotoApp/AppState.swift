@@ -2231,13 +2231,12 @@ final class AppState {
             let url = vault.absoluteURL(forRelativePath: inst.relPath)
             if FileManager.default.fileExists(atPath: url.path) { return url }
         }
-        // 2. Another connected durable drive that holds the hash (look up its path in its manifest).
+        // 2. Another connected durable drive that holds the hash — its drive path(s) from the
+        //    indexed presence cache (manifest-derived), not a full manifest parse per lookup; each
+        //    candidate is still checked on disk.
         for vr in durableVaults where vr.id != driveID && driveIsPresent(vr) {
-            guard let drive = openVault(for: vr),
-                  let entry = (try? Manifest.read(from: drive.manifestURL))?
-                      .first(where: { $0.hash.stringValue == hash }) else { continue }
-            let url = drive.absoluteURL(forRelativePath: entry.path)
-            if FileManager.default.fileExists(atPath: url.path) { return url }
+            guard let drive = openVault(for: vr) else { continue }
+            if let url = Self.existingDriveCopy(hash: hash, on: drive, catalog: lib.catalog) { return url }
         }
         return nil
     }
@@ -2254,11 +2253,19 @@ final class AppState {
             let url = vault.absoluteURL(forRelativePath: inst.relPath)
             if fm.fileExists(atPath: url.path) { return url }
         }
-        for drive in driveVaults {
-            guard let entry = (try? Manifest.read(from: drive.manifestURL))?
-                      .first(where: { $0.hash.stringValue == hash }) else { continue }
-            let url = drive.absoluteURL(forRelativePath: entry.path)
-            if fm.fileExists(atPath: url.path) { return url }
+        for drive in driveVaults where drive.descriptor.vaultID != driveID {
+            if let url = existingDriveCopy(hash: hash, on: drive, catalog: catalog) { return url }
+        }
+        return nil
+    }
+
+    /// First on-disk copy of `hash` on `drive`, located via the indexed `vault_presence` point lookup
+    /// (was: parse the drive's whole manifest JSON per call — per item, per drive).
+    nonisolated static func existingDriveCopy(hash: String, on drive: Vault, catalog: Catalog) -> URL? {
+        let paths = (try? catalog.vaultPresenceDriveRelPaths(vaultID: drive.descriptor.vaultID, hash: hash)) ?? []
+        for p in paths.sorted() {
+            let url = drive.absoluteURL(forRelativePath: p)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
         }
         return nil
     }
