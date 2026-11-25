@@ -7,6 +7,8 @@ import GRDB
 public enum CatalogSnapshot {
     static let dirName = "catalog-snapshot"
 
+    public enum SnapshotError: Error, Equatable { case copyFailed(String) }
+
     /// Drive-relative path of a hash's thumbnail inside the snapshot (mirrors ThumbnailStore layout).
     static func thumbRelPath(forHash hash: String) -> String {
         let hex = String(hash.split(separator: ":").last ?? "x")
@@ -25,11 +27,21 @@ public enum CatalogSnapshot {
         try? fm.removeItem(at: tmp)
         try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        // VACUUM INTO a clean single-file copy (runs OUTSIDE a transaction).
+        // VACUUM INTO a clean single-file copy (runs OUTSIDE a transaction) on the LOCAL disk — the
+        // catalog's one connection is held for the whole VACUUM, so writing it straight onto a slow
+        // drive stalled every catalog read for that long — then hash-verified copy it to the drive.
         let dbDest = tmp.appendingPathComponent("catalog.sqlite")
-        let escaped = dbDest.path.replacingOccurrences(of: "'", with: "''")
+        let localDir = fm.temporaryDirectory.appendingPathComponent("openphoto-snapshot-\(UUID().uuidString)")
+        try fm.createDirectory(at: localDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: localDir) }   // our own scratch copy
+        let localDB = localDir.appendingPathComponent("catalog.sqlite")
+        let escaped = localDB.path.replacingOccurrences(of: "'", with: "''")
         try catalog.dbQueue.writeWithoutTransaction { db in
             try db.execute(sql: "VACUUM INTO '\(escaped)'")
+        }
+        let dbHash = try ContentHash.ofFile(at: localDB).stringValue
+        if case .failed(let why) = VerifiedCopy.copy(from: localDB, to: dbDest, expectedHash: dbHash) {
+            throw SnapshotError.copyFailed(String(describing: why))
         }
 
         // Thumbnails — only the drive's hashes.

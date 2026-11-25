@@ -174,3 +174,22 @@ private func snapshotFixture(_ t: TestDirs) throws
     let snapDir = drive.stateDirURL.appendingPathComponent("catalog-snapshot")
     #expect(FileManager.default.fileExists(atPath: snapDir.appendingPathComponent("catalog.sqlite").path))
 }
+
+// The snapshot DB is VACUUMed locally then hash-verified onto the drive; it carries the catalog's
+// main schema only — never the per-connection locked-folder TEMP table.
+@Test func snapshotIsACompleteCopyWithoutTempLockState() throws {
+    let t = try TestDirs(); defer { t.cleanup() }
+    let (catalog, thumbs, drive, driveHash, _) = try snapshotFixture(t)
+    try catalog.applyLockedFolders(["secret"])
+    try CatalogSnapshot.write(catalog: catalog, thumbnails: thumbs, drive: drive)
+    let dbURL = drive.stateDirURL.appendingPathComponent("catalog-snapshot/catalog.sqlite")
+    var cfg = Configuration(); cfg.readonly = true
+    let snap = try DatabaseQueue(path: dbURL.path, configuration: cfg)
+    try snap.read { db in
+        #expect(try String.fetchAll(db, sql: "SELECT hash FROM assets") == [driveHash])
+        let hasLockTable = try db.tableExists("locked_dirs")
+        #expect(!hasLockTable)
+    }
+    let leftovers = try FileManager.default.contentsOfDirectory(atPath: drive.stateDirURL.path)
+    #expect(!leftovers.contains { $0.hasSuffix(".tmp") })
+}
