@@ -43,14 +43,14 @@ struct FolderGridView: View {
         }
         .copyTargets(selectMode ? selectedItems : [], owner: "folders", state: state,
                      changeKey: SelectionKey(selectMode: selectMode, selected: selection.selected))
-        .task(id: state.selectedFolder) {
+        .onChange(of: state.selectedFolder) {
             selection.clear(); selectMode = false; dragToMove = false       // leaving a folder ends select mode
-            reload()
         }
         .task(id: state.photoMoveToken) { selection.clear() }   // moved items left this folder
-        .task(id: state.refreshToken) { reload() }      // refresh after rescans (keep selection)
-        .task(id: state.videoOnly) { reload() }          // re-filter when the video-only toggle flips
-        .task(id: state.foldersRecursive) { reload() }   // re-query when include-subfolders flips
+        // ONE reload per change of anything the query depends on (folder / rescan refresh, which
+        // keeps the selection / video-only / include-subfolders). Four separate tasks used to run
+        // four identical queries on first appear.
+        .task(id: reloadKey) { await reload() }
         .alert("Move \(pendingItems.count) to Bin?", isPresented: $showEvict) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Bin", role: .destructive) {
@@ -164,12 +164,31 @@ struct FolderGridView: View {
         selectMode && selection.contains(item.instanceID) ? selectedItems : [item]
     }
 
-    private func reload() {
+    /// Everything the folder query depends on.
+    private struct ReloadKey: Hashable {
+        let folder: String?
+        let refreshToken: Int
+        let videoOnly: Bool
+        let recursive: Bool
+    }
+    private var reloadKey: ReloadKey {
+        ReloadKey(folder: state.selectedFolder, refreshToken: state.refreshToken,
+                  videoOnly: state.videoOnly, recursive: state.foldersRecursive)
+    }
+
+    /// Runs the catalog query off the main actor. The grid keeps showing what it has until the
+    /// result lands; a result for a key that is no longer current is dropped.
+    private func reload() async {
         guard let lib = state.library, let dir = state.selectedFolder else {
             setItems([]); return
         }
-        let all = (try? lib.items(inDir: dir, recursive: state.foldersRecursive)) ?? []
-        setItems(state.videoOnly ? all.filter { $0.kind == MediaKind.video.rawValue } : all)
+        let key = reloadKey
+        let loaded = await Task.detached(priority: .userInitiated) { () -> [TimelineItem] in
+            let all = (try? lib.items(inDir: dir, recursive: key.recursive)) ?? []
+            return key.videoOnly ? all.filter { $0.kind == MediaKind.video.rawValue } : all
+        }.value
+        guard !Task.isCancelled, key == reloadKey else { return }
+        setItems(loaded)
     }
 
     /// Snapshot what a confirmation acts on (see `pendingItems`). False when nothing in the selection

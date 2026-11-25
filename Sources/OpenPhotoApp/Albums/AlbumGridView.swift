@@ -30,15 +30,31 @@ struct AlbumGridView: View {
             Divider().overlay(Theme.hairline)
             content
         }
-        .task(id: state.selectedAlbumID) { selection.clear(); selectMode = false; reload() }
-        .task(id: state.refreshToken) { reload() }
+        .onChange(of: state.selectedAlbumID) { selection.clear(); selectMode = false }
+        // One reload per album / refresh change (two tasks used to run it twice on first appear).
+        .task(id: ReloadKey(albumID: state.selectedAlbumID, refreshToken: state.refreshToken)) {
+            await reload()
+        }
         .copyTargets(selectMode ? selectedItems : [], owner: "albums", state: state,
                      changeKey: SelectionKey(selectMode: selectMode, selected: selection.selected))
     }
 
-    private func reload() {
-        guard let id = state.selectedAlbumID else { setItems([]); return }
-        setItems((try? state.library?.catalog.itemsInAlbum(id: id)) ?? [])
+    private struct ReloadKey: Hashable {
+        let albumID: String?
+        let refreshToken: Int
+    }
+
+    /// Runs the catalog query off the main actor; a result for an album that is no longer the
+    /// selected one is dropped.
+    private func reload() async {
+        guard let id = state.selectedAlbumID, let catalog = state.library?.catalog else {
+            setItems([]); return
+        }
+        let loaded = await Task.detached(priority: .userInitiated) {
+            (try? catalog.itemsInAlbum(id: id)) ?? []
+        }.value
+        guard !Task.isCancelled, state.selectedAlbumID == id else { return }
+        setItems(loaded)
     }
 
     // MARK: Toolbars
