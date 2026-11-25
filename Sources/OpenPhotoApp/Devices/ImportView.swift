@@ -70,6 +70,9 @@ struct ImportView: View {
     @State private var importedIDCache = Set<String>()
     @State private var sentIDCache = Set<String>()
     @State private var inLibraryCache = Set<String>()
+    /// Show only items that are new to the library — hides anything already imported from this
+    /// source, already in the library by content, or sent here from the library. Remembered.
+    @AppStorage("importShowNewOnly") private var newOnly = false
     // Foreign-vault folder selection + the shared "Include their metadata" toggle.
     @State private var checkedFolders = Set<String>()
     @State private var foreignFolderCounts: [String: Int] = [:]
@@ -122,9 +125,17 @@ struct ImportView: View {
                     .foregroundStyle(Theme.textDim)
             }
             Spacer()
+            if case .ready = phase {
+                Toggle(isOn: Binding(get: { newOnly },
+                                     set: { newOnly = $0; selection.clear() })) {
+                    Text(newOnly && hiddenKnownCount > 0 ? "New only · \(hiddenKnownCount) hidden" : "New only")
+                }
+                .toggleStyle(.button).controlSize(.small)
+                .help("Show only photos that aren't in your library yet")
+            }
             Button("Select all new") {
                 selection.clear()
-                selection.selectAll(displayItems.filter { !isImported($0) }
+                selection.selectAll(displayItems.filter { !isKnown($0) }
                     .map { SelectableItem(id: $0.id, partnerID: $0.livePartnerID) })
             }.controlSize(.small)
             Button("Deselect") { selection.clear() }.controlSize(.small)
@@ -350,7 +361,9 @@ struct ImportView: View {
 
     /// Foreign vault: only items inside a checked folder (subtree-inclusive) display.
     private var displayItems: [ImportItem] {
-        let base = items.filter { !($0.kind == .video && $0.livePartnerID != nil) }
+        let base = items.filter {
+            !($0.kind == .video && $0.livePartnerID != nil) && !(newOnly && isKnown($0))
+        }
         guard isForeign else { return base }
         return base.filter { item in
             let dir = (item.id as NSString).deletingLastPathComponent
@@ -406,6 +419,15 @@ struct ImportView: View {
     private var alreadyImportedCount: Int { items.filter { isImported($0) }.count }
     private var hasPreviouslyImportedOnDevice: Bool {
         items.contains { isImported($0) && !sessionImportedIDs.contains($0.id) }
+    }
+    /// Already accounted for: imported from this source before, already in the library by content,
+    /// or a photo the library itself sent to this device. The complement is "new".
+    private func isKnown(_ item: ImportItem) -> Bool {
+        isImported(item) || inLibraryCache.contains(item.id) || sentIDCache.contains(item.id)
+    }
+    /// How many items the "New only" filter is hiding (Live-photo video halves aren't listed anyway).
+    private var hiddenKnownCount: Int {
+        items.reduce(0) { $0 + (!($1.kind == .video && $1.livePartnerID != nil) && isKnown($1) ? 1 : 0) }
     }
     private func isImported(_ item: ImportItem) -> Bool {
         sessionImportedIDs.contains(item.id) || importedIDCache.contains(item.id)
