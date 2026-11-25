@@ -77,7 +77,9 @@ public final class PhotosLibrarySource: ImportSource, @unchecked Sendable {
             }
         }
         lock.withLock { entries = map }
-        return pairLiveItems(items)
+        // Live pairs are set explicitly per asset above; never pair by file name across the whole
+        // library (thousands of unrelated IMG_0001.HEIC / .MOV share names over the years).
+        return items
     }
 
     public func fetch(_ item: ImportItem, to url: URL) async throws {

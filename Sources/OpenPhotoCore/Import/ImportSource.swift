@@ -64,22 +64,30 @@ public extension ImportSource {
 }
 
 /// Pair Live Photo halves among device items: a still + .mov sharing the same
-/// lowercased basename (Apple's Live Photo signature). No capture-time check —
-/// the .mov's metadata time is often unreliable, which previously left the video
+/// lowercased basename IN THE SAME FOLDER (Apple's Live Photo signature). No capture-time
+/// check — the .mov's metadata time is often unreliable, which previously left the video
 /// half unpaired so it never got imported alongside the still.
-public func pairLiveItems(_ items: [ImportItem]) -> [ImportItem] {
-    func base(_ name: String) -> String {
-        (name as NSString).deletingPathExtension.lowercased()
+///
+/// `folder` names the item's source folder; the default is the directory of its id, which is the
+/// source-relative path for volume / Takeout / export / foreign-vault items (sources whose ids
+/// aren't paths pass their own). The same name in different folders (a camera's 100APPLE /
+/// 101APPLE counter wrap, two exports) is not a pair. Items that already carry a
+/// `livePartnerID` (pairs the source established itself) are left as they are.
+public func pairLiveItems(_ items: [ImportItem],
+                          folder: (ImportItem) -> String = { ($0.id as NSString).deletingLastPathComponent })
+    -> [ImportItem] {
+    func key(_ i: ImportItem) -> String {
+        folder(i) + "/" + (i.name as NSString).deletingPathExtension.lowercased()
     }
-    var videosByBase: [String: ImportItem] = [:]
-    for i in items where i.kind == .video { videosByBase[base(i.name)] = i }
+    var videosByKey: [String: ImportItem] = [:]
+    for i in items where i.kind == .video && i.livePartnerID == nil { videosByKey[key(i)] = i }
     var out = items
     // id → first index, built once (was a linear `firstIndex` per photo: O(pairs × items)).
     var indexByID: [String: Int] = [:]
     indexByID.reserveCapacity(out.count)
     for (idx, i) in out.enumerated() where indexByID[i.id] == nil { indexByID[i.id] = idx }
-    for (idx, i) in items.enumerated() where i.kind == .photo {
-        guard let v = videosByBase[base(i.name)] else { continue }
+    for (idx, i) in items.enumerated() where i.kind == .photo && i.livePartnerID == nil {
+        guard let v = videosByKey[key(i)] else { continue }
         out[idx].livePartnerID = v.id
         if let vIdx = indexByID[v.id] {
             out[vIdx].livePartnerID = i.id

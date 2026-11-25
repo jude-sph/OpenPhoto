@@ -187,9 +187,11 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
         // removeAll()+refill is a data race on a non-Sendable Dictionary.
         var localMap: [String: ICCameraItem] = [:]
         localMap.reserveCapacity(files.count)
+        var folderByID: [String: String] = [:]   // Live pairing is per device folder (100APPLE, ...)
         var items: [ImportItem] = files.enumerated().map { index, f in
             let id = "icc-\(index)"
             localMap[id] = f
+            folderByID[id] = f.parentFolder?.name ?? ""
             return ImportItem(
                 id: id,
                 name: f.name ?? "item-\(index)",
@@ -201,7 +203,7 @@ public final class CameraSource: NSObject, ImportSource, @unchecked Sendable {
         }
         items.sort { ($0.takenAt ?? .distantPast) > ($1.takenAt ?? .distantPast) }
         lock.withLock { itemsByID = localMap }
-        return pairLiveItems(items)
+        return pairLiveItems(items, folder: { folderByID[$0.id] ?? "" })
     }
 
     /// Download file to `url` (directory + filename). Uses ICDownloadsDirectoryURL +

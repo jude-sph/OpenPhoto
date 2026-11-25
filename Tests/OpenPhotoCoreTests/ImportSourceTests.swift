@@ -37,3 +37,32 @@ private func item(_ id: String, name: String, kind: MediaKind,
     #expect(results == [DeleteResult(itemID: "a", error: nil)])
     #expect(fake.deletedIDs == ["a"])
 }
+
+// Same basename in DIFFERENT source folders is not a Live Photo (e.g. 100APPLE/IMG_0001.HEIC and
+// 101APPLE/IMG_0001.MOV after the counter wraps, or two trips' exports): pair only within a folder.
+@Test func pairsLiveItemsOnlyWithinTheSameFolder() {
+    let paired = pairLiveItems([
+        item("DCIM/100APPLE/IMG_0001.HEIC", name: "IMG_0001.HEIC", kind: .photo, taken: 100),
+        item("DCIM/101APPLE/IMG_0001.MOV", name: "IMG_0001.MOV", kind: .video, taken: 500),
+        item("DCIM/101APPLE/IMG_0002.HEIC", name: "IMG_0002.HEIC", kind: .photo, taken: 600),
+        item("DCIM/101APPLE/IMG_0002.MOV", name: "IMG_0002.MOV", kind: .video, taken: 601),
+        item("DCIM/102APPLE/IMG_0002.MOV", name: "IMG_0002.MOV", kind: .video, taken: 900),
+    ])
+    func partner(_ id: String) -> String? { paired.first { $0.id == id }!.livePartnerID }
+    #expect(partner("DCIM/100APPLE/IMG_0001.HEIC") == nil)
+    #expect(partner("DCIM/101APPLE/IMG_0001.MOV") == nil)
+    #expect(partner("DCIM/101APPLE/IMG_0002.HEIC") == "DCIM/101APPLE/IMG_0002.MOV")
+    #expect(partner("DCIM/101APPLE/IMG_0002.MOV") == "DCIM/101APPLE/IMG_0002.HEIC")
+    #expect(partner("DCIM/102APPLE/IMG_0002.MOV") == nil)
+}
+
+// A pairing the source already established (Photos library: still ↔ its own paired video) is kept.
+@Test func pairLiveItemsKeepsSourceProvidedPairs() {
+    var a = item("p:1:original", name: "IMG_1.HEIC", kind: .photo, taken: 1); a.livePartnerID = "p:1:video"
+    var av = item("p:1:video", name: "IMG_1.mov", kind: .video, taken: 1); av.livePartnerID = "p:1:original"
+    let b = item("p:2:original", name: "IMG_1.HEIC", kind: .photo, taken: 2)      // same name, not Live
+    let paired = pairLiveItems([a, av, b])
+    #expect(paired.first { $0.id == "p:1:original" }!.livePartnerID == "p:1:video")
+    #expect(paired.first { $0.id == "p:1:video" }!.livePartnerID == "p:1:original")
+    #expect(paired.first { $0.id == "p:2:original" }!.livePartnerID == nil)
+}
