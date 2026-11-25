@@ -31,8 +31,57 @@ struct InspectorView: View {
     /// (initialPosition is applied only once, so the reused Map kept the prior photo's region).
     @State private var mapCamera: MapCameraPosition = .automatic
     @FocusState private var renameFocused: Bool
+    /// Only-copy count for the evict confirmation, computed when the confirmation is requested (an
+    /// alert's `message:` closure is evaluated on every body pass).
+    @State private var evictOnlyCopy = 0
+    @State private var lookups = LookupMemo()
+
+    /// What the panel shows about where this photo lives — catalog reads + `fileExists` calls.
+    struct Lookups {
+        var folders: [AppState.FolderPresence] = []
+        var devices: [Location] = []      // every known location except "This Mac"
+        var fullResURL: URL?
+        var place: GeocodeRow?
+    }
+
+    /// Memo for `Lookups`, so `body` resolves them once per photo / library refresh instead of on
+    /// every pass (each caption keystroke, hover and refresh re-evaluates `body`). A plain reference
+    /// box rather than `@State` values filled by a `.task`: the first pass for a new photo computes
+    /// synchronously, so the panel never shows the previous photo's locations for a frame, and
+    /// filling it invalidates nothing.
+    @MainActor final class LookupMemo {
+        struct Key: Equatable {
+            let instanceID: String
+            let driveRelPath: String?
+            let refreshToken: Int
+        }
+        private var key: Key?
+        private var value = Lookups()
+        func value(for key: Key, compute: () -> Lookups) -> Lookups {
+            if self.key != key { value = compute(); self.key = key }
+            return value
+        }
+    }
+
+    private func currentLookups() -> Lookups {
+        let key = LookupMemo.Key(instanceID: item.instanceID, driveRelPath: item.driveRelPath,
+                                 refreshToken: state.refreshToken)
+        return lookups.value(for: key) {
+            Lookups(
+                folders: state.folderPresences(for: item),
+                // Drives it's backed up on / devices it was sent to / sources it came from. The
+                // per-hash "This Mac" row is replaced by thisMacCopyRow, so drop it here.
+                devices: state.locations(for: item).filter {
+                    if case .thisMac = $0.place { return false }; return true
+                },
+                fullResURL: state.fullResURL(for: item),
+                place: item.latitude != nil && item.longitude != nil
+                    ? (try? state.library?.catalog.geocode(forHash: item.hash)) ?? nil : nil)
+        }
+    }
 
     var body: some View {
+        let lookups = currentLookups()   // once per body pass; recomputed only when its key changes
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text(Date(timeIntervalSince1970: Double(item.takenAtMs) / 1000)
@@ -179,7 +228,7 @@ struct InspectorView: View {
                         Text(String(format: "%.4f, %.4f", lat, lon))
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Theme.textFaint)
-                        if let place = try? state.library?.catalog.geocode(forHash: item.hash) {
+                        if let place = lookups.place {
                             Button {
                                 state.searchInPlace(place)
                             } label: {
@@ -194,7 +243,7 @@ struct InspectorView: View {
 
                 Divider().overlay(Theme.hairline)
 
-                locationsSection
+                locationsSection(lookups)
 
                 section("File") {
                     VStack(alignment: .leading, spacing: 2) {
@@ -254,19 +303,19 @@ struct InspectorView: View {
                         Spacer()
                         // Share the file itself (same system share sheet as the multi-select bar).
                         // Uses fullResURL so it resolves a connected-drive copy too, matching Reveal.
-                        if let url = state.fullResURL(for: item) {
+                        if let url = lookups.fullResURL {
                             ShareLink(item: url) {
                                 Label("Share", systemImage: "square.and.arrow.up")
                             }
                             .controlSize(.small)
                         }
                         Button("Reveal in Finder") {
-                            if let url = state.fullResURL(for: item) {
+                            if let url = state.fullResURL(for: item) {   // resolved fresh on click
                                 NSWorkspace.shared.activateFileViewerSelecting([url])
                             }
                         }
                         .controlSize(.small)
-                        .disabled(state.fullResURL(for: item) == nil)  // unreachable (drive ejected / missing)
+                        .disabled(lookups.fullResURL == nil)  // unreachable (drive ejected / missing)
                     }
                 }
 
@@ -314,7 +363,7 @@ struct InspectorView: View {
                 state.removeOpenedItem { await state.evict($0) }     // advance to next, then evict
             }
         } message: {
-            Text(evictAlertMessage(total: 1, onlyCopy: state.onlyCopyCount([item])))
+            Text(evictAlertMessage(total: 1, onlyCopy: evictOnlyCopy))
         }
     }
 
@@ -329,7 +378,7 @@ struct InspectorView: View {
                 }
                 .controlSize(.small)
                 .help("Move to the bin and queue removal from drives (review before it propagates).")
-                Button { showEvict = true } label: {
+                Button { evictOnlyCopy = state.onlyCopyCount([item]); showEvict = true } label: {
                     Label("Evict", systemImage: "arrow.down.circle")
                 }
                 .controlSize(.small)
@@ -432,14 +481,10 @@ struct InspectorView: View {
     /// never reads as "not on your Mac":
     ///  • "In your library" — the folder(s) it's filed in, each marked downloaded vs on-drive-only.
     ///  • "Copies" — the physical copies of the bytes: this Mac, drives (canonical/backup), sources.
-    @ViewBuilder private var locationsSection: some View {
-        let folders = state.folderPresences(for: item)
+    @ViewBuilder private func locationsSection(_ lookups: Lookups) -> some View {
+        let folders = lookups.folders
         let hasLocalCopy = folders.contains { $0.onMac }
-        // Drives it's backed up on / devices it was sent to / sources it came from. The per-hash
-        // "This Mac" row is replaced by thisMacCopyRow below, so drop it here.
-        let devices = state.locations(for: item).filter {
-            if case .thisMac = $0.place { return false }; return true
-        }
+        let devices = lookups.devices
 
         if !folders.isEmpty {
             section("In your library") {
